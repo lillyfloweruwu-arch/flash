@@ -6,7 +6,6 @@ import { resolve } from 'path'
 export default defineConfig({
   main: {
     build: {
-      outDir: 'dist/main',
       rollupOptions: {
         input: resolve(__dirname, 'src/main/main.ts'),
       },
@@ -14,7 +13,6 @@ export default defineConfig({
   },
   preload: {
     build: {
-      outDir: 'dist/preload',
       rollupOptions: {
         input: resolve(__dirname, 'src/preload/preload.ts'),
       },
@@ -23,7 +21,6 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     build: {
-      outDir: 'dist/renderer',
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
       },

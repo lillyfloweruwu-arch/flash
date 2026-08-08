@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Flash desktop app — Electron + React",
-  "main": "dist/main/main.js",
+  "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

@@ -17,7 +17,7 @@ let captureAddon: CaptureAddon | null = null
 function loadCaptureAddon(): CaptureAddon | null {
   const addonPath = app.isPackaged
     ? join(process.resourcesPath, 'flash_capture.node')
-    : join(process.cwd(), 'packages/flash-capture/build/Release/flash_capture.node')
+    : join(__dirname, '../../../../packages/flash-capture/build/Release/flash_capture.node')
   try { return require(addonPath) as CaptureAddon }
   catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
 }
@@ -36,7 +36,7 @@ const GAME_DB: Record<string, string> = {}
 
 function loadGameDb() {
   try {
-    const dbPath = join(__dirname, '../../packages/flash-detector/src/games.json')
+    const dbPath = join(__dirname, '../../../../packages/flash-detector/src/games.json')
     const data = require(dbPath)
     for (const entry of data.games) {
       GAME_DB[entry.processName.toLowerCase()] = entry.displayName
@@ -218,14 +218,14 @@ function showClipNotification(durationSeconds: number) {
 
 function playClipSound() {
   // Play custom WAV via a hidden renderer (Electron has no direct audio API)
-  const soundPath = join(__dirname, '../../assets/sounds/clip-saved.wav')
+  const soundPath = join(__dirname, '../../../../assets/sounds/clip-saved.wav')
   mainWindow?.webContents.send('play-clip-sound', soundPath)
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
 
 function createTray() {
-  const iconPath = join(__dirname, '../../assets/icon.png')
+  const iconPath = join(__dirname, '../../../../assets/icon.png')
   const icon = nativeImage.createFromPath(iconPath)
 
   tray = new Tray(icon)
@@ -298,7 +298,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    icon: join(__dirname, '../../assets/icon.png'),
+    icon: join(__dirname, '../../../../assets/icon.png'),
   })
 
   // Dev or production
