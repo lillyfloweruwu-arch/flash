@@ -12,7 +12,7 @@ public:
     ~SoftwareEncoder() override;
 
     bool Initialize(const EncoderConfig& config) override;
-    bool EncodeFrame(const FrameData& frame, EncodedPacket& output) override;
+    bool EncodeFrame(const FrameData& frame, std::vector<EncodedPacket>& output) override;
     void Flush() override;
     std::string GetName() const override { return "Software H.264 (Media Foundation)"; }
     bool IsHardwareAccelerated() const override { return false; }

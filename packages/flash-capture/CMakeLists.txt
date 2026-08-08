@@ -31,8 +31,7 @@ set(CAPTURE_SOURCES
   src/capture/screen_capture.cpp
   src/capture/audio_capture.cpp
   src/encoding/encoder_factory.cpp
-  src/encoding/nvenc_encoder.cpp
-  src/encoding/amf_encoder.cpp
+  src/encoding/mf_hardware_encoder.cpp
   src/encoding/software_encoder.cpp
   src/buffer/ring_buffer.cpp
   src/buffer/clip_writer.cpp
@@ -87,4 +86,9 @@ target_link_libraries(flash_ring_buffer_test ${PLATFORM_LIBS})
 if(MSVC)
   target_compile_options(flash_ring_buffer_test PRIVATE /EHsc)
   target_compile_definitions(flash_ring_buffer_test PRIVATE NOMINMAX)
+endif()
+add_executable(flash_quality_test EXCLUDE_FROM_ALL test/quality_test.cpp)
+if(MSVC)
+  target_compile_options(flash_quality_test PRIVATE /EHsc)
+  target_compile_definitions(flash_quality_test PRIVATE NOMINMAX)
 endif()

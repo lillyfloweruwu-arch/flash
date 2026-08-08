@@ -58,19 +58,25 @@ static void BgraToNv12(const FrameData& frame, uint8_t* dst, uint32_t width, uin
     uint8_t* yPlane = dst;
     uint8_t* uvPlane = dst + static_cast<size_t>(width) * height;
     for (uint32_t y = 0; y < height; ++y) {
-        const uint8_t* row = frame.data + static_cast<size_t>(y) * frame.stride;
+        const uint32_t sy = static_cast<uint32_t>(static_cast<uint64_t>(y) * frame.height / height);
+        const uint8_t* row = frame.data + static_cast<size_t>(sy) * frame.stride;
         for (uint32_t x = 0; x < width; ++x) {
-            const int b = row[x * 4], g = row[x * 4 + 1], r = row[x * 4 + 2];
+            const uint32_t sx = static_cast<uint32_t>(static_cast<uint64_t>(x) * frame.width / width);
+            const int b = row[sx * 4], g = row[sx * 4 + 1], r = row[sx * 4 + 2];
             yPlane[static_cast<size_t>(y) * width + x] = clamp(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
         }
     }
     for (uint32_t y = 0; y < height; y += 2) {
-        const uint8_t* row0 = frame.data + static_cast<size_t>(y) * frame.stride;
-        const uint8_t* row1 = frame.data + static_cast<size_t>(std::min(y + 1, height - 1)) * frame.stride;
+        const uint32_t sy0 = static_cast<uint32_t>(static_cast<uint64_t>(y) * frame.height / height);
+        const uint32_t sy1 = static_cast<uint32_t>(static_cast<uint64_t>(std::min(y + 1, height - 1)) * frame.height / height);
+        const uint8_t* row0 = frame.data + static_cast<size_t>(sy0) * frame.stride;
+        const uint8_t* row1 = frame.data + static_cast<size_t>(sy1) * frame.stride;
         for (uint32_t x = 0; x < width; x += 2) {
             int sumU = 0, sumV = 0;
             for (uint32_t dy = 0; dy < 2; ++dy) for (uint32_t dx = 0; dx < 2; ++dx) {
-                const uint8_t* p = (dy ? row1 : row0) + std::min(x + dx, width - 1) * 4;
+                const uint32_t ox = std::min(x + dx, width - 1);
+                const uint32_t sx = static_cast<uint32_t>(static_cast<uint64_t>(ox) * frame.width / width);
+                const uint8_t* p = (dy ? row1 : row0) + sx * 4;
                 const int b = p[0], g = p[1], r = p[2];
                 sumU += ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
                 sumV += ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
@@ -127,6 +133,8 @@ bool SoftwareEncoder::Initialize(const EncoderConfig& config) {
         v.vt = VT_UI4; v.ulVal = config.bitrate; codec->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v);
         v.vt = VT_BOOL; v.boolVal = VARIANT_TRUE; codec->SetValue(&CODECAPI_AVLowLatencyMode, &v);
         v.vt = VT_UI4; v.ulVal = eAVEncCommonRateControlMode_CBR; codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v);
+        v.vt = VT_UI4; v.ulVal = config.fps * 2; codec->SetValue(&CODECAPI_AVEncMPVGOPSize, &v);
+        v.vt = VT_UI4; v.ulVal = 80; codec->SetValue(&CODECAPI_AVEncCommonQualityVsSpeed, &v);
         VariantClear(&v);
     }
     if (FAILED(impl_->transform->GetOutputStreamInfo(0, &impl_->outputInfo)) ||
@@ -142,9 +150,9 @@ bool SoftwareEncoder::Initialize(const EncoderConfig& config) {
 #endif
 }
 
-bool SoftwareEncoder::EncodeFrame(const FrameData& frame, EncodedPacket& output) {
+bool SoftwareEncoder::EncodeFrame(const FrameData& frame, std::vector<EncodedPacket>& output) {
 #ifdef _WIN32
-    if (!impl_->initialized || !frame.data || frame.width != impl_->config.width || frame.height != impl_->config.height) return false;
+    if (!impl_->initialized || !frame.data || !frame.width || !frame.height) return false;
     const DWORD bytes = impl_->config.width * impl_->config.height * 3 / 2;
     ComPtr<IMFMediaBuffer> buffer;
     if (FAILED(MFCreateMemoryBuffer(bytes, &buffer))) return false;
@@ -161,30 +169,27 @@ bool SoftwareEncoder::EncodeFrame(const FrameData& frame, EncodedPacket& output)
     if (FAILED(hr)) return false;
     ++impl_->frameIndex;
 
-    MFT_OUTPUT_DATA_BUFFER out{};
-    ComPtr<IMFSample> outSample;
-    if (!(impl_->outputInfo.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
-        MFCreateSample(&outSample);
-        ComPtr<IMFMediaBuffer> outBuffer;
-        MFCreateMemoryBuffer(std::max<DWORD>(impl_->outputInfo.cbSize, 1024 * 1024), &outBuffer);
-        outSample->AddBuffer(outBuffer.Get()); out.pSample = outSample.Get();
+    for (;;) {
+        MFT_OUTPUT_DATA_BUFFER out{}; ComPtr<IMFSample> outSample;
+        if (!(impl_->outputInfo.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
+            MFCreateSample(&outSample); ComPtr<IMFMediaBuffer> outBuffer;
+            MFCreateMemoryBuffer(std::max<DWORD>(impl_->outputInfo.cbSize, 1024 * 1024), &outBuffer);
+            outSample->AddBuffer(outBuffer.Get()); out.pSample = outSample.Get();
+        }
+        DWORD status = 0; hr = impl_->transform->ProcessOutput(0, 1, &out, &status);
+        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) break;
+        if (FAILED(hr) || !out.pSample) { if (out.pEvents) out.pEvents->Release(); return false; }
+        const bool releaseSample = (impl_->outputInfo.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+        ComPtr<IMFMediaBuffer> contiguous; hr = out.pSample->ConvertToContiguousBuffer(&contiguous);
+        if (out.pEvents) out.pEvents->Release(); if (FAILED(hr)) { if (releaseSample) out.pSample->Release(); return false; }
+        BYTE* encoded = nullptr; DWORD length = 0; contiguous->Lock(&encoded, nullptr, &length);
+        EncodedPacket packet; packet.data.assign(encoded, encoded + length); contiguous->Unlock();
+        LONGLONG sampleTime = timestamp; out.pSample->GetSampleTime(&sampleTime); packet.timestamp_us = sampleTime / 10;
+        UINT32 clean = FALSE; packet.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &clean)) && clean;
+        if (!packet.data.empty()) output.push_back(std::move(packet));
+        if (releaseSample) out.pSample->Release();
     }
-    DWORD status = 0;
-    hr = impl_->transform->ProcessOutput(0, 1, &out, &status);
-    if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return false;
-    if (FAILED(hr) || !out.pSample) { if (out.pEvents) out.pEvents->Release(); return false; }
-    ComPtr<IMFMediaBuffer> contiguous;
-    hr = out.pSample->ConvertToContiguousBuffer(&contiguous);
-    if (out.pEvents) out.pEvents->Release();
-    if (FAILED(hr)) return false;
-    BYTE* encoded = nullptr; DWORD length = 0;
-    contiguous->Lock(&encoded, nullptr, &length);
-    output.data.assign(encoded, encoded + length);
-    contiguous->Unlock();
-    output.timestamp_us = timestamp / 10;
-    UINT32 cleanPoint = FALSE;
-    output.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) && cleanPoint;
-    return !output.data.empty();
+    return true;
 #else
     (void)frame; (void)output; return false;
 #endif

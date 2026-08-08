@@ -1,6 +1,5 @@
 #include "encoder.h"
-#include "nvenc_encoder.h"
-#include "amf_encoder.h"
+#include "mf_hardware_encoder.h"
 #include "software_encoder.h"
 
 #ifdef _WIN32
@@ -44,31 +43,8 @@ std::unique_ptr<Encoder> CreateEncoder() {
 }
 
 std::unique_ptr<Encoder> CreateEncoder(const EncoderConfig& defaultConfig) {
-    GpuVendor vendor = DetectGpuVendor();
-
-    // Try hardware encoder first based on GPU vendor
-    if (vendor == GpuVendor::Nvidia) {
-        auto encoder = std::make_unique<NvencEncoder>();
-        if (encoder->Initialize(defaultConfig)) {
-            return encoder;
-        }
-    }
-
-    if (vendor == GpuVendor::Amd) {
-        auto encoder = std::make_unique<AmfEncoder>();
-        if (encoder->Initialize(defaultConfig)) {
-            return encoder;
-        }
-    }
-
-    // Try both if vendor detection wasn't conclusive (e.g., multi-GPU)
-    if (vendor == GpuVendor::Unknown) {
-        auto nvenc = std::make_unique<NvencEncoder>();
-        if (nvenc->Initialize(defaultConfig)) return nvenc;
-
-        auto amf = std::make_unique<AmfEncoder>();
-        if (amf->Initialize(defaultConfig)) return amf;
-    }
+    auto hardware = std::make_unique<MfHardwareEncoder>();
+    if (hardware->Initialize(defaultConfig)) return hardware;
 
     // Fall back to software encoder
     auto software = std::make_unique<SoftwareEncoder>();

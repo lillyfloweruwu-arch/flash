@@ -19,6 +19,9 @@ struct EncoderConfig {
     uint32_t fps = 60;
     uint32_t bitrate = 20000000; // 20 Mbps
     std::string preset = "fast";  // fast/medium/slow
+#ifdef _WIN32
+    ID3D11Device* device = nullptr;
+#endif
 };
 
 // Abstract encoder interface — NVENC, AMF, and software all implement this
@@ -27,7 +30,7 @@ public:
     virtual ~Encoder() = default;
 
     virtual bool Initialize(const EncoderConfig& config) = 0;
-    virtual bool EncodeFrame(const FrameData& frame, EncodedPacket& output) = 0;
+    virtual bool EncodeFrame(const FrameData& frame, std::vector<EncodedPacket>& output) = 0;
     virtual void Flush() = 0;
     virtual std::string GetName() const = 0;
     virtual bool IsHardwareAccelerated() const = 0;
