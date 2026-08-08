@@ -59,6 +59,8 @@ importers:
 
   packages/flash-common: {}
 
+  packages/flash-detector: {}
+
 packages:
 
   '@babel/code-frame@7.29.7':

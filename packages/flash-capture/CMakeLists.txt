@@ -69,6 +69,10 @@ endif()
 
 if(MSVC)
   target_compile_options(flash_capture PRIVATE /W4 /EHsc)
+  target_compile_definitions(flash_capture PRIVATE
+    NOMINMAX
+    _SILENCE_CXX20_U8PATH_DEPRECATION_WARNING
+  )
 endif()
 
 # NAPI version

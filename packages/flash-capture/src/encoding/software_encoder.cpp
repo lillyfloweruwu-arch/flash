@@ -2,6 +2,7 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#include <strmif.h>
 #include <codecapi.h>
 #include <mfapi.h>
 #include <mferror.h>
