@@ -1,24 +1,114 @@
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 @import 'tailwindcss';
 
-@theme inline {
-  --font-display: 'Rajdhani', sans-serif;
-  --font-body: 'Inter', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+/* Palettes ported from FlashDomain — see src/shared/themes.ts, which is the
+   source of truth the main process reads for the toast popup. Keep in sync. */
 
-  --color-flash-red: #e8192c;
-  --color-flash-red-bright: #ff2d42;
-  --color-flash-red-dim: #8b0f1a;
-  --color-flash-bg: #0a0008;
-  --color-flash-panel: #110010;
-  --color-flash-surface: #1a0016;
-  --color-flash-border: rgba(232, 25, 44, 0.18);
-  --color-flash-muted: #6b5b6e;
+:root,
+[data-theme='blood'] {
+  --bg: #0c0607;
+  --panel: #1c0e11;
+  --field: #28141a;
+  --edge: #4a2029;
+  --hover: #331a21;
+  --fg: #fff0f1;
+  --muted: #bc9599;
+  --accent: #c1121f;
+  --accent-dim: #780116;
+  --on-accent: #fff0f1;
+  --spark: #ff9e00;
+  --alert: #ff5c8a;
+}
+
+[data-theme='ultraviolet'] {
+  --bg: #09060f;
+  --panel: #15101f;
+  --field: #20182d;
+  --edge: #38294a;
+  --hover: #292037;
+  --fg: #f5f1fa;
+  --muted: #a69bb8;
+  --accent: #b45cff;
+  --accent-dim: #7628c9;
+  --on-accent: #15051f;
+  --spark: #ff4fa3;
+  --alert: #ff6b6b;
+}
+
+[data-theme='cobalt'] {
+  --bg: #070910;
+  --panel: #101521;
+  --field: #171e2d;
+  --edge: #2b3850;
+  --hover: #202a3b;
+  --fg: #f0f4ff;
+  --muted: #94a2ba;
+  --accent: #4d7cfe;
+  --accent-dim: #294dba;
+  --on-accent: #050b1e;
+  --spark: #c45cff;
+  --alert: #ff6b6b;
+}
+
+[data-theme='fuchsia'] {
+  --bg: #0d0710;
+  --panel: #1b111c;
+  --field: #271829;
+  --edge: #452940;
+  --hover: #332032;
+  --fg: #fff1fa;
+  --muted: #bc9bb0;
+  --accent: #ff4fa3;
+  --accent-dim: #b01765;
+  --on-accent: #1e0512;
+  --spark: #b45cff;
+  --alert: #e01e37;
+}
+
+[data-theme='indigo'] {
+  --bg: #080814;
+  --panel: #121223;
+  --field: #1b1b31;
+  --edge: #2f2f52;
+  --hover: #23233f;
+  --fg: #f1f1ff;
+  --muted: #9b9bc0;
+  --accent: #7c74ff;
+  --accent-dim: #463cc4;
+  --on-accent: #070616;
+  --spark: #ff4fa3;
+  --alert: #ff6b6b;
+}
+
+[data-theme='bone'] {
+  --bg: #0a0a0c;
+  --panel: #151517;
+  --field: #1f1f23;
+  --edge: #33333a;
+  --hover: #26262b;
+  --fg: #f2f2f5;
+  --muted: #9c9ca6;
+  --accent: #ede9f5;
+  --accent-dim: #6e6e7a;
+  --on-accent: #0a0a0c;
+  --spark: #c9c9d4;
+  --alert: #ff6b6b;
+}
+
+/* Dimmer text steps derive from --muted so every theme gets them for free. */
+:root {
+  --muted-2: color-mix(in srgb, var(--muted) 70%, transparent);
+  --muted-3: color-mix(in srgb, var(--muted) 48%, transparent);
+  --faint: color-mix(in srgb, var(--muted) 30%, transparent);
+  --edge-soft: color-mix(in srgb, var(--edge) 55%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 32%, transparent);
+  /* "Live" green stays green on every theme — it is a status, not decoration. */
+  --ok: #4ade80;
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #e8192c22 transparent;
+  scrollbar-color: var(--edge) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -27,23 +117,17 @@
 }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: #e8192c44;
+  background: var(--edge);
   border-radius: 2px;
 }
 
 body {
-  font-family: 'Inter', sans-serif;
-  background: #0a0008;
-  color: #f0e8f0;
+  font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
   overflow: hidden;
   margin: 0;
   padding: 0;
-}
-
-.panel-glass {
-  background: linear-gradient(135deg, rgba(26, 0, 22, 0.92) 0%, rgba(17, 0, 16, 0.96) 100%);
-  border: 1px solid rgba(232, 25, 44, 0.14);
-  backdrop-filter: blur(12px);
 }
 
 @keyframes pulse-red {
@@ -51,15 +135,14 @@ body {
   50% { opacity: 0.5; }
 }
 
-@keyframes shimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
 }
 
-.skeleton {
-  background: linear-gradient(90deg, #1a0016 25%, #2a0022 50%, #1a0016 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Electron title bar drag region */

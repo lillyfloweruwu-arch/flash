@@ -2,11 +2,13 @@ import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, s
 import { join, basename, dirname } from 'path'
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { getTheme } from '../shared/themes'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
 const DEFAULTS = {
   clipsFolder: join(app.getPath('videos'), 'Flash'),
+  theme: 'blood',
   quality: '1080p 60fps',
   bufferLength: 30,
   audioCapture: true,
@@ -72,10 +74,16 @@ type CaptureAddon = {
 
 let captureAddon: CaptureAddon | null = null
 
+// Packaged, everything ships flat in resources/; in dev it lives in the repo.
+// Every non-code asset must go through here or it breaks once packaged.
+function resource(packaged: string, repoRelative: string): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, packaged)
+    : join(__dirname, '../../../..', repoRelative)
+}
+
 function loadCaptureAddon(): CaptureAddon | null {
-  const addonPath = app.isPackaged
-    ? join(process.resourcesPath, 'flash_capture.node')
-    : join(__dirname, '../../../../packages/flash-capture/build/Release/flash_capture.node')
+  const addonPath = resource('flash_capture.node', 'packages/flash-capture/build/Release/flash_capture.node')
   try { return require(addonPath) as CaptureAddon }
   catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
 }
@@ -185,8 +193,8 @@ const GAME_DB: Record<string, string> = {}
 
 function loadGameDb() {
   try {
-    const dbPath = join(__dirname, '../../../../packages/flash-detector/src/games.json')
-    const data = require(dbPath)
+    const dbPath = resource('games.json', 'packages/flash-detector/src/games.json')
+    const data = JSON.parse(readFileSync(dbPath, 'utf8'))
     for (const entry of data.games) {
       GAME_DB[entry.processName.toLowerCase()] = entry.displayName
     }
@@ -246,27 +254,35 @@ function showClipNotification(durationSeconds: number) {
     x: x + 16, y: y + 16,
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, resizable: false, focusable: false, show: false,
+    type: 'toolbar', hasShadow: false,
   })
 
+  // Default alwaysOnTop is the 'floating' level, which loses to fullscreen games.
+  // 'screen-saver' is the highest level Windows exposes to a normal window and
+  // clears borderless-fullscreen. True exclusive-fullscreen DirectX still owns
+  // the display and needs the swapchain overlay to draw over it.
+  notificationWindow.setAlwaysOnTop(true, 'screen-saver')
+  notificationWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   notificationWindow.setIgnoreMouseEvents(true, { forward: true })
 
   const minutes = Math.floor(durationSeconds / 60)
   const seconds = durationSeconds % 60
   const durationStr = `${minutes}:${String(seconds).padStart(2, '0')}`
 
+  const t = getTheme(settings.theme)
   const html = `<!DOCTYPE html><html><head><style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Inter', 'Segoe UI', sans-serif; background: transparent; overflow: hidden; }
+    body { font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; background: transparent; overflow: hidden; }
     .toast { display: flex; align-items: center; gap: 12px; padding: 14px 18px;
-      background: rgba(10, 0, 8, 0.92); border: 1px solid rgba(232, 25, 44, 0.3);
+      background: ${t.panel}eb; border: 1px solid ${t.edge};
       border-radius: 12px; backdrop-filter: blur(16px);
       animation: slideIn 0.3s ease-out, fadeOut 0.4s ease-in 2.6s forwards; }
-    .icon { width: 36px; height: 36px; border-radius: 8px; background: rgba(232, 25, 44, 0.15);
+    .icon { width: 36px; height: 36px; border-radius: 8px; background: ${t.accent}26;
       display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .icon svg { color: #e8192c; }
-    .text h3 { font-size: 13px; font-weight: 600; color: #f0f0f0; margin-bottom: 2px; }
-    .text p { font-size: 11px; color: #666; }
-    .text .dur { color: #e8192c; font-weight: 500; }
+    .icon svg { color: ${t.accent}; }
+    .text h3 { font-size: 13px; font-weight: 600; color: ${t.fg}; margin-bottom: 2px; }
+    .text p { font-size: 11px; color: ${t.muted}; }
+    .text .dur { color: ${t.accent}; font-weight: 500; }
     @keyframes slideIn { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
     @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
   </style></head><body>
@@ -282,7 +298,11 @@ function showClipNotification(durationSeconds: number) {
   </body></html>`
 
   notificationWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  notificationWindow.once('ready-to-show', () => notificationWindow?.show())
+  // showInactive: show() would steal focus from the game the user is playing.
+  notificationWindow.once('ready-to-show', () => {
+    notificationWindow?.showInactive()
+    notificationWindow?.setAlwaysOnTop(true, 'screen-saver')
+  })
   setTimeout(() => {
     if (notificationWindow && !notificationWindow.isDestroyed()) {
       notificationWindow.close()
@@ -293,14 +313,14 @@ function showClipNotification(durationSeconds: number) {
 
 function playClipSound() {
   if (!settings.notifications) return
-  const soundPath = join(__dirname, '../../../../assets/sounds/clip-saved.wav')
+  const soundPath = resource('assets/sounds/clip-saved.wav', 'assets/sounds/clip-saved.wav')
   mainWindow?.webContents.send('play-clip-sound', soundPath)
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
 
 function createTray() {
-  const iconPath = join(__dirname, '../../../../assets/icon.png')
+  const iconPath = resource('assets/icon.png', 'assets/icon.png')
   const icon = nativeImage.createFromPath(iconPath)
   tray = new Tray(icon)
   updateTrayMenu()
@@ -337,14 +357,15 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280, height: 800,
     minWidth: 900, minHeight: 600,
-    frame: false, titleBarStyle: 'hidden',
-    titleBarOverlay: { color: '#0c000c', symbolColor: '#666', height: 32 },
-    backgroundColor: '#060006',
+    // No titleBarOverlay: Chromium draws those controls on top of the app's own
+    // top-right buttons. The window controls are rendered in React instead.
+    frame: false,
+    backgroundColor: '#0C0607',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
       contextIsolation: true, nodeIntegration: false,
     },
-    icon: join(__dirname, '../../../../assets/icon.png'),
+    icon: resource('assets/icon-512.png', 'assets/icon-512.png'),
   })
 
   if (process.env.NODE_ENV === 'development') {

@@ -13,6 +13,7 @@ export interface ClipInfo {
 
 export interface Settings {
   clipsFolder: string
+  theme: string
   quality: string
   bufferLength: number
   audioCapture: boolean

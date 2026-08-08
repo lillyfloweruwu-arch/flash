@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { THEMES, DEFAULT_THEME } from '../shared/themes'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ interface Clip {
 
 interface Settings {
   clipsFolder: string
+  theme: string
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -65,6 +67,101 @@ function StickmanIcon({ size = 22 }: { size?: number }) {
   )
 }
 
+// ── Confirm Dialog ────────────────────────────────────────────────────────────
+
+interface ConfirmRequest {
+  title: string
+  body?: string
+  confirmLabel?: string
+  destructive?: boolean
+  onConfirm: () => void
+}
+
+function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; onClose: () => void }) {
+  const accept = useCallback(() => { request.onConfirm(); onClose() }, [request, onClose])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+      if (e.key === 'Enter') { e.stopPropagation(); accept() }
+    }
+    // Capture phase: the clip player also listens for Escape and would close
+    // underneath the dialog otherwise.
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [accept, onClose])
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ background: 'color-mix(in srgb, var(--bg) 72%, transparent)', backdropFilter: 'blur(3px)', animation: 'overlay-in 0.12s ease-out' }}
+      onClick={onClose}>
+      <div role="dialog" aria-modal="true" aria-label={request.title}
+        onClick={e => e.stopPropagation()}
+        className="rounded-xl"
+        style={{
+          width: 380, padding: 22, background: 'var(--panel)',
+          border: '1px solid var(--edge)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)',
+          animation: 'dialog-in 0.14s ease-out',
+        }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg)', marginBottom: request.body ? 8 : 18 }}>
+          {request.title}
+        </h2>
+        {request.body && (
+          <p style={{ fontSize: 13, color: 'var(--muted-2)', lineHeight: 1.55, marginBottom: 18 }}>{request.body}</p>
+        )}
+        <div className="flex justify-end gap-2">
+          <button autoFocus onClick={onClose}
+            className="px-3.5 py-2 rounded-lg text-xs transition-all hover:brightness-125"
+            style={{ color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)' }}>
+            Cancel
+          </button>
+          <button onClick={accept}
+            className="px-3.5 py-2 rounded-lg text-xs transition-all hover:brightness-110"
+            style={{
+              fontWeight: 600,
+              color: request.destructive ? 'white' : 'var(--on-accent)',
+              background: request.destructive ? 'var(--alert)' : 'var(--accent)',
+            }}>
+            {request.confirmLabel ?? 'Confirm'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Window Controls ───────────────────────────────────────────────────────────
+
+// Drawn in React rather than via Electron's titleBarOverlay, which paints native
+// buttons on top of whatever the app puts in its own top-right corner.
+function WindowControls() {
+  const Button = ({ label, onClick, path, danger }: { label: string; onClick: () => void; path: string; danger?: boolean }) => (
+    <button aria-label={label} title={label} onClick={onClick}
+      className="w-11 h-full flex items-center justify-center transition-colors"
+      style={{ color: 'var(--muted-2)' }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = danger ? 'var(--alert)' : 'var(--hover)'
+        e.currentTarget.style.color = danger ? 'white' : 'var(--fg)'
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = 'transparent'
+        e.currentTarget.style.color = 'var(--muted-2)'
+      }}>
+      <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.1">
+        <path d={path} />
+      </svg>
+    </button>
+  )
+
+  return (
+    <div className="flex items-stretch self-stretch titlebar-no-drag" style={{ marginRight: -16 }}>
+      <Button label="Minimize" onClick={() => window.flash?.minimize()} path="M0 5h10" />
+      <Button label="Maximize" onClick={() => window.flash?.maximize()} path="M0.5 0.5h9v9h-9z" />
+      <Button label="Close" onClick={() => window.flash?.close()} path="M0.5 0.5l9 9M9.5 0.5l-9 9" danger />
+    </div>
+  )
+}
+
 // ── Clip Player Modal ─────────────────────────────────────────────────────────
 
 function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
@@ -92,26 +189,26 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
   if (!clip) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(4,0,4,0.97)' }}>
-      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'color-mix(in srgb, var(--bg) 97%, transparent)' }}>
+      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
         <div className="flex items-center gap-3">
-          <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: '#666' }}>
+          <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: 'var(--muted-2)' }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             Back
           </button>
-          <div style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.1)' }} />
-          <span style={{ fontSize: 13, color: '#888' }}>
-            {index + 1} <span style={{ color: '#444' }}>/ {clips.length}</span>
+          <div style={{ width: 1, height: 14, background: 'var(--edge-soft)' }} />
+          <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+            {index + 1} <span style={{ color: 'var(--muted-3)' }}>/ {clips.length}</span>
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => window.flash?.showClipInFolder(clip.filePath)}
             className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-            style={{ color: '#666', border: '1px solid rgba(255,255,255,0.08)' }}>Show in Folder</button>
-          <button onClick={() => { if (confirm(`Delete "${clip.title}"?`)) { onDelete(clip); onClose() } }}
+            style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>Show in Folder</button>
+          <button onClick={() => { onDelete(clip); onClose() }}
             className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-red-500/10"
-            style={{ color: '#a33', border: '1px solid rgba(232,25,44,0.2)' }}>Delete</button>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-md transition-all hover:bg-white/5" style={{ color: '#555' }}>
+            style={{ color: 'var(--alert)', border: '1px solid var(--accent-line)' }}>Delete</button>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-md transition-all hover:bg-white/5" style={{ color: 'var(--muted-2)' }}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
@@ -119,7 +216,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
 
       <div className="flex flex-1 overflow-hidden">
         <button onClick={goPrev} disabled={index === 0} className="flex items-center justify-center px-4 shrink-0"
-          style={{ color: index === 0 ? '#333' : '#666', cursor: index === 0 ? 'default' : 'pointer' }}>
+          style={{ color: index === 0 ? 'var(--faint)' : 'var(--muted-2)', cursor: index === 0 ? 'default' : 'pointer' }}>
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M13 4L7 10l6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
 
@@ -134,21 +231,21 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
           />
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
-              <h2 style={{ fontWeight: 600, fontSize: 16, color: '#f0f0f0', marginBottom: 4 }}>{clip.title}</h2>
-              <div className="flex items-center gap-3" style={{ color: '#555', fontSize: 12 }}>
-                <span style={{ color: '#e8192c' }}>{clip.game}</span>
+              <h2 style={{ fontWeight: 600, fontSize: 16, color: 'var(--fg)', marginBottom: 4 }}>{clip.title}</h2>
+              <div className="flex items-center gap-3" style={{ color: 'var(--muted-2)', fontSize: 12 }}>
+                <span style={{ color: 'var(--accent)' }}>{clip.game}</span>
                 <span>·</span>
                 <span>{formatBytes(clip.size)}</span>
                 <span>·</span>
                 <span>{timeAgo(clip.createdAt)}</span>
               </div>
             </div>
-            <span style={{ fontSize: 11, color: '#444' }}>← → Esc</span>
+            <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>← → Esc</span>
           </div>
         </div>
 
         <button onClick={goNext} disabled={index === clips.length - 1} className="flex items-center justify-center px-4 shrink-0"
-          style={{ color: index === clips.length - 1 ? '#333' : '#666', cursor: index === clips.length - 1 ? 'default' : 'pointer' }}>
+          style={{ color: index === clips.length - 1 ? 'var(--faint)' : 'var(--muted-2)', cursor: index === clips.length - 1 ? 'default' : 'pointer' }}>
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
       </div>
@@ -167,11 +264,11 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
   captureAvailable: boolean
 }) {
   return (
-    <header className="flex items-center shrink-0 px-4 titlebar-drag" style={{ height: 48, background: '#0c000c', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+    <header className="flex items-center shrink-0 px-4 titlebar-drag" style={{ height: 48, background: 'var(--panel)', borderBottom: '1px solid var(--edge-soft)' }}>
       <div className="flex items-center gap-2 mr-6 titlebar-no-drag">
-        <div style={{ color: '#e8192c' }}><StickmanIcon size={20} /></div>
-        <span style={{ fontWeight: 700, fontSize: 15, color: '#f0f0f0', letterSpacing: '-0.01em' }}>
-          flash<span style={{ color: '#e8192c' }}>.</span>
+        <div style={{ color: 'var(--accent)' }}><StickmanIcon size={20} /></div>
+        <span style={{ fontWeight: 700, fontSize: 15, color: 'var(--fg)', letterSpacing: '-0.01em' }}>
+          flash<span style={{ color: 'var(--accent)' }}>.</span>
         </span>
       </div>
 
@@ -179,7 +276,7 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
         {TABS.map(tab => (
           <button key={tab} onClick={() => setActive(tab)}
             className="relative px-4 transition-colors duration-100"
-            style={{ fontWeight: active === tab ? 500 : 400, fontSize: 13, color: active === tab ? '#f0f0f0' : '#555', borderBottom: `2px solid ${active === tab ? '#e8192c' : 'transparent'}` }}>
+            style={{ fontWeight: active === tab ? 500 : 400, fontSize: 13, color: active === tab ? 'var(--fg)' : 'var(--muted-2)', borderBottom: `2px solid ${active === tab ? 'var(--accent)' : 'transparent'}` }}>
             {tab}
           </button>
         ))}
@@ -187,9 +284,9 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
 
       <div className="ml-auto flex items-center gap-3 titlebar-no-drag">
         {detectedGame && (
-          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
-            <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#4ade80' }} />
-            <span style={{ fontSize: 11, color: '#888' }}>{detectedGame}</span>
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: 'var(--edge-soft)', border: '1px solid var(--edge-soft)' }}>
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ok)' }} />
+            <span style={{ fontSize: 11, color: 'var(--muted)' }}>{detectedGame}</span>
           </div>
         )}
 
@@ -197,18 +294,20 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all"
           title={captureAvailable ? (isRecording ? 'Stop replay buffer' : 'Start replay buffer') : 'Capture engine unavailable'}
           style={{
-            background: isRecording ? 'rgba(232,25,44,0.1)' : 'rgba(255,255,255,0.03)',
-            border: `1px solid ${isRecording ? 'rgba(232,25,44,0.2)' : 'rgba(255,255,255,0.06)'}`,
+            background: isRecording ? 'var(--accent-wash)' : 'var(--edge-soft)',
+            border: `1px solid ${isRecording ? 'var(--accent-line)' : 'var(--edge-soft)'}`,
             cursor: captureAvailable ? 'pointer' : 'not-allowed',
             opacity: captureAvailable ? 1 : 0.5,
           }}>
-          <div className="w-1.5 h-1.5 rounded-full" style={{ background: isRecording ? '#e8192c' : '#444', animation: isRecording ? 'pulse-red 1.4s ease-in-out infinite' : 'none' }} />
-          <span style={{ fontSize: 11, color: isRecording ? '#e8192c' : '#666', fontWeight: 500 }}>
+          <div className="w-1.5 h-1.5 rounded-full" style={{ background: isRecording ? 'var(--accent)' : 'var(--muted-3)', animation: isRecording ? 'pulse-red 1.4s ease-in-out infinite' : 'none' }} />
+          <span style={{ fontSize: 11, color: isRecording ? 'var(--accent)' : 'var(--muted-2)', fontWeight: 500 }}>
             {isRecording ? 'REC' : 'IDLE'}
           </span>
         </button>
 
-        <kbd style={{ fontSize: 11, color: '#444', background: '#111', border: '1px solid #222', borderRadius: 4, padding: '2px 6px' }}>F8</kbd>
+        <kbd style={{ fontSize: 11, color: 'var(--muted-3)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 4, padding: '2px 6px' }}>F8</kbd>
+
+        <WindowControls />
       </div>
     </header>
   )
@@ -224,38 +323,38 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
   onOpenFolder: () => void
 }) {
   return (
-    <aside className="flex flex-col shrink-0 overflow-y-auto" style={{ width: 196, background: '#080008', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+    <aside className="flex flex-col shrink-0 overflow-y-auto" style={{ width: 196, background: 'var(--bg)', borderRight: '1px solid var(--edge-soft)' }}>
       <div className="p-3">
         <button onClick={onOpenFolder}
           className="w-full py-2 rounded-lg transition-all hover:brightness-110 active:scale-95 mb-4"
-          style={{ fontWeight: 600, fontSize: 13, background: '#e8192c', color: 'white' }}>
+          style={{ fontWeight: 600, fontSize: 13, background: 'var(--accent)', color: 'white' }}>
           Open Clips Folder
         </button>
 
-        <p style={{ fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Games</p>
+        <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--faint)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Games</p>
 
         {games.length === 0 ? (
-          <p style={{ fontSize: 11, color: '#333', padding: '8px 12px', lineHeight: 1.5 }}>
+          <p style={{ fontSize: 11, color: 'var(--faint)', padding: '8px 12px', lineHeight: 1.5 }}>
             No clips yet. Games appear here once you clip them.
           </p>
         ) : (
           games.map(g => (
             <button key={g.name} onClick={() => setGameFilter(g.name)}
               className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-100 text-left mb-0.5"
-              style={{ background: gameFilter === g.name ? 'rgba(232,25,44,0.1)' : 'transparent', color: gameFilter === g.name ? '#f0f0f0' : '#555' }}>
+              style={{ background: gameFilter === g.name ? 'var(--accent-wash)' : 'transparent', color: gameFilter === g.name ? 'var(--fg)' : 'var(--muted-2)' }}>
               <span style={{ fontSize: 13, fontWeight: gameFilter === g.name ? 500 : 400 }}>{g.name}</span>
-              <span style={{ fontSize: 11, color: '#333' }}>{g.count}</span>
+              <span style={{ fontSize: 11, color: 'var(--faint)' }}>{g.count}</span>
             </button>
           ))
         )}
 
-        <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '12px 0' }} />
+        <div style={{ height: 1, background: 'var(--edge-soft)', margin: '12px 0' }} />
 
-        <p style={{ fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Storage</p>
+        <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--faint)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Storage</p>
         <div className="px-3 pb-1">
           <div className="flex justify-between mb-1">
-            <span style={{ fontSize: 11, color: '#666' }}>{formatBytes(storage.used)}</span>
-            <span style={{ fontSize: 11, color: '#444' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
+            <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{formatBytes(storage.used)}</span>
+            <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
           </div>
         </div>
       </div>
@@ -270,9 +369,9 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
 
   return (
     <div className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
-      style={{ background: '#0e000e', border: `1px solid ${hov ? 'rgba(232,25,44,0.3)' : 'rgba(255,255,255,0.05)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
+      style={{ background: 'var(--panel)', border: `1px solid ${hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
-      <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: '#0a0008' }}>
+      <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>
         <video
           src={`file://${clip.filePath.replace(/\\/g, '/')}#t=0.5`}
           preload="metadata"
@@ -281,32 +380,32 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
           style={{ pointerEvents: 'none' }}
         />
         <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)' }}>
-          <span style={{ fontSize: 10, color: '#ccc' }}>{clip.duration}</span>
+          <span style={{ fontSize: 10, color: 'var(--muted)' }}>{clip.duration}</span>
         </div>
         {hov && (
           <>
             <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#e8192c', boxShadow: '0 0 20px rgba(232,25,44,0.5)' }}>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'var(--accent)', boxShadow: '0 0 20px var(--accent-line)' }}>
                 <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><polygon points="3,1 11,6.5 3,12" fill="white"/></svg>
               </div>
             </div>
             <button
-              onClick={e => { e.stopPropagation(); if (confirm(`Delete "${clip.title}"?`)) onDelete() }}
+              onClick={e => { e.stopPropagation(); onDelete() }}
               className="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center transition-all hover:bg-red-500/20"
-              style={{ background: 'rgba(0,0,0,0.6)', color: '#a55' }}>
+              style={{ background: 'rgba(0,0,0,0.6)', color: 'var(--alert)' }}>
               <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 1l9 9M10 1L1 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
           </>
         )}
-        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          <span style={{ fontSize: 10, fontWeight: 500, color: '#888' }}>{clip.game}</span>
+        <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid var(--edge-soft)' }}>
+          <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--muted)' }}>{clip.game}</span>
         </div>
       </div>
       <div className="p-3">
-        <p style={{ fontSize: 12, fontWeight: 500, color: '#d0d0d0', marginBottom: 6, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title}</p>
+        <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg)', marginBottom: 6, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title}</p>
         <div className="flex items-center justify-between">
-          <span style={{ fontSize: 11, color: '#444' }}>{formatBytes(clip.size)}</span>
-          <span style={{ fontSize: 10, color: '#2f2f2f' }}>{timeAgo(clip.createdAt)}</span>
+          <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{formatBytes(clip.size)}</span>
+          <span style={{ fontSize: 10, color: 'var(--faint)' }}>{timeAgo(clip.createdAt)}</span>
         </div>
       </div>
     </div>
@@ -317,7 +416,7 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
 
 function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable }: {
   clips: Clip[]
-  onOpenClip: (index: number) => void
+  onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
   isRecording: boolean
   captureAvailable: boolean
@@ -337,30 +436,30 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
           {(['Recent', 'Longest', 'Largest'] as const).map(s => (
             <button key={s} onClick={() => setSort(s)}
               className="px-3 py-1.5 rounded-lg text-xs transition-all duration-100"
-              style={{ fontWeight: sort === s ? 500 : 400, background: sort === s ? 'rgba(232,25,44,0.12)' : 'rgba(255,255,255,0.03)', color: sort === s ? '#f0f0f0' : '#555', border: `1px solid ${sort === s ? 'rgba(232,25,44,0.25)' : 'rgba(255,255,255,0.04)'}` }}>
+              style={{ fontWeight: sort === s ? 500 : 400, background: sort === s ? 'var(--accent-wash)' : 'var(--edge-soft)', color: sort === s ? 'var(--fg)' : 'var(--muted-2)', border: `1px solid ${sort === s ? 'var(--accent-line)' : 'var(--edge-soft)'}` }}>
               {s}
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 11, color: '#333' }}>{clips.length} clip{clips.length === 1 ? '' : 's'}</span>
+        <span style={{ fontSize: 11, color: 'var(--faint)' }}>{clips.length} clip{clips.length === 1 ? '' : 's'}</span>
       </div>
 
       {clips.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: 300 }}>
-          <div style={{ color: '#2a1a2a' }}><StickmanIcon size={48} /></div>
-          <p style={{ fontSize: 15, fontWeight: 500, color: '#555' }}>No clips yet</p>
-          <p style={{ fontSize: 13, color: '#3a3a3a', textAlign: 'center', maxWidth: 380, lineHeight: 1.6 }}>
+          <div style={{ color: 'var(--edge)' }}><StickmanIcon size={48} /></div>
+          <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--muted-2)' }}>No clips yet</p>
+          <p style={{ fontSize: 13, color: 'var(--muted-3)', textAlign: 'center', maxWidth: 380, lineHeight: 1.6 }}>
             {!captureAvailable
               ? 'Capture engine unavailable. Check that the native addon is built.'
               : isRecording
-                ? <>Replay buffer is running. Press <kbd style={{ background: '#1a0016', border: '1px solid rgba(232,25,44,0.3)', borderRadius: 4, padding: '1px 6px', color: '#e8192c', fontSize: 12 }}>F8</kbd> to save the last {30} seconds.</>
+                ? <>Replay buffer is running. Press <kbd style={{ background: 'var(--field)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '1px 6px', color: 'var(--accent)', fontSize: 12 }}>F8</kbd> to save the last {30} seconds.</>
                 : 'Click the IDLE badge in the top bar to start the replay buffer, then press F8 to clip.'}
           </p>
         </div>
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
-          {sorted.map((clip, i) => (
-            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(i)} onDelete={() => onDeleteClip(clip)} />
+          {sorted.map(clip => (
+            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} />
           ))}
         </div>
       )}
@@ -373,7 +472,7 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
 function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
   return (
     <button onClick={onChange} className="relative w-8 h-4 rounded-full transition-all duration-150 shrink-0"
-      style={{ background: on ? '#e8192c' : 'rgba(255,255,255,0.08)', border: `1px solid ${on ? '#e8192c' : 'rgba(255,255,255,0.1)'}` }}>
+      style={{ background: on ? 'var(--accent)' : 'var(--edge-soft)', border: `1px solid ${on ? 'var(--accent)' : 'var(--edge-soft)'}` }}>
       <div className="absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all duration-150" style={{ left: on ? 'calc(100% - 14px)' : '1px' }} />
     </button>
   )
@@ -390,45 +489,72 @@ function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onP
   onPickFolder: () => void
 }) {
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <span style={{ fontSize: 13, color: '#888' }}>{label}</span>
+    <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
+      <span style={{ fontSize: 13, color: 'var(--muted)' }}>{label}</span>
       {children}
     </div>
   )
 
   const Card = ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div className="rounded-xl p-5" style={{ background: '#0e000e', border: '1px solid rgba(255,255,255,0.05)' }}>
-      <p style={{ fontSize: 11, fontWeight: 600, color: '#e8192c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
+    <div className="rounded-xl p-5" style={{ background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
       {children}
     </div>
   )
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <h1 style={{ fontWeight: 600, fontSize: 18, color: '#f0f0f0', marginBottom: 2 }}>Settings</h1>
-      <p style={{ fontSize: 13, color: '#444', marginBottom: 24 }}>Configure your Flash recording preferences</p>
+      <h1 style={{ fontWeight: 600, fontSize: 18, color: 'var(--fg)', marginBottom: 2 }}>Settings</h1>
+      <p style={{ fontSize: 13, color: 'var(--muted-3)', marginBottom: 24 }}>Configure your Flash recording preferences</p>
 
       <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
+        <Card title="Appearance">
+          <div className="grid gap-2 pt-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+            {Object.entries(THEMES).map(([key, theme]) => {
+              const selected = settings.theme === key
+              return (
+                <button key={key} onClick={() => onChange({ theme: key })}
+                  aria-pressed={selected}
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg transition-all text-left"
+                  style={{
+                    background: selected ? 'var(--accent-wash)' : 'var(--field)',
+                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--edge)'}`,
+                  }}>
+                  {/* Swatch previews the target palette, not the active one. */}
+                  <span className="flex shrink-0 rounded-md overflow-hidden" style={{ border: `1px solid ${theme.edge}` }}>
+                    <span style={{ width: 12, height: 22, background: theme.bg }} />
+                    <span style={{ width: 12, height: 22, background: theme.panel }} />
+                    <span style={{ width: 12, height: 22, background: theme.accent }} />
+                  </span>
+                  <span style={{ fontSize: 12, color: selected ? 'var(--fg)' : 'var(--muted-2)', fontWeight: selected ? 500 : 400 }}>
+                    {theme.label}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </Card>
+
         <Card title="Capture">
           <Row label="Hotkey">
-            <kbd style={{ fontSize: 11, color: '#e8192c', background: 'rgba(232,25,44,0.1)', border: '1px solid rgba(232,25,44,0.25)', borderRadius: 4, padding: '2px 8px' }}>F8</kbd>
+            <kbd style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-wash)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '2px 8px' }}>F8</kbd>
           </Row>
           <Row label="Quality">
             <select value={settings.quality} onChange={e => onChange({ quality: e.target.value })}
-              style={{ fontSize: 12, color: '#ccc', background: '#1a001a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '4px 8px' }}>
+              style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge-soft)', borderRadius: 6, padding: '4px 8px' }}>
               {QUALITY_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
             </select>
           </Row>
           <Row label={`Buffer length — ${settings.bufferLength}s`}>
             <input type="range" min={10} max={300} step={5} value={settings.bufferLength}
               onChange={e => onChange({ bufferLength: +e.target.value })}
-              style={{ accentColor: '#e8192c', width: 120 }} />
+              style={{ accentColor: 'var(--accent)', width: 120 }} />
           </Row>
           <Row label="Audio capture">
             <Toggle on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
           </Row>
           <Row label="Encoder">
-            <span style={{ fontSize: 12, color: encoder === 'none' ? '#a33' : '#4ade80' }}>{encoder}</span>
+            <span style={{ fontSize: 12, color: encoder === 'none' ? 'var(--alert)' : 'var(--ok)' }}>{encoder}</span>
           </Row>
         </Card>
 
@@ -436,7 +562,7 @@ function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onP
           <Row label="Clip saved notification">
             <Toggle on={settings.notifications} onChange={() => onChange({ notifications: !settings.notifications })} />
           </Row>
-          <p style={{ fontSize: 11, color: '#3a3a3a', paddingTop: 12, lineHeight: 1.5 }}>
+          <p style={{ fontSize: 11, color: 'var(--muted-3)', paddingTop: 12, lineHeight: 1.5 }}>
             Shows a popup in the top-left corner and plays a sound when a clip is saved.
           </p>
         </Card>
@@ -444,31 +570,31 @@ function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onP
         <Card title="Storage">
           <div className="mb-4 pt-2">
             <div className="flex justify-between mb-1">
-              <span style={{ fontSize: 12, color: '#666' }}>{formatBytes(storage.used)} used</span>
-              <span style={{ fontSize: 11, color: '#444' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
+              <span style={{ fontSize: 12, color: 'var(--muted-2)' }}>{formatBytes(storage.used)} used</span>
+              <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
             </div>
           </div>
           <Row label="Clips folder">
             <button onClick={onPickFolder}
               className="px-2 py-1 rounded transition-all hover:bg-white/5"
-              style={{ fontSize: 11, color: '#666', border: '1px solid rgba(255,255,255,0.08)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              style={{ fontSize: 11, color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               title={settings.clipsFolder}>
               {settings.clipsFolder}
             </button>
           </Row>
           <Row label="Auto-delete clips after">
             <select value={settings.autoDeleteDays} onChange={e => onChange({ autoDeleteDays: +e.target.value })}
-              style={{ fontSize: 12, color: '#ccc', background: '#1a001a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '4px 8px' }}>
+              style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge-soft)', borderRadius: 6, padding: '4px 8px' }}>
               <option value={0}>Never</option>
               <option value={7}>7 days</option>
               <option value={30}>30 days</option>
               <option value={90}>90 days</option>
             </select>
           </Row>
-          <Row label="Format"><span style={{ fontSize: 12, color: '#666' }}>MP4 / H.264</span></Row>
+          <Row label="Format"><span style={{ fontSize: 12, color: 'var(--muted-2)' }}>MP4 / H.264</span></Row>
           <button onClick={onOpenFolder}
             className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:brightness-110"
-            style={{ fontWeight: 600, background: '#e8192c', color: 'white' }}>
+            style={{ fontWeight: 600, background: 'var(--accent)', color: 'white' }}>
             Open Clips Folder
           </button>
         </Card>
@@ -488,11 +614,17 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', quality: '1080p 60fps', bufferLength: 30,
+    clipsFolder: '', theme: DEFAULT_THEME, quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
   const [encoder, setEncoder] = useState('none')
   const [captureAvailable, setCaptureAvailable] = useState(false)
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
+
+  // The theme is a data attribute on <html>; index.css keys every palette off it.
+  useEffect(() => {
+    document.documentElement.dataset.theme = settings.theme
+  }, [settings.theme])
 
   const refreshClips = useCallback(async () => {
     if (!window.flash) return
@@ -524,10 +656,19 @@ export default function App() {
     if (partial.clipsFolder) refreshClips()
   }, [refreshClips])
 
-  const deleteClip = useCallback(async (clip: Clip) => {
-    if (!window.flash) return
-    await window.flash.deleteClip(clip.filePath)
-    refreshClips()
+  // Confirmation lives here so ClipCard and ClipPlayer both get the same dialog
+  // without either of them knowing it exists.
+  const deleteClip = useCallback((clip: Clip) => {
+    setConfirmRequest({
+      title: `Delete this clip?`,
+      body: `"${clip.title}" (${clip.game}, ${formatBytes(clip.size)}) will be permanently deleted from disk.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        await window.flash?.deleteClip(clip.filePath)
+        refreshClips()
+      },
+    })
   }, [refreshClips])
 
   const toggleRecording = useCallback(async () => {
@@ -559,7 +700,7 @@ export default function App() {
   }, [refreshClips])
 
   return (
-    <div className="flex flex-col" style={{ width: '100vw', height: '100vh', background: '#060006', overflow: 'hidden' }}>
+    <div className="flex flex-col" style={{ width: '100vw', height: '100vh', background: 'var(--bg)', overflow: 'hidden' }}>
       <TopBar
         active={active} setActive={setActive}
         isRecording={isRecording} onToggleRecording={toggleRecording}
@@ -572,7 +713,7 @@ export default function App() {
             storage={storage} onOpenFolder={() => window.flash?.openClipsFolder()}
           />
         )}
-        <main className="flex-1 flex flex-col overflow-hidden" style={{ background: '#080008' }}>
+        <main className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
@@ -584,7 +725,11 @@ export default function App() {
             />
           ) : (
             <ClipsPanel
-              clips={filteredClips} onOpenClip={setPreviewIndex} onDeleteClip={deleteClip}
+              clips={filteredClips}
+              // Index into filteredClips, not into the panel's own sorted copy —
+              // sorting by Longest/Largest used to open a different clip.
+              onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}
+              onDeleteClip={deleteClip}
               isRecording={isRecording} captureAvailable={captureAvailable}
             />
           )}
@@ -592,6 +737,9 @@ export default function App() {
       </div>
       {previewIndex !== null && filteredClips.length > 0 && (
         <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} />
+      )}
+      {confirmRequest && (
+        <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
       )}
     </div>
   )
