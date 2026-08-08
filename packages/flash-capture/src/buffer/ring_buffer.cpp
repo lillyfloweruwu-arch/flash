@@ -23,40 +23,38 @@ void RingBuffer::Push(const EncodedPacket& packet) {
 
 std::vector<EncodedPacket> RingBuffer::Flush() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (count_ == 0 || capacity_ == 0) return {};
 
+    // Copy, never move: a replay buffer keeps its history. Draining here makes a
+    // second hotkey press inside the buffer window return an empty clip.
+    // ponytail: copies the whole window (~75 MB at 30 s / 20 Mbps) under the lock;
+    // hand out shared_ptr<const EncodedPacket> if the hitch ever shows up.
     std::vector<EncodedPacket> result;
     result.reserve(count_);
-
-    if (count_ < capacity_) {
-        // Buffer hasn't wrapped yet — packets are in order from 0 to count_
-        for (size_t i = 0; i < count_; i++) {
-            result.push_back(std::move(packets_[i]));
-        }
-    } else {
-        // Buffer has wrapped — oldest packet is at writePos_
-        for (size_t i = 0; i < capacity_; i++) {
-            size_t idx = (writePos_ + i) % capacity_;
-            result.push_back(std::move(packets_[idx]));
-        }
+    const size_t oldest = (count_ < capacity_) ? 0 : writePos_;
+    for (size_t i = 0; i < count_; i++) {
+        result.push_back(packets_[(oldest + i) % capacity_]);
     }
 
-    // Find the nearest keyframe to start from (ensures valid playback)
-    size_t startIdx = 0;
-    for (size_t i = 0; i < result.size(); i++) {
-        if (result[i].isKeyframe) {
-            startIdx = i;
-            break;
-        }
+    // The ring is sized in frames, but DXGI only delivers a frame when the screen
+    // changes — on a static screen count_/fps_ spans far more than the requested
+    // seconds. Trim by timestamp so the clip is the length the user asked for.
+    const int64_t cutoff = result.back().timestamp_us -
+        static_cast<int64_t>(maxDurationSeconds_) * 1000000;
+    size_t start = 0;
+    while (start < result.size() && result[start].timestamp_us < cutoff) start++;
+
+    // H.264 cannot decode from a P-frame. Back up to the keyframe covering the
+    // window start; if there is none before it, skip forward to the first one.
+    size_t key = start;
+    while (key > 0 && !result[key].isKeyframe) key--;
+    if (!result[key].isKeyframe) {
+        key = start;
+        while (key < result.size() && !result[key].isKeyframe) key++;
+        if (key >= result.size()) return {};
     }
 
-    if (startIdx > 0) {
-        result.erase(result.begin(), result.begin() + startIdx);
-    }
-
-    // Reset buffer
-    count_ = 0;
-    writePos_ = 0;
-
+    result.erase(result.begin(), result.begin() + key);
     return result;
 }
 

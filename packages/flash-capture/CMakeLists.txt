@@ -77,3 +77,14 @@ endif()
 
 # NAPI version
 target_compile_definitions(flash_capture PRIVATE NAPI_VERSION=8)
+
+# Replay buffer self-check. Not built by default — cmake-js only builds the addon.
+add_executable(flash_ring_buffer_test EXCLUDE_FROM_ALL
+  test/ring_buffer_test.cpp
+  src/buffer/ring_buffer.cpp
+)
+target_link_libraries(flash_ring_buffer_test ${PLATFORM_LIBS})
+if(MSVC)
+  target_compile_options(flash_ring_buffer_test PRIVATE /EHsc)
+  target_compile_definitions(flash_ring_buffer_test PRIVATE NOMINMAX)
+endif()

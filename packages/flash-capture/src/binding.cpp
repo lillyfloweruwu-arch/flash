@@ -148,7 +148,7 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
         if (!g_ringBuffer || !g_screenCapture) { Napi::Error::New(env, "capture system is not initialized").ThrowAsJavaScriptException(); return env.Undefined(); }
         video = g_ringBuffer->Flush();
         if (video.empty()) { Napi::Error::New(env, "replay buffer is empty").ThrowAsJavaScriptException(); return env.Undefined(); }
-        audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); g_audioBuffer.clear();
+        audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); // keep buffering — see RingBuffer::Flush
         game = g_currentGame; path = ClipWriter::GenerateClipPath(g_clipsDir, game);
         width = g_screenCapture->GetWidth(); height = g_screenCapture->GetHeight();
     }
