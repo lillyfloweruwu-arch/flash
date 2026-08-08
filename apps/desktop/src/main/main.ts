@@ -204,11 +204,10 @@ function playClipSound() {
 // ── Tray ──────────────────────────────────────────────────────────────────────
 
 function createTray() {
-  // Simple 16x16 tray icon — red circle when recording, gray when idle
-  const iconSize = 16
-  const canvas = nativeImage.createEmpty()
+  const iconPath = join(__dirname, '../../assets/icon.png')
+  const icon = nativeImage.createFromPath(iconPath)
 
-  tray = new Tray(canvas)
+  tray = new Tray(icon)
   updateTrayMenu()
   tray.setToolTip('Flash — Game Clipper')
 
