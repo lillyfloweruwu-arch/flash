@@ -1,0 +1,15 @@
+node_modules/
+dist/
+out/
+build/
+*.node
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db

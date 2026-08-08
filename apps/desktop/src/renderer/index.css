@@ -1,0 +1,71 @@
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import 'tailwindcss';
+
+@theme inline {
+  --font-display: 'Rajdhani', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --color-flash-red: #e8192c;
+  --color-flash-red-bright: #ff2d42;
+  --color-flash-red-dim: #8b0f1a;
+  --color-flash-bg: #0a0008;
+  --color-flash-panel: #110010;
+  --color-flash-surface: #1a0016;
+  --color-flash-border: rgba(232, 25, 44, 0.18);
+  --color-flash-muted: #6b5b6e;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #e8192c22 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: #e8192c44;
+  border-radius: 2px;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background: #0a0008;
+  color: #f0e8f0;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+.panel-glass {
+  background: linear-gradient(135deg, rgba(26, 0, 22, 0.92) 0%, rgba(17, 0, 16, 0.96) 100%);
+  border: 1px solid rgba(232, 25, 44, 0.14);
+  backdrop-filter: blur(12px);
+}
+
+@keyframes pulse-red {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #1a0016 25%, #2a0022 50%, #1a0016 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Electron title bar drag region */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}

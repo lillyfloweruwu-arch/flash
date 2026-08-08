@@ -1,0 +1,17 @@
+{
+  "name": "@flash/capture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "C++ native addon for screen capture and hardware encoding",
+  "main": "build/Release/flash_capture.node",
+  "scripts": {
+    "install": "cmake-js compile",
+    "build": "cmake-js build",
+    "rebuild": "cmake-js rebuild",
+    "clean": "cmake-js clean"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.0.0",
+    "cmake-js": "^7.3.0"
+  }
+}
