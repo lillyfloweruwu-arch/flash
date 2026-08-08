@@ -1,44 +1,52 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Clip {
-  id: number
+  id: string
   title: string
   game: string
   duration: string
   durationSec: number
-  views: string
-  likes: string
-  time: string
-  thumb: string
-  filePath?: string
+  filePath: string
+  size: number
+  createdAt: number
 }
 
-// ── Mock Data (replaced by SQLite later) ──────────────────────────────────────
+interface Settings {
+  clipsFolder: string
+  quality: string
+  bufferLength: number
+  audioCapture: boolean
+  autoSave: boolean
+  notifications: boolean
+  autoDeleteDays: number
+}
 
-const CATEGORIES = ['Home', 'My Clips', 'Highlights', 'Following', 'Trending', 'Settings']
+const TABS = ['My Clips', 'Settings']
 
-const CLIPS: Clip[] = [
-  { id: 1, title: 'Insane 1v5 Clutch', game: 'Valorant', duration: '0:34', durationSec: 34, views: '142K', likes: '8.2K', time: '2h ago', thumb: 'https://images.unsplash.com/photo-1542751371-adc38448a05e?w=960&h=540&fit=crop&auto=format' },
-  { id: 2, title: 'No-scope across the map', game: 'CS2', duration: '0:12', durationSec: 12, views: '89K', likes: '5.4K', time: '4h ago', thumb: 'https://images.unsplash.com/photo-1493711662062-fa541adb3fc8?w=960&h=540&fit=crop&auto=format' },
-  { id: 3, title: 'Full Squad Wipe Solo', game: 'Apex Legends', duration: '1:02', durationSec: 62, views: '203K', likes: '14.1K', time: '6h ago', thumb: 'https://images.unsplash.com/photo-1511512578047-dfb367046420?w=960&h=540&fit=crop&auto=format' },
-  { id: 4, title: 'Widow Quad Kill', game: 'Overwatch 2', duration: '0:22', durationSec: 22, views: '31K', likes: '2.1K', time: '10h ago', thumb: 'https://images.unsplash.com/photo-1538481199705-c710c4e965fc?w=960&h=540&fit=crop&auto=format' },
-  { id: 5, title: 'Build Battle Win', game: 'Fortnite', duration: '0:48', durationSec: 48, views: '77K', likes: '4.9K', time: '1d ago', thumb: 'https://images.unsplash.com/photo-1560253023-3ec5d502959f?w=960&h=540&fit=crop&auto=format' },
-  { id: 6, title: 'Helicopter Last Circle', game: 'Warzone', duration: '0:31', durationSec: 31, views: '55K', likes: '3.3K', time: '1d ago', thumb: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=960&h=540&fit=crop&auto=format' },
-  { id: 7, title: '360 noscope off ramp', game: 'CS2', duration: '0:08', durationSec: 8, views: '420K', likes: '31K', time: '2d ago', thumb: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=960&h=540&fit=crop&auto=format' },
-  { id: 8, title: 'Ranked Ace Round 15', game: 'Valorant', duration: '0:44', durationSec: 44, views: '18K', likes: '1.1K', time: '3d ago', thumb: 'https://images.unsplash.com/photo-1612287230202-1ff1d85d1bdf?w=960&h=540&fit=crop&auto=format' },
-]
+const QUALITY_OPTIONS = ['720p 30fps', '720p 60fps', '1080p 30fps', '1080p 60fps', '1440p 60fps', '4K 30fps']
 
-const GAMES = [
-  { name: 'All Games', clips: 1053 },
-  { name: 'Valorant', clips: 312 },
-  { name: 'CS2', clips: 204 },
-  { name: 'Apex Legends', clips: 189 },
-  { name: 'Overwatch 2', clips: 97 },
-  { name: 'Fortnite', clips: 143 },
-  { name: 'Warzone', clips: 108 },
-]
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${(bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0)} ${units[i]}`
+}
+
+function timeAgo(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000)
+  if (seconds < 60) return 'just now'
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  if (days < 30) return `${days}d ago`
+  return new Date(timestamp).toLocaleDateString()
+}
 
 // ── Stickman Logo ─────────────────────────────────────────────────────────────
 
@@ -57,200 +65,92 @@ function StickmanIcon({ size = 22 }: { size?: number }) {
   )
 }
 
-// ── Clip Preview Modal ────────────────────────────────────────────────────────
+// ── Clip Player Modal ─────────────────────────────────────────────────────────
 
-function ClipPreview({ clips, startIndex, onClose }: { clips: Clip[]; startIndex: number; onClose: () => void }) {
+function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
+  clips: Clip[]
+  startIndex: number
+  onClose: () => void
+  onDelete: (clip: Clip) => void
+}) {
   const [index, setIndex] = useState(startIndex)
-  const [playing, setPlaying] = useState(false)
-  const [progress, setProgress] = useState(0)
-  const [liked, setLiked] = useState(false)
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const clip = clips[index]
 
-  const goNext = useCallback(() => {
-    setIndex(i => Math.min(i + 1, clips.length - 1))
-    setProgress(0)
-    setPlaying(false)
-  }, [clips.length])
-
-  const goPrev = useCallback(() => {
-    setIndex(i => Math.max(i - 1, 0))
-    setProgress(0)
-    setPlaying(false)
-  }, [])
-
-  useEffect(() => {
-    if (playing) {
-      intervalRef.current = setInterval(() => {
-        setProgress(p => {
-          if (p >= 100) {
-            clearInterval(intervalRef.current!)
-            setPlaying(false)
-            return 100
-          }
-          return p + 100 / (clip.durationSec * 10)
-        })
-      }, 100)
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-    }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
-  }, [playing, clip.durationSec])
+  const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
+  const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
       if (e.key === 'ArrowRight') goNext()
       if (e.key === 'ArrowLeft') goPrev()
-      if (e.key === ' ') { e.preventDefault(); setPlaying(p => !p) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, goNext, goPrev])
 
-  const progressSec = Math.round((progress / 100) * clip.durationSec)
-  const fmt = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+  if (!clip) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(4,0,4,0.97)', backdropFilter: 'blur(2px)' }}>
-      {/* Header */}
+    <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'rgba(4,0,4,0.97)' }}>
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         <div className="flex items-center gap-3">
-          <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: '#666', fontFamily: 'Inter, sans-serif' }}>
+          <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: '#666' }}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             Back
           </button>
           <div style={{ width: 1, height: 14, background: 'rgba(255,255,255,0.1)' }} />
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, color: '#888' }}>
+          <span style={{ fontSize: 13, color: '#888' }}>
             {index + 1} <span style={{ color: '#444' }}>/ {clips.length}</span>
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5" style={{ fontFamily: 'Inter, sans-serif', color: '#666', border: '1px solid rgba(255,255,255,0.08)' }}>Share</button>
-          <button className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5" style={{ fontFamily: 'Inter, sans-serif', color: '#666', border: '1px solid rgba(255,255,255,0.08)' }}>Download</button>
+          <button onClick={() => window.flash?.showClipInFolder(clip.filePath)}
+            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
+            style={{ color: '#666', border: '1px solid rgba(255,255,255,0.08)' }}>Show in Folder</button>
+          <button onClick={() => { if (confirm(`Delete "${clip.title}"?`)) { onDelete(clip); onClose() } }}
+            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-red-500/10"
+            style={{ color: '#a33', border: '1px solid rgba(232,25,44,0.2)' }}>Delete</button>
           <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-md transition-all hover:bg-white/5" style={{ color: '#555' }}>
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
           </button>
         </div>
       </div>
 
-      {/* Main viewer */}
       <div className="flex flex-1 overflow-hidden">
-        <button onClick={goPrev} disabled={index === 0} className="flex items-center justify-center px-4 transition-all shrink-0" style={{ color: index === 0 ? '#333' : '#666', cursor: index === 0 ? 'default' : 'pointer' }}>
-          <div className="flex flex-col items-center gap-1 hover:text-white transition-colors" style={{ color: 'inherit' }}>
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M13 4L7 10l6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            <span style={{ fontSize: 9, fontFamily: 'Inter, sans-serif', letterSpacing: '0.05em', color: 'inherit' }}>PREV</span>
-          </div>
+        <button onClick={goPrev} disabled={index === 0} className="flex items-center justify-center px-4 shrink-0"
+          style={{ color: index === 0 ? '#333' : '#666', cursor: index === 0 ? 'default' : 'pointer' }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M13 4L7 10l6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
 
         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-4">
-          <div className="relative w-full rounded-xl overflow-hidden cursor-pointer" style={{ maxWidth: 900, aspectRatio: '16/9', background: '#0d000d' }} onClick={() => setPlaying(p => !p)}>
-            <img src={clip.thumb} alt={clip.title} className="w-full h-full object-cover" style={{ opacity: 0.9 }} />
-
-            {!playing && (
-              <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.25)' }}>
-                <div className="w-16 h-16 rounded-full flex items-center justify-center transition-transform hover:scale-105" style={{ background: '#e8192c', boxShadow: '0 0 0 1px rgba(232,25,44,0.3), 0 8px 32px rgba(232,25,44,0.4)' }}>
-                  <svg width="22" height="22" viewBox="0 0 22 22" fill="none"><polygon points="7,4 19,11 7,18" fill="white" /></svg>
-                </div>
-              </div>
-            )}
-
-            {playing && (
-              <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity" style={{ background: 'rgba(0,0,0,0.2)' }}>
-                <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.55)' }}>
-                  <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-                    <rect x="3" y="3" width="4" height="12" rx="1" fill="white" />
-                    <rect x="11" y="3" width="4" height="12" rx="1" fill="white" />
-                  </svg>
-                </div>
-              </div>
-            )}
-
-            <div className="absolute top-3 left-3 px-2 py-1 rounded" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', border: '1px solid rgba(255,255,255,0.08)' }}>
-              <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, fontWeight: 500, color: '#ccc' }}>{clip.game}</span>
-            </div>
-          </div>
-
-          {/* Controls */}
-          <div className="w-full" style={{ maxWidth: 900 }}>
-            <div className="group relative mb-3">
-              <div className="w-full h-1 rounded-full cursor-pointer transition-all group-hover:h-1.5" style={{ background: 'rgba(255,255,255,0.1)' }}
-                onClick={e => { const rect = e.currentTarget.getBoundingClientRect(); setProgress(((e.clientX - rect.left) / rect.width) * 100) }}>
-                <div className="h-full rounded-full relative" style={{ width: `${progress}%`, background: '#e8192c' }}>
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full opacity-0 group-hover:opacity-100 transition-opacity" style={{ background: '#e8192c', transform: 'translateY(-50%) translateX(50%)' }} />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <button onClick={() => setPlaying(p => !p)} style={{ color: 'white' }}>
-                  {playing
-                    ? <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="3" y="2" width="4" height="14" rx="1" fill="currentColor"/><rect x="11" y="2" width="4" height="14" rx="1" fill="currentColor"/></svg>
-                    : <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><polygon points="4,2 16,9 4,16" fill="currentColor"/></svg>
-                  }
-                </button>
-                <div className="flex items-center gap-1">
-                  <button onClick={goPrev} disabled={index === 0} style={{ color: index === 0 ? '#444' : '#aaa' }} className="transition-colors hover:text-white disabled:cursor-default">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="2.5" height="10" rx="1" fill="currentColor"/><path d="M13 3L7 8l6 5V3z" fill="currentColor"/></svg>
-                  </button>
-                  <button onClick={goNext} disabled={index === clips.length - 1} style={{ color: index === clips.length - 1 ? '#444' : '#aaa' }} className="transition-colors hover:text-white disabled:cursor-default">
-                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="11.5" y="3" width="2.5" height="10" rx="1" fill="currentColor"/><path d="M3 3l6 5-6 5V3z" fill="currentColor"/></svg>
-                  </button>
-                </div>
-                <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 12, color: '#666', fontVariantNumeric: 'tabular-nums' }}>
-                  {fmt(progressSec)} <span style={{ color: '#333' }}>/ {clip.duration}</span>
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => setLiked(l => !l)} className="flex items-center gap-1.5 transition-all" style={{ color: liked ? '#e8192c' : '#666' }}>
-                  <svg width="15" height="15" viewBox="0 0 15 15" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.3"><path d="M7.5 12.5L2 7c-.8-.9-.8-2.2 0-3 .8-.9 2.2-.9 3 0L7.5 6l2.5-2c.8-.9 2.2-.9 3 0 .8.8.8 2.1 0 3L7.5 12.5z"/></svg>
-                  <span style={{ fontSize: 11, fontFamily: 'Inter, sans-serif' }}>{clip.likes}</span>
-                </button>
-                <button style={{ color: '#666' }} className="transition-colors hover:text-white">
-                  <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.3"><circle cx="12" cy="3" r="1.5"/><circle cx="3" cy="7.5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><path d="M4.5 6.5l6-2.5M4.5 8.5l6 2.5"/></svg>
-                </button>
-              </div>
-            </div>
-          </div>
-
+          <video
+            key={clip.filePath}
+            src={`file://${clip.filePath.replace(/\\/g, '/')}`}
+            controls
+            autoPlay
+            className="rounded-xl"
+            style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 220px)', background: '#000' }}
+          />
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
-              <h2 style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600, fontSize: 16, color: '#f0f0f0', marginBottom: 4 }}>{clip.title}</h2>
-              <div className="flex items-center gap-3" style={{ color: '#555', fontSize: 12, fontFamily: 'Inter, sans-serif' }}>
-                <span>{clip.views} views</span>
-                <span>·</span>
-                <span>{clip.time}</span>
-                <span>·</span>
+              <h2 style={{ fontWeight: 600, fontSize: 16, color: '#f0f0f0', marginBottom: 4 }}>{clip.title}</h2>
+              <div className="flex items-center gap-3" style={{ color: '#555', fontSize: 12 }}>
                 <span style={{ color: '#e8192c' }}>{clip.game}</span>
+                <span>·</span>
+                <span>{formatBytes(clip.size)}</span>
+                <span>·</span>
+                <span>{timeAgo(clip.createdAt)}</span>
               </div>
             </div>
-            <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#444' }}>← → Space Esc</span>
+            <span style={{ fontSize: 11, color: '#444' }}>← → Esc</span>
           </div>
         </div>
 
-        <button onClick={goNext} disabled={index === clips.length - 1} className="flex items-center justify-center px-4 shrink-0 transition-all" style={{ color: index === clips.length - 1 ? '#333' : '#666', cursor: index === clips.length - 1 ? 'default' : 'pointer' }}>
-          <div className="flex flex-col items-center gap-1 hover:text-white transition-colors" style={{ color: 'inherit' }}>
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            <span style={{ fontSize: 9, fontFamily: 'Inter, sans-serif', letterSpacing: '0.05em', color: 'inherit' }}>NEXT</span>
-          </div>
+        <button onClick={goNext} disabled={index === clips.length - 1} className="flex items-center justify-center px-4 shrink-0"
+          style={{ color: index === clips.length - 1 ? '#333' : '#666', cursor: index === clips.length - 1 ? 'default' : 'pointer' }}>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         </button>
-      </div>
-
-      {/* Clip strip */}
-      <div className="shrink-0 px-5 py-3" style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-        <div className="flex gap-2 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
-          {clips.map((c, i) => (
-            <button key={c.id} onClick={() => { setIndex(i); setProgress(0); setPlaying(false) }}
-              className="shrink-0 relative rounded overflow-hidden transition-all"
-              style={{ width: 96, aspectRatio: '16/9', outline: i === index ? '2px solid #e8192c' : '2px solid transparent', outlineOffset: 1, opacity: i === index ? 1 : 0.5 }}>
-              <img src={c.thumb} alt={c.title} className="w-full h-full object-cover" />
-              <div className="absolute bottom-0 left-0 right-0 px-1.5 py-1" style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.8))' }}>
-                <p style={{ fontSize: 9, color: '#ccc', fontFamily: 'Inter, sans-serif', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.title}</p>
-              </div>
-            </button>
-          ))}
-        </div>
       </div>
     </div>
   )
@@ -258,97 +158,106 @@ function ClipPreview({ clips, startIndex, onClose }: { clips: Clip[]; startIndex
 
 // ── TopBar ─────────────────────────────────────────────────────────────────────
 
-function TopBar({ active, setActive, isRecording }: { active: string; setActive: (c: string) => void; isRecording: boolean }) {
+function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGame, captureAvailable }: {
+  active: string
+  setActive: (c: string) => void
+  isRecording: boolean
+  onToggleRecording: () => void
+  detectedGame: string | null
+  captureAvailable: boolean
+}) {
   return (
     <header className="flex items-center shrink-0 px-4 titlebar-drag" style={{ height: 48, background: '#0c000c', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
       <div className="flex items-center gap-2 mr-6 titlebar-no-drag">
         <div style={{ color: '#e8192c' }}><StickmanIcon size={20} /></div>
-        <span style={{ fontFamily: 'Inter, sans-serif', fontWeight: 700, fontSize: 15, color: '#f0f0f0', letterSpacing: '-0.01em' }}>
+        <span style={{ fontWeight: 700, fontSize: 15, color: '#f0f0f0', letterSpacing: '-0.01em' }}>
           flash<span style={{ color: '#e8192c' }}>.</span>
         </span>
       </div>
 
       <nav className="flex items-stretch h-full titlebar-no-drag">
-        {CATEGORIES.map(cat => (
-          <button key={cat} onClick={() => setActive(cat)}
-            className="relative px-4 text-sm transition-colors duration-100"
-            style={{ fontFamily: 'Inter, sans-serif', fontWeight: active === cat ? 500 : 400, fontSize: 13, color: active === cat ? '#f0f0f0' : '#555', borderBottom: `2px solid ${active === cat ? '#e8192c' : 'transparent'}` }}>
-            {cat}
+        {TABS.map(tab => (
+          <button key={tab} onClick={() => setActive(tab)}
+            className="relative px-4 transition-colors duration-100"
+            style={{ fontWeight: active === tab ? 500 : 400, fontSize: 13, color: active === tab ? '#f0f0f0' : '#555', borderBottom: `2px solid ${active === tab ? '#e8192c' : 'transparent'}` }}>
+            {tab}
           </button>
         ))}
       </nav>
 
       <div className="ml-auto flex items-center gap-3 titlebar-no-drag">
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: isRecording ? 'rgba(232,25,44,0.1)' : 'rgba(255,255,255,0.03)', border: `1px solid ${isRecording ? 'rgba(232,25,44,0.2)' : 'rgba(255,255,255,0.06)'}` }}>
+        {detectedGame && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: '#4ade80' }} />
+            <span style={{ fontSize: 11, color: '#888' }}>{detectedGame}</span>
+          </div>
+        )}
+
+        <button onClick={onToggleRecording} disabled={!captureAvailable}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-all"
+          title={captureAvailable ? (isRecording ? 'Stop replay buffer' : 'Start replay buffer') : 'Capture engine unavailable'}
+          style={{
+            background: isRecording ? 'rgba(232,25,44,0.1)' : 'rgba(255,255,255,0.03)',
+            border: `1px solid ${isRecording ? 'rgba(232,25,44,0.2)' : 'rgba(255,255,255,0.06)'}`,
+            cursor: captureAvailable ? 'pointer' : 'not-allowed',
+            opacity: captureAvailable ? 1 : 0.5,
+          }}>
           <div className="w-1.5 h-1.5 rounded-full" style={{ background: isRecording ? '#e8192c' : '#444', animation: isRecording ? 'pulse-red 1.4s ease-in-out infinite' : 'none' }} />
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: isRecording ? '#e8192c' : '#444', fontWeight: 500 }}>
+          <span style={{ fontSize: 11, color: isRecording ? '#e8192c' : '#666', fontWeight: 500 }}>
             {isRecording ? 'REC' : 'IDLE'}
           </span>
-        </div>
-        <kbd style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#444', background: '#111', border: '1px solid #222', borderRadius: 4, padding: '2px 6px' }}>F8</kbd>
-        <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold" style={{ background: '#e8192c', color: 'white', fontFamily: 'Inter, sans-serif', fontSize: 11 }}>
-          FL
-        </div>
+        </button>
+
+        <kbd style={{ fontSize: 11, color: '#444', background: '#111', border: '1px solid #222', borderRadius: 4, padding: '2px 6px' }}>F8</kbd>
       </div>
     </header>
   )
 }
 
-// ── Sidebar ────────────────────────────────────────────────────────────────────
+// ── Sidebar (My Clips only) ────────────────────────────────────────────────────
 
-function Sidebar({ gameFilter, setGameFilter }: { gameFilter: string; setGameFilter: (g: string) => void }) {
+function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
+  games: { name: string; count: number }[]
+  gameFilter: string
+  setGameFilter: (g: string) => void
+  storage: { used: number; clips: number }
+  onOpenFolder: () => void
+}) {
   return (
     <aside className="flex flex-col shrink-0 overflow-y-auto" style={{ width: 196, background: '#080008', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
       <div className="p-3">
-        <button className="w-full py-2 rounded-lg text-sm font-semibold transition-all hover:brightness-110 active:scale-95 mb-4"
-          style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600, fontSize: 13, background: '#e8192c', color: 'white' }}>
-          + New Clip
+        <button onClick={onOpenFolder}
+          className="w-full py-2 rounded-lg transition-all hover:brightness-110 active:scale-95 mb-4"
+          style={{ fontWeight: 600, fontSize: 13, background: '#e8192c', color: 'white' }}>
+          Open Clips Folder
         </button>
 
-        <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Games</p>
+        <p style={{ fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Games</p>
 
-        {GAMES.map(g => (
-          <button key={g.name} onClick={() => setGameFilter(g.name)}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-100 text-left mb-0.5"
-            style={{ background: gameFilter === g.name ? 'rgba(232,25,44,0.1)' : 'transparent', color: gameFilter === g.name ? '#f0f0f0' : '#555' }}>
-            <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, fontWeight: gameFilter === g.name ? 500 : 400 }}>{g.name}</span>
-            <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#333' }}>{g.clips}</span>
-          </button>
-        ))}
+        {games.length === 0 ? (
+          <p style={{ fontSize: 11, color: '#333', padding: '8px 12px', lineHeight: 1.5 }}>
+            No clips yet. Games appear here once you clip them.
+          </p>
+        ) : (
+          games.map(g => (
+            <button key={g.name} onClick={() => setGameFilter(g.name)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-100 text-left mb-0.5"
+              style={{ background: gameFilter === g.name ? 'rgba(232,25,44,0.1)' : 'transparent', color: gameFilter === g.name ? '#f0f0f0' : '#555' }}>
+              <span style={{ fontSize: 13, fontWeight: gameFilter === g.name ? 500 : 400 }}>{g.name}</span>
+              <span style={{ fontSize: 11, color: '#333' }}>{g.count}</span>
+            </button>
+          ))
+        )}
 
         <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '12px 0' }} />
 
-        <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Storage</p>
+        <p style={{ fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Storage</p>
         <div className="px-3 pb-1">
-          <div className="w-full h-1 rounded-full mb-1.5" style={{ background: 'rgba(255,255,255,0.06)' }}>
-            <div className="h-full rounded-full" style={{ width: '58%', background: '#e8192c', opacity: 0.8 }} />
-          </div>
-          <div className="flex justify-between">
-            <span style={{ fontSize: 10, color: '#333', fontFamily: 'Inter, sans-serif' }}>14.2 GB used</span>
-            <span style={{ fontSize: 10, color: '#333', fontFamily: 'Inter, sans-serif' }}>25 GB</span>
+          <div className="flex justify-between mb-1">
+            <span style={{ fontSize: 11, color: '#666' }}>{formatBytes(storage.used)}</span>
+            <span style={{ fontSize: 11, color: '#444' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
           </div>
         </div>
-
-        <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '12px 0' }} />
-
-        <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fontWeight: 600, color: '#333', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Recent Activity</p>
-        {[
-          { user: 'xKhronos', action: 'liked your clip', time: '3m' },
-          { user: 'ShadowAce', action: 'followed you', time: '12m' },
-          { user: 'blaze_99', action: 'commented', time: '28m' },
-        ].map((a, i) => (
-          <div key={i} className="flex items-center gap-2 px-3 py-1.5">
-            <div className="w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-xs font-bold" style={{ background: 'rgba(232,25,44,0.15)', color: '#e8192c', fontFamily: 'Inter, sans-serif', fontSize: 9 }}>
-              {a.user[0]}
-            </div>
-            <div>
-              <p style={{ fontSize: 11, color: '#444', fontFamily: 'Inter, sans-serif', lineHeight: 1.3 }}>
-                <span style={{ color: '#888' }}>{a.user}</span> {a.action}
-              </p>
-              <p style={{ fontSize: 10, color: '#2a2a2a', fontFamily: 'Inter, sans-serif' }}>{a.time}</p>
-            </div>
-          </div>
-        ))}
       </div>
     </aside>
   )
@@ -356,37 +265,48 @@ function Sidebar({ gameFilter, setGameFilter }: { gameFilter: string; setGameFil
 
 // ── ClipCard ───────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, onClick }: { clip: Clip; onClick: () => void }) {
+function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void; onDelete: () => void }) {
   const [hov, setHov] = useState(false)
 
   return (
-    <div className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150"
+    <div className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
       style={{ background: '#0e000e', border: `1px solid ${hov ? 'rgba(232,25,44,0.3)' : 'rgba(255,255,255,0.05)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: '#0a0008' }}>
-        <img src={clip.thumb} alt={clip.title} className="w-full h-full object-cover transition-transform duration-300" style={{ transform: hov ? 'scale(1.03)' : 'scale(1)' }} />
-        <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(2px)' }}>
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, color: '#ccc' }}>{clip.duration}</span>
+        <video
+          src={`file://${clip.filePath.replace(/\\/g, '/')}#t=0.5`}
+          preload="metadata"
+          muted
+          className="w-full h-full object-cover"
+          style={{ pointerEvents: 'none' }}
+        />
+        <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <span style={{ fontSize: 10, color: '#ccc' }}>{clip.duration}</span>
         </div>
         {hov && (
-          <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}>
-            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#e8192c', boxShadow: '0 0 20px rgba(232,25,44,0.5)' }}>
-              <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><polygon points="3,1 11,6.5 3,12" fill="white"/></svg>
+          <>
+            <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}>
+              <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: '#e8192c', boxShadow: '0 0 20px rgba(232,25,44,0.5)' }}>
+                <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><polygon points="3,1 11,6.5 3,12" fill="white"/></svg>
+              </div>
             </div>
-          </div>
+            <button
+              onClick={e => { e.stopPropagation(); if (confirm(`Delete "${clip.title}"?`)) onDelete() }}
+              className="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center transition-all hover:bg-red-500/20"
+              style={{ background: 'rgba(0,0,0,0.6)', color: '#a55' }}>
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M1 1l9 9M10 1L1 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+            </button>
+          </>
         )}
         <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, fontWeight: 500, color: '#888' }}>{clip.game}</span>
+          <span style={{ fontSize: 10, fontWeight: 500, color: '#888' }}>{clip.game}</span>
         </div>
       </div>
       <div className="p-3">
-        <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 12, fontWeight: 500, color: '#d0d0d0', marginBottom: 6, lineHeight: 1.4 }} className="line-clamp-1">{clip.title}</p>
+        <p style={{ fontSize: 12, fontWeight: 500, color: '#d0d0d0', marginBottom: 6, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title}</p>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3" style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#444' }}>
-            <span>{clip.views}</span>
-            <span>{clip.likes} ♥</span>
-          </div>
-          <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 10, color: '#2f2f2f' }}>{clip.time}</span>
+          <span style={{ fontSize: 11, color: '#444' }}>{formatBytes(clip.size)}</span>
+          <span style={{ fontSize: 10, color: '#2f2f2f' }}>{timeAgo(clip.createdAt)}</span>
         </div>
       </div>
     </div>
@@ -395,27 +315,55 @@ function ClipCard({ clip, onClick }: { clip: Clip; onClick: () => void }) {
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, onOpenClip }: { clips: Clip[]; onOpenClip: (index: number) => void }) {
-  const [sort, setSort] = useState('Recent')
-  const sorts = ['Recent', 'Most Viewed', 'Most Liked', 'Longest']
+function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable }: {
+  clips: Clip[]
+  onOpenClip: (index: number) => void
+  onDeleteClip: (clip: Clip) => void
+  isRecording: boolean
+  captureAvailable: boolean
+}) {
+  const [sort, setSort] = useState<'Recent' | 'Longest' | 'Largest'>('Recent')
+
+  const sorted = [...clips].sort((a, b) => {
+    if (sort === 'Longest') return b.durationSec - a.durationSec
+    if (sort === 'Largest') return b.size - a.size
+    return b.createdAt - a.createdAt
+  })
 
   return (
     <div className="flex-1 overflow-y-auto p-5">
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-1.5">
-          {sorts.map(s => (
+          {(['Recent', 'Longest', 'Largest'] as const).map(s => (
             <button key={s} onClick={() => setSort(s)}
               className="px-3 py-1.5 rounded-lg text-xs transition-all duration-100"
-              style={{ fontFamily: 'Inter, sans-serif', fontWeight: sort === s ? 500 : 400, background: sort === s ? 'rgba(232,25,44,0.12)' : 'rgba(255,255,255,0.03)', color: sort === s ? '#f0f0f0' : '#555', border: `1px solid ${sort === s ? 'rgba(232,25,44,0.25)' : 'rgba(255,255,255,0.04)'}` }}>
+              style={{ fontWeight: sort === s ? 500 : 400, background: sort === s ? 'rgba(232,25,44,0.12)' : 'rgba(255,255,255,0.03)', color: sort === s ? '#f0f0f0' : '#555', border: `1px solid ${sort === s ? 'rgba(232,25,44,0.25)' : 'rgba(255,255,255,0.04)'}` }}>
               {s}
             </button>
           ))}
         </div>
-        <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#333' }}>{clips.length} clips</span>
+        <span style={{ fontSize: 11, color: '#333' }}>{clips.length} clip{clips.length === 1 ? '' : 's'}</span>
       </div>
-      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
-        {clips.map((clip, i) => <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(i)} />)}
-      </div>
+
+      {clips.length === 0 ? (
+        <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: 300 }}>
+          <div style={{ color: '#2a1a2a' }}><StickmanIcon size={48} /></div>
+          <p style={{ fontSize: 15, fontWeight: 500, color: '#555' }}>No clips yet</p>
+          <p style={{ fontSize: 13, color: '#3a3a3a', textAlign: 'center', maxWidth: 380, lineHeight: 1.6 }}>
+            {!captureAvailable
+              ? 'Capture engine unavailable. Check that the native addon is built.'
+              : isRecording
+                ? <>Replay buffer is running. Press <kbd style={{ background: '#1a0016', border: '1px solid rgba(232,25,44,0.3)', borderRadius: 4, padding: '1px 6px', color: '#e8192c', fontSize: 12 }}>F8</kbd> to save the last {30} seconds.</>
+                : 'Click the IDLE badge in the top bar to start the replay buffer, then press F8 to clip.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
+          {sorted.map((clip, i) => (
+            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(i)} onDelete={() => onDeleteClip(clip)} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -433,93 +381,94 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 // ── SettingsPanel ──────────────────────────────────────────────────────────────
 
-function SettingsPanel() {
-  const [quality, setQuality] = useState('1080p 60fps')
-  const [clipLen, setClipLen] = useState(30)
-  const [autoSave, setAutoSave] = useState(true)
-  const [audio, setAudio] = useState(true)
-  const [notifs, setNotifs] = useState(true)
-  const [likesNotif, setLikesNotif] = useState(true)
-  const [followsNotif, setFollowsNotif] = useState(true)
-
+function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onPickFolder }: {
+  settings: Settings
+  onChange: (partial: Partial<Settings>) => void
+  storage: { used: number; clips: number }
+  encoder: string
+  onOpenFolder: () => void
+  onPickFolder: () => void
+}) {
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <div className="flex items-center justify-between py-3" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <span style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, color: '#888' }}>{label}</span>
+    <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+      <span style={{ fontSize: 13, color: '#888' }}>{label}</span>
       {children}
     </div>
   )
 
   const Card = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <div className="rounded-xl p-5" style={{ background: '#0e000e', border: '1px solid rgba(255,255,255,0.05)' }}>
-      <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, fontWeight: 600, color: '#e8192c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
+      <p style={{ fontSize: 11, fontWeight: 600, color: '#e8192c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
       {children}
     </div>
   )
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <h1 style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600, fontSize: 18, color: '#f0f0f0', marginBottom: 2 }}>Settings</h1>
-      <p style={{ fontFamily: 'Inter, sans-serif', fontSize: 13, color: '#444', marginBottom: 24 }}>Configure your Flash recording preferences</p>
+      <h1 style={{ fontWeight: 600, fontSize: 18, color: '#f0f0f0', marginBottom: 2 }}>Settings</h1>
+      <p style={{ fontSize: 13, color: '#444', marginBottom: 24 }}>Configure your Flash recording preferences</p>
 
-      <div className="grid gap-4" style={{ gridTemplateColumns: '1fr 1fr' }}>
+      <div className="grid gap-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))' }}>
         <Card title="Capture">
           <Row label="Hotkey">
-            <kbd style={{ fontFamily: 'Inter, sans-serif', fontSize: 11, color: '#e8192c', background: 'rgba(232,25,44,0.1)', border: '1px solid rgba(232,25,44,0.25)', borderRadius: 4, padding: '2px 8px' }}>F8</kbd>
+            <kbd style={{ fontSize: 11, color: '#e8192c', background: 'rgba(232,25,44,0.1)', border: '1px solid rgba(232,25,44,0.25)', borderRadius: 4, padding: '2px 8px' }}>F8</kbd>
           </Row>
           <Row label="Quality">
-            <select value={quality} onChange={e => setQuality(e.target.value)}
-              style={{ fontFamily: 'Inter, sans-serif', fontSize: 12, color: '#ccc', background: '#1a001a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '3px 8px' }}>
-              <option>720p 30fps</option>
-              <option>1080p 60fps</option>
-              <option>1440p 60fps</option>
-              <option>4K 30fps</option>
+            <select value={settings.quality} onChange={e => onChange({ quality: e.target.value })}
+              style={{ fontSize: 12, color: '#ccc', background: '#1a001a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '4px 8px' }}>
+              {QUALITY_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
             </select>
           </Row>
-          <Row label={`Clip length — ${clipLen}s`}>
-            <input type="range" min={10} max={120} value={clipLen} onChange={e => setClipLen(+e.target.value)} style={{ accentColor: '#e8192c', width: 90 }} />
+          <Row label={`Buffer length — ${settings.bufferLength}s`}>
+            <input type="range" min={10} max={300} step={5} value={settings.bufferLength}
+              onChange={e => onChange({ bufferLength: +e.target.value })}
+              style={{ accentColor: '#e8192c', width: 120 }} />
           </Row>
-          <Row label="Audio capture"><Toggle on={audio} onChange={() => setAudio(!audio)} /></Row>
-          <Row label="Auto-save clips"><Toggle on={autoSave} onChange={() => setAutoSave(!autoSave)} /></Row>
+          <Row label="Audio capture">
+            <Toggle on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
+          </Row>
+          <Row label="Encoder">
+            <span style={{ fontSize: 12, color: encoder === 'none' ? '#a33' : '#4ade80' }}>{encoder}</span>
+          </Row>
         </Card>
 
         <Card title="Notifications">
-          <Row label="Push notifications"><Toggle on={notifs} onChange={() => setNotifs(!notifs)} /></Row>
-          <Row label="Clip likes"><Toggle on={likesNotif} onChange={() => setLikesNotif(!likesNotif)} /></Row>
-          <Row label="New followers"><Toggle on={followsNotif} onChange={() => setFollowsNotif(!followsNotif)} /></Row>
-          <Row label="Comments"><Toggle on={false} onChange={() => {}} /></Row>
-          <Row label="Weekly recap"><Toggle on={true} onChange={() => {}} /></Row>
+          <Row label="Clip saved notification">
+            <Toggle on={settings.notifications} onChange={() => onChange({ notifications: !settings.notifications })} />
+          </Row>
+          <p style={{ fontSize: 11, color: '#3a3a3a', paddingTop: 12, lineHeight: 1.5 }}>
+            Shows a popup in the top-left corner and plays a sound when a clip is saved.
+          </p>
         </Card>
 
         <Card title="Storage">
           <div className="mb-4 pt-2">
-            <div className="flex justify-between mb-2">
-              <span style={{ fontSize: 12, color: '#666', fontFamily: 'Inter, sans-serif' }}>14.2 GB of 25 GB used</span>
-              <span style={{ fontSize: 11, color: '#e8192c', fontFamily: 'Inter, sans-serif' }}>58%</span>
-            </div>
-            <div className="w-full h-1 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
-              <div className="h-full rounded-full" style={{ width: '58%', background: '#e8192c' }} />
+            <div className="flex justify-between mb-1">
+              <span style={{ fontSize: 12, color: '#666' }}>{formatBytes(storage.used)} used</span>
+              <span style={{ fontSize: 11, color: '#444' }}>{storage.clips} clip{storage.clips === 1 ? '' : 's'}</span>
             </div>
           </div>
-          <Row label="Auto-delete after"><span style={{ fontSize: 12, color: '#666', fontFamily: 'Inter, sans-serif' }}>30 days</span></Row>
-          <Row label="Export format"><span style={{ fontSize: 12, color: '#666', fontFamily: 'Inter, sans-serif' }}>MP4 / H.264</span></Row>
-          <button className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:bg-white/5"
-            style={{ fontFamily: 'Inter, sans-serif', fontWeight: 500, color: '#555', border: '1px solid rgba(255,255,255,0.07)' }}>
-            Manage Storage
-          </button>
-        </Card>
-
-        <Card title="Account">
-          <div className="flex items-center gap-3 p-3 rounded-lg my-2" style={{ background: 'rgba(232,25,44,0.06)', border: '1px solid rgba(232,25,44,0.12)' }}>
-            <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold" style={{ background: '#e8192c', color: 'white', fontFamily: 'Inter, sans-serif', fontSize: 13 }}>FL</div>
-            <div>
-              <p style={{ fontSize: 13, fontWeight: 600, color: '#f0f0f0', fontFamily: 'Inter, sans-serif' }}>Flash User</p>
-              <p style={{ fontSize: 10, color: '#444', fontFamily: 'Inter, sans-serif' }}>Local Mode</p>
-            </div>
-          </div>
-          <Row label="Clips folder"><span style={{ fontSize: 12, color: '#555', fontFamily: 'Inter, sans-serif' }}>~/Videos/Flash</span></Row>
-          <Row label="Privacy"><span style={{ fontSize: 12, color: '#555', fontFamily: 'Inter, sans-serif' }}>Local</span></Row>
-          <button className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:brightness-110"
-            style={{ fontFamily: 'Inter, sans-serif', fontWeight: 600, background: '#e8192c', color: 'white' }}>
+          <Row label="Clips folder">
+            <button onClick={onPickFolder}
+              className="px-2 py-1 rounded transition-all hover:bg-white/5"
+              style={{ fontSize: 11, color: '#666', border: '1px solid rgba(255,255,255,0.08)', maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              title={settings.clipsFolder}>
+              {settings.clipsFolder}
+            </button>
+          </Row>
+          <Row label="Auto-delete clips after">
+            <select value={settings.autoDeleteDays} onChange={e => onChange({ autoDeleteDays: +e.target.value })}
+              style={{ fontSize: 12, color: '#ccc', background: '#1a001a', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, padding: '4px 8px' }}>
+              <option value={0}>Never</option>
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+            </select>
+          </Row>
+          <Row label="Format"><span style={{ fontSize: 12, color: '#666' }}>MP4 / H.264</span></Row>
+          <button onClick={onOpenFolder}
+            className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:brightness-110"
+            style={{ fontWeight: 600, background: '#e8192c', color: 'white' }}>
             Open Clips Folder
           </button>
         </Card>
@@ -532,59 +481,117 @@ function SettingsPanel() {
 
 export default function App() {
   const [active, setActive] = useState('My Clips')
-  const [gameFilter, setGameFilter] = useState('All Games')
+  const [gameFilter, setGameFilter] = useState('All')
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [detectedGame, setDetectedGame] = useState<string | null>(null)
+  const [clips, setClips] = useState<Clip[]>([])
+  const [storage, setStorage] = useState({ used: 0, clips: 0 })
+  const [settings, setSettings] = useState<Settings>({
+    clipsFolder: '', quality: '1080p 60fps', bufferLength: 30,
+    audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
+  })
+  const [encoder, setEncoder] = useState('none')
+  const [captureAvailable, setCaptureAvailable] = useState(false)
 
-  // Filter clips by game
-  const filteredClips = gameFilter === 'All Games'
-    ? CLIPS
-    : CLIPS.filter(c => c.game === gameFilter)
-
-  // Wire up Electron IPC if available
-  useEffect(() => {
-    if (typeof window !== 'undefined' && window.flash) {
-      window.flash.onRecordingState(state => setIsRecording(state))
-      window.flash.onNavigate(page => setActive(page))
-      window.flash.getRecordingState().then(setIsRecording)
-
-      // Game detection — auto-switch sidebar filter when game launches
-      window.flash.onGameDetected(game => {
-        setDetectedGame(game)
-        if (game) {
-          // Auto-filter to detected game if it exists in sidebar
-          const knownGame = GAMES.find(g => g.name === game)
-          if (knownGame) setGameFilter(game)
-        }
-      })
-      window.flash.getCurrentGame().then(game => {
-        setDetectedGame(game)
-      })
-
-      // Play notification sound when clip is saved
-      window.flash.onPlayClipSound((soundPath: string) => {
-        const audio = new Audio(soundPath)
-        audio.volume = 0.7
-        audio.play().catch(() => {}) // Ignore autoplay restrictions
-      })
-    }
+  const refreshClips = useCallback(async () => {
+    if (!window.flash) return
+    const [clipList, storageInfo] = await Promise.all([
+      window.flash.getClips(),
+      window.flash.getStorage(),
+    ])
+    setClips(clipList)
+    setStorage(storageInfo)
   }, [])
+
+  // Build game list from actual clips
+  const games = Array.from(
+    clips.reduce((map, clip) => {
+      map.set(clip.game, (map.get(clip.game) ?? 0) + 1)
+      return map
+    }, new Map<string, number>())
+  ).map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+
+  const allGames = clips.length > 0 ? [{ name: 'All', count: clips.length }, ...games] : []
+
+  const filteredClips = gameFilter === 'All' ? clips : clips.filter(c => c.game === gameFilter)
+
+  const updateSettings = useCallback(async (partial: Partial<Settings>) => {
+    if (!window.flash) return
+    const updated = await window.flash.setSettings(partial)
+    setSettings(updated)
+    if (partial.clipsFolder) refreshClips()
+  }, [refreshClips])
+
+  const deleteClip = useCallback(async (clip: Clip) => {
+    if (!window.flash) return
+    await window.flash.deleteClip(clip.filePath)
+    refreshClips()
+  }, [refreshClips])
+
+  const toggleRecording = useCallback(async () => {
+    if (!window.flash) return
+    if (isRecording) await window.flash.capture.stopReplayBuffer()
+    else await window.flash.capture.startReplayBuffer()
+  }, [isRecording])
+
+  useEffect(() => {
+    if (!window.flash) return
+
+    window.flash.onRecordingState(setIsRecording)
+    window.flash.onNavigate(setActive)
+    window.flash.getRecordingState().then(setIsRecording)
+    window.flash.getSettings().then(setSettings)
+    window.flash.hasCaptureAddon().then(setCaptureAvailable)
+    window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
+    window.flash.onGameDetected(setDetectedGame)
+    window.flash.getCurrentGame().then(setDetectedGame)
+    window.flash.onClipSavedRefresh(() => refreshClips())
+
+    window.flash.onPlayClipSound((soundPath: string) => {
+      const audio = new Audio(`file://${soundPath.replace(/\\/g, '/')}`)
+      audio.volume = 0.7
+      audio.play().catch(() => {})
+    })
+
+    refreshClips()
+  }, [refreshClips])
 
   return (
     <div className="flex flex-col" style={{ width: '100vw', height: '100vh', background: '#060006', overflow: 'hidden' }}>
-      <TopBar active={active} setActive={setActive} isRecording={isRecording} />
+      <TopBar
+        active={active} setActive={setActive}
+        isRecording={isRecording} onToggleRecording={toggleRecording}
+        detectedGame={detectedGame} captureAvailable={captureAvailable}
+      />
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar gameFilter={gameFilter} setGameFilter={setGameFilter} />
+        {active !== 'Settings' && (
+          <Sidebar
+            games={allGames} gameFilter={gameFilter} setGameFilter={setGameFilter}
+            storage={storage} onOpenFolder={() => window.flash?.openClipsFolder()}
+          />
+        )}
         <main className="flex-1 flex flex-col overflow-hidden" style={{ background: '#080008' }}>
-          {active === 'Settings'
-            ? <SettingsPanel />
-            : <ClipsPanel clips={filteredClips} onOpenClip={i => setPreviewIndex(i)} />
-          }
+          {active === 'Settings' ? (
+            <SettingsPanel
+              settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
+              onOpenFolder={() => window.flash?.openClipsFolder()}
+              onPickFolder={async () => {
+                const folder = await window.flash?.pickClipsFolder()
+                if (folder) { setSettings(s => ({ ...s, clipsFolder: folder })); refreshClips() }
+              }}
+            />
+          ) : (
+            <ClipsPanel
+              clips={filteredClips} onOpenClip={setPreviewIndex} onDeleteClip={deleteClip}
+              isRecording={isRecording} captureAvailable={captureAvailable}
+            />
+          )}
         </main>
       </div>
-      {previewIndex !== null && (
-        <ClipPreview clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} />
+      {previewIndex !== null && filteredClips.length > 0 && (
+        <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} />
       )}
     </div>
   )
