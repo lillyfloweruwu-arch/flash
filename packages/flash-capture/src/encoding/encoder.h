@@ -45,5 +45,6 @@ GpuVendor DetectGpuVendor();
 
 // Create best available encoder
 std::unique_ptr<Encoder> CreateEncoder();
+std::unique_ptr<Encoder> CreateEncoder(const EncoderConfig& config);
 
 } // namespace flash

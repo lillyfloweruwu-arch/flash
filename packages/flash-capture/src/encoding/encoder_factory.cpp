@@ -40,8 +40,11 @@ GpuVendor DetectGpuVendor() {
 }
 
 std::unique_ptr<Encoder> CreateEncoder() {
+    return CreateEncoder(EncoderConfig{});
+}
+
+std::unique_ptr<Encoder> CreateEncoder(const EncoderConfig& defaultConfig) {
     GpuVendor vendor = DetectGpuVendor();
-    EncoderConfig defaultConfig;
 
     // Try hardware encoder first based on GPU vendor
     if (vendor == GpuVendor::Nvidia) {

@@ -535,6 +535,7 @@ export default function App() {
   const [gameFilter, setGameFilter] = useState('All Games')
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [isRecording, setIsRecording] = useState(false)
+  const [detectedGame, setDetectedGame] = useState<string | null>(null)
 
   // Filter clips by game
   const filteredClips = gameFilter === 'All Games'
@@ -547,6 +548,19 @@ export default function App() {
       window.flash.onRecordingState(state => setIsRecording(state))
       window.flash.onNavigate(page => setActive(page))
       window.flash.getRecordingState().then(setIsRecording)
+
+      // Game detection — auto-switch sidebar filter when game launches
+      window.flash.onGameDetected(game => {
+        setDetectedGame(game)
+        if (game) {
+          // Auto-filter to detected game if it exists in sidebar
+          const knownGame = GAMES.find(g => g.name === game)
+          if (knownGame) setGameFilter(game)
+        }
+      })
+      window.flash.getCurrentGame().then(game => {
+        setDetectedGame(game)
+      })
 
       // Play notification sound when clip is saved
       window.flash.onPlayClipSound((soundPath: string) => {

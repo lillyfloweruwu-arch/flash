@@ -1,10 +1,68 @@
 import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen } from 'electron'
 import { join } from 'path'
+import { execFile } from 'child_process'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let notificationWindow: BrowserWindow | null = null
 let isRecording = false
+let currentGame: string | null = null
+let gameDetectorInterval: ReturnType<typeof setInterval> | null = null
+
+// ── Game Detection ────────────────────────────────────────────────────────────
+
+// Inline game detection (avoids importing TS module from main process)
+const GAME_DB: Record<string, string> = {}
+
+function loadGameDb() {
+  try {
+    const dbPath = join(__dirname, '../../packages/flash-detector/src/games.json')
+    const data = require(dbPath)
+    for (const entry of data.games) {
+      GAME_DB[entry.processName.toLowerCase()] = entry.displayName
+    }
+  } catch {
+    // Game DB not found — detection disabled
+  }
+}
+
+function detectCurrentGame(): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FO', 'CSV', '/NH'], (error, stdout) => {
+      if (error) { resolve(null); return }
+
+      for (const line of stdout.split('\n')) {
+        const match = line.match(/"([^"]+)"/)
+        if (!match) continue
+        const gameName = GAME_DB[match[1].toLowerCase()]
+        if (gameName) { resolve(gameName); return }
+      }
+      resolve(null)
+    })
+  })
+}
+
+function startGameDetection() {
+  loadGameDb()
+
+  const poll = async () => {
+    const game = await detectCurrentGame()
+    if (game !== currentGame) {
+      currentGame = game
+      mainWindow?.webContents.send('game-detected', game)
+    }
+  }
+
+  poll() // immediate
+  gameDetectorInterval = setInterval(poll, 3000)
+}
+
+function stopGameDetection() {
+  if (gameDetectorInterval) {
+    clearInterval(gameDetectorInterval)
+    gameDetectorInterval = null
+  }
+}
 
 // ── Notification Popup ────────────────────────────────────────────────────────
 
@@ -259,6 +317,9 @@ function setupIPC() {
   // Get recording state
   ipcMain.handle('get-recording-state', () => isRecording)
 
+  // Get current detected game
+  ipcMain.handle('get-current-game', () => currentGame)
+
   // Window controls
   ipcMain.on('window-minimize', () => mainWindow?.minimize())
   ipcMain.on('window-maximize', () => {
@@ -291,6 +352,7 @@ app.on('ready', () => {
   createTray()
   setupIPC()
   registerHotkeys()
+  startGameDetection()
 })
 
 app.on('window-all-closed', () => {
@@ -303,6 +365,7 @@ app.on('before-quit', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  stopGameDetection()
 })
 
 app.on('activate', () => {

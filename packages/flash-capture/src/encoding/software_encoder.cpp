@@ -1,63 +1,200 @@
 #include "software_encoder.h"
 
 #ifdef _WIN32
-#include <mfapi.h>
-#include <mfidl.h>
-#include <mfreadwrite.h>
-#include <mftransform.h>
+#include <Windows.h>
 #include <codecapi.h>
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mfuuid.lib")
-#pragma comment(lib, "mf.lib")
-#pragma comment(lib, "mfreadwrite.lib")
+#include <mfapi.h>
+#include <mferror.h>
+#include <mfidl.h>
+#include <mftransform.h>
+#include <wrl/client.h>
+#include <algorithm>
+#include <cstring>
+using Microsoft::WRL::ComPtr;
 #endif
 
 namespace flash {
 
 struct SoftwareEncoder::Impl {
-    EncoderConfig config;
+    EncoderConfig config{};
     bool initialized = false;
-
 #ifdef _WIN32
-    // Media Foundation transform handles will go here
-    // IMFTransform* transform = nullptr;
+    ComPtr<IMFTransform> transform;
+    MFT_OUTPUT_STREAM_INFO outputInfo{};
+    uint64_t frameIndex = 0;
+    bool mfStarted = false;
+
+    void Reset() {
+        if (transform) {
+            transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
+            transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+        }
+        transform.Reset();
+        if (mfStarted) MFShutdown();
+        mfStarted = false;
+        initialized = false;
+    }
 #endif
 };
 
 SoftwareEncoder::SoftwareEncoder() : impl_(std::make_unique<Impl>()) {}
-SoftwareEncoder::~SoftwareEncoder() = default;
-
-bool SoftwareEncoder::Initialize(const EncoderConfig& config) {
-    impl_->config = config;
+SoftwareEncoder::~SoftwareEncoder() {
+#ifdef _WIN32
+    impl_->Reset();
+#endif
+}
 
 #ifdef _WIN32
-    HRESULT hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) return false;
+static bool SetSizeAndRate(IMFMediaType* type, const EncoderConfig& c) {
+    return SUCCEEDED(MFSetAttributeSize(type, MF_MT_FRAME_SIZE, c.width, c.height)) &&
+           SUCCEEDED(MFSetAttributeRatio(type, MF_MT_FRAME_RATE, c.fps, 1)) &&
+           SUCCEEDED(MFSetAttributeRatio(type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1)) &&
+           SUCCEEDED(type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
+}
 
-    // TODO: Create and configure Media Foundation H.264 encoder transform
-    // 1. MFTEnumEx to find H.264 encoder
-    // 2. CoCreateInstance the encoder MFT
-    // 3. Set input type (NV12 or RGB)
-    // 4. Set output type (H.264)
-    // 5. Set encoder properties via ICodecAPI
+static void BgraToNv12(const FrameData& frame, uint8_t* dst, uint32_t width, uint32_t height) {
+    auto clamp = [](int v) { return static_cast<uint8_t>(std::clamp(v, 0, 255)); };
+    uint8_t* yPlane = dst;
+    uint8_t* uvPlane = dst + static_cast<size_t>(width) * height;
+    for (uint32_t y = 0; y < height; ++y) {
+        const uint8_t* row = frame.data + static_cast<size_t>(y) * frame.stride;
+        for (uint32_t x = 0; x < width; ++x) {
+            const int b = row[x * 4], g = row[x * 4 + 1], r = row[x * 4 + 2];
+            yPlane[static_cast<size_t>(y) * width + x] = clamp(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+        }
+    }
+    for (uint32_t y = 0; y < height; y += 2) {
+        const uint8_t* row0 = frame.data + static_cast<size_t>(y) * frame.stride;
+        const uint8_t* row1 = frame.data + static_cast<size_t>(std::min(y + 1, height - 1)) * frame.stride;
+        for (uint32_t x = 0; x < width; x += 2) {
+            int sumU = 0, sumV = 0;
+            for (uint32_t dy = 0; dy < 2; ++dy) for (uint32_t dx = 0; dx < 2; ++dx) {
+                const uint8_t* p = (dy ? row1 : row0) + std::min(x + dx, width - 1) * 4;
+                const int b = p[0], g = p[1], r = p[2];
+                sumU += ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+                sumV += ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+            }
+            const size_t uv = static_cast<size_t>(y / 2) * width + x;
+            uvPlane[uv] = clamp(sumU / 4);
+            if (x + 1 < width) uvPlane[uv + 1] = clamp(sumV / 4);
+        }
+    }
+}
+#endif
 
+bool SoftwareEncoder::Initialize(const EncoderConfig& config) {
+#ifdef _WIN32
+    impl_->Reset();
+    impl_->config = config;
+    if (!config.width || !config.height || !config.fps || (config.width & 1) || (config.height & 1)) return false;
+    if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_FULL))) return false;
+    impl_->mfStarted = true;
+
+    MFT_REGISTER_TYPE_INFO inputInfo{MFMediaType_Video, MFVideoFormat_NV12};
+    MFT_REGISTER_TYPE_INFO outputInfo{MFMediaType_Video, MFVideoFormat_H264};
+    IMFActivate** activates = nullptr;
+    UINT32 count = 0;
+    HRESULT hr = MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_SORTANDFILTER,
+                           &inputInfo, &outputInfo, &activates, &count);
+    if (FAILED(hr) || !count) { if (activates) CoTaskMemFree(activates); impl_->Reset(); return false; }
+    for (UINT32 i = 0; i < count && !impl_->transform; ++i)
+        activates[i]->ActivateObject(IID_PPV_ARGS(&impl_->transform));
+    for (UINT32 i = 0; i < count; ++i) activates[i]->Release();
+    CoTaskMemFree(activates);
+    if (!impl_->transform) { impl_->Reset(); return false; }
+
+    ComPtr<IMFMediaType> outType;
+    MFCreateMediaType(&outType);
+    outType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    outType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    outType->SetUINT32(MF_MT_AVG_BITRATE, config.bitrate);
+    outType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
+    SetSizeAndRate(outType.Get(), config);
+    hr = impl_->transform->SetOutputType(0, outType.Get(), 0);
+
+    ComPtr<IMFMediaType> inType;
+    MFCreateMediaType(&inType);
+    inType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    inType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_NV12);
+    SetSizeAndRate(inType.Get(), config);
+    if (SUCCEEDED(hr)) hr = impl_->transform->SetInputType(0, inType.Get(), 0);
+    if (FAILED(hr)) { impl_->Reset(); return false; }
+
+    ComPtr<ICodecAPI> codec;
+    if (SUCCEEDED(impl_->transform.As(&codec))) {
+        VARIANT v; VariantInit(&v);
+        v.vt = VT_UI4; v.ulVal = config.bitrate; codec->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &v);
+        v.vt = VT_BOOL; v.boolVal = VARIANT_TRUE; codec->SetValue(&CODECAPI_AVLowLatencyMode, &v);
+        v.vt = VT_UI4; v.ulVal = eAVEncCommonRateControlMode_CBR; codec->SetValue(&CODECAPI_AVEncCommonRateControlMode, &v);
+        VariantClear(&v);
+    }
+    if (FAILED(impl_->transform->GetOutputStreamInfo(0, &impl_->outputInfo)) ||
+        FAILED(impl_->transform->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)) ||
+        FAILED(impl_->transform->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0))) {
+        impl_->Reset(); return false;
+    }
+    impl_->frameIndex = 0;
     impl_->initialized = true;
     return true;
 #else
-    return false;
+    (void)config; return false;
 #endif
 }
 
 bool SoftwareEncoder::EncodeFrame(const FrameData& frame, EncodedPacket& output) {
-    if (!impl_->initialized) return false;
+#ifdef _WIN32
+    if (!impl_->initialized || !frame.data || frame.width != impl_->config.width || frame.height != impl_->config.height) return false;
+    const DWORD bytes = impl_->config.width * impl_->config.height * 3 / 2;
+    ComPtr<IMFMediaBuffer> buffer;
+    if (FAILED(MFCreateMemoryBuffer(bytes, &buffer))) return false;
+    BYTE* data = nullptr; DWORD maxLength = 0;
+    if (FAILED(buffer->Lock(&data, &maxLength, nullptr))) return false;
+    BgraToNv12(frame, data, impl_->config.width, impl_->config.height);
+    buffer->Unlock(); buffer->SetCurrentLength(bytes);
+    ComPtr<IMFSample> sample;
+    MFCreateSample(&sample); sample->AddBuffer(buffer.Get());
+    const LONGLONG duration = 10000000LL / impl_->config.fps;
+    const LONGLONG timestamp = frame.timestamp_us >= 0 ? frame.timestamp_us * 10 : impl_->frameIndex * duration;
+    sample->SetSampleTime(timestamp); sample->SetSampleDuration(duration);
+    HRESULT hr = impl_->transform->ProcessInput(0, sample.Get(), 0);
+    if (FAILED(hr)) return false;
+    ++impl_->frameIndex;
 
-    // TODO: Feed frame to MFT, get encoded output
-
-    return false; // Stub
+    MFT_OUTPUT_DATA_BUFFER out{};
+    ComPtr<IMFSample> outSample;
+    if (!(impl_->outputInfo.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
+        MFCreateSample(&outSample);
+        ComPtr<IMFMediaBuffer> outBuffer;
+        MFCreateMemoryBuffer(std::max<DWORD>(impl_->outputInfo.cbSize, 1024 * 1024), &outBuffer);
+        outSample->AddBuffer(outBuffer.Get()); out.pSample = outSample.Get();
+    }
+    DWORD status = 0;
+    hr = impl_->transform->ProcessOutput(0, 1, &out, &status);
+    if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return false;
+    if (FAILED(hr) || !out.pSample) { if (out.pEvents) out.pEvents->Release(); return false; }
+    ComPtr<IMFMediaBuffer> contiguous;
+    hr = out.pSample->ConvertToContiguousBuffer(&contiguous);
+    if (out.pEvents) out.pEvents->Release();
+    if (FAILED(hr)) return false;
+    BYTE* encoded = nullptr; DWORD length = 0;
+    contiguous->Lock(&encoded, nullptr, &length);
+    output.data.assign(encoded, encoded + length);
+    contiguous->Unlock();
+    output.timestamp_us = timestamp / 10;
+    UINT32 cleanPoint = FALSE;
+    output.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) && cleanPoint;
+    return !output.data.empty();
+#else
+    (void)frame; (void)output; return false;
+#endif
 }
 
 void SoftwareEncoder::Flush() {
-    // TODO: Drain MFT
+#ifdef _WIN32
+    if (!impl_->transform) return;
+    impl_->transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
+    impl_->transform->ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0);
+#endif
 }
 
 } // namespace flash

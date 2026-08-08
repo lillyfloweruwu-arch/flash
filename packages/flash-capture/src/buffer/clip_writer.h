@@ -38,8 +38,6 @@ public:
     // Generate output path based on game name and timestamp
     static std::string GenerateClipPath(const std::string& baseDir, const std::string& gameName);
 
-private:
-    // TODO: Use Media Foundation Sink Writer for MP4 muxing
 };
 
 } // namespace flash

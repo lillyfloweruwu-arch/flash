@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld('flash', {
     ipcRenderer.on('play-clip-sound', (_event, soundPath: string) => callback(soundPath))
   },
 
+  // Game detection
+  getCurrentGame: () => ipcRenderer.invoke('get-current-game'),
+  onGameDetected: (callback: (game: string | null) => void) => {
+    ipcRenderer.on('game-detected', (_event, game) => callback(game))
+  },
+
   // Capture engine (will be wired to C++ native addon)
   capture: {
     startReplayBuffer: () => ipcRenderer.invoke('capture-start-replay'),
@@ -53,7 +59,9 @@ export type FlashAPI = {
   onHotkeyClip: (callback: () => void) => void
   clipSaved: (durationSeconds: number) => void
   onNavigate: (callback: (page: string) => void) => void
-  onPlayClipSound: (callback: () => void) => void
+  onPlayClipSound: (callback: (soundPath: string) => void) => void
+  getCurrentGame: () => Promise<string | null>
+  onGameDetected: (callback: (game: string | null) => void) => void
   capture: {
     startReplayBuffer: () => Promise<void>
     stopReplayBuffer: () => Promise<void>
