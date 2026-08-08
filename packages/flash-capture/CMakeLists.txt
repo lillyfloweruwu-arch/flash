@@ -56,5 +56,20 @@ execute_process(
 string(REPLACE "\"" "" NODE_ADDON_API_DIR ${NODE_ADDON_API_DIR})
 target_include_directories(flash_capture PRIVATE ${NODE_ADDON_API_DIR})
 
+# Optional public hardware SDK headers. The runtime DLLs are always loaded
+# dynamically, so neither SDK adds a link-time dependency.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include/nvEncodeAPI.h")
+  target_include_directories(flash_capture PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nv-codec-headers/include")
+endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/AMF/amf/public/include/core/Factory.h")
+  target_include_directories(flash_capture PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/AMF/amf")
+endif()
+
+if(MSVC)
+  target_compile_options(flash_capture PRIVATE /W4 /EHsc)
+endif()
+
 # NAPI version
 target_compile_definitions(flash_capture PRIVATE NAPI_VERSION=8)

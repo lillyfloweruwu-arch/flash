@@ -2,6 +2,26 @@ import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, s
 import { join } from 'path'
 import { execFile } from 'child_process'
 
+type CaptureAddon = {
+  initialize(clipsDir: string): { error?: string }
+  startReplayBuffer(): boolean
+  stopReplayBuffer(): void
+  saveClip(): Promise<{ path: string; duration: number }>
+  getStatus(): unknown
+  setCurrentGame(game: string): void
+  setBufferLength(seconds: number): void
+}
+
+let captureAddon: CaptureAddon | null = null
+
+function loadCaptureAddon(): CaptureAddon | null {
+  const addonPath = app.isPackaged
+    ? join(process.resourcesPath, 'flash_capture.node')
+    : join(process.cwd(), 'packages/flash-capture/build/Release/flash_capture.node')
+  try { return require(addonPath) as CaptureAddon }
+  catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
+}
+
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let notificationWindow: BrowserWindow | null = null
@@ -49,6 +69,7 @@ function startGameDetection() {
     const game = await detectCurrentGame()
     if (game !== currentGame) {
       currentGame = game
+      if (game) captureAddon?.setCurrentGame(game)
       mainWindow?.webContents.send('game-detected', game)
     }
   }
@@ -290,7 +311,7 @@ function createWindow() {
 
   // Minimize to tray instead of closing
   mainWindow.on('close', (event) => {
-    if (!app.isQuitting) {
+    if (!(app as any).isQuitting) {
       event.preventDefault()
       mainWindow?.hide()
     }
@@ -300,6 +321,28 @@ function createWindow() {
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 
 function setupIPC() {
+  ipcMain.handle('capture-start-replay', () => {
+    if (!captureAddon) throw new Error('Flash capture addon is not available')
+    const started = captureAddon.startReplayBuffer()
+    isRecording = started
+    updateTrayMenu()
+    return started
+  })
+  ipcMain.handle('capture-stop-replay', () => {
+    captureAddon?.stopReplayBuffer()
+    isRecording = false
+    updateTrayMenu()
+  })
+  ipcMain.handle('capture-save-clip', async () => {
+    if (!captureAddon) throw new Error('Flash capture addon is not available')
+    const clip = await captureAddon.saveClip()
+    showClipNotification(clip.duration)
+    playClipSound()
+    return clip
+  })
+  ipcMain.handle('capture-status', () => captureAddon?.getStatus() ?? { recording: false, encoder: 'none' })
+  ipcMain.handle('capture-set-buffer-length', (_event, seconds: number) => captureAddon?.setBufferLength(seconds))
+
   // Clip saved — show notification
   ipcMain.on('clip-saved', (_event, durationSeconds: number) => {
     showClipNotification(durationSeconds)
@@ -337,16 +380,23 @@ function registerHotkeys() {
   // F8 — save clip
   globalShortcut.register('F8', () => {
     mainWindow?.webContents.send('hotkey-clip')
-    // TODO: Wire to actual capture engine
-    // For now, simulate a 30-second clip save
-    showClipNotification(30)
-    playClipSound()
+    if (captureAddon) {
+      void captureAddon.saveClip().then((clip) => {
+        showClipNotification(clip.duration)
+        playClipSound()
+      }).catch((error) => console.error('Failed to save clip', error))
+    }
   })
 }
 
 // ── App Lifecycle ─────────────────────────────────────────────────────────────
 
 app.on('ready', () => {
+  captureAddon = loadCaptureAddon()
+  if (captureAddon) {
+    const status = captureAddon.initialize(join(app.getPath('videos'), 'Flash'))
+    if (status.error) console.warn(status.error)
+  }
   createWindow()
   createTray()
   setupIPC()
