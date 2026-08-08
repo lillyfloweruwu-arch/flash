@@ -138,9 +138,9 @@ function showClipNotification(durationSeconds: number) {
 // ── Play notification sound ───────────────────────────────────────────────────
 
 function playClipSound() {
-  // Will use custom WAV file from assets/sounds/
-  // For now, use system notification as placeholder
-  mainWindow?.webContents.send('play-clip-sound')
+  // Play custom WAV via a hidden renderer (Electron has no direct audio API)
+  const soundPath = join(__dirname, '../../assets/sounds/clip-saved.wav')
+  mainWindow?.webContents.send('play-clip-sound', soundPath)
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────

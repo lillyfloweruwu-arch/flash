@@ -547,6 +547,13 @@ export default function App() {
       window.flash.onRecordingState(state => setIsRecording(state))
       window.flash.onNavigate(page => setActive(page))
       window.flash.getRecordingState().then(setIsRecording)
+
+      // Play notification sound when clip is saved
+      window.flash.onPlayClipSound((soundPath: string) => {
+        const audio = new Audio(soundPath)
+        audio.volume = 0.7
+        audio.play().catch(() => {}) // Ignore autoplay restrictions
+      })
     }
   }, [])
 

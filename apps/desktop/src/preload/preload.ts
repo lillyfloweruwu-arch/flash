@@ -27,8 +27,8 @@ contextBridge.exposeInMainWorld('flash', {
   },
 
   // Sound
-  onPlayClipSound: (callback: () => void) => {
-    ipcRenderer.on('play-clip-sound', () => callback())
+  onPlayClipSound: (callback: (soundPath: string) => void) => {
+    ipcRenderer.on('play-clip-sound', (_event, soundPath: string) => callback(soundPath))
   },
 
   // Capture engine (will be wired to C++ native addon)
