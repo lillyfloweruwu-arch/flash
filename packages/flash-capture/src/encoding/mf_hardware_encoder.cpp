@@ -4,9 +4,7 @@
 #include <codecapi.h>
 #include <strmif.h>
 #include <algorithm>
-#include <atomic>
 #include <chrono>
-#include <cstdio>
 #include <thread>
 #include <mfapi.h>
 #include <mferror.h>
@@ -24,11 +22,8 @@ struct MfHardwareEncoder::Impl {
     ComPtr<IMFTransform> transform; ComPtr<IMFMediaEventGenerator> events;
     ComPtr<IMFDXGIDeviceManager> manager; UINT resetToken = 0; MFT_OUTPUT_STREAM_INFO outputInfo{};
     ComPtr<ID3D11DeviceContext> context;
-    // A rotating pool, not one texture. Allocating per frame stalls on the driver
-    // allocator; a single reused texture is worse in the other direction — the
-    // encoder still holds frame N while we overwrite it for N+1, which serialises
-    // the pipeline and costs exactly half the frame rate. Four is enough depth to
-    // keep a hardware encoder busy.
+    // Keep input textures allocated and rotate them while the hardware encoder
+    // retains earlier samples.
     static constexpr size_t kInputPool = 4;
     ComPtr<ID3D11Texture2D> inputTextures[kInputPool];
     size_t inputIndex = 0;
@@ -63,40 +58,29 @@ static bool ConfigureType(IMFMediaType* type, const GUID& subtype, const Encoder
         SUCCEEDED(type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive));
 }
 
+// Async MFTs permit exactly one ProcessOutput call per METransformHaveOutput;
+// any additional output is announced by another event.
 static bool AppendOutput(IMFTransform* transform, const MFT_OUTPUT_STREAM_INFO& info, std::vector<EncodedPacket>& output) {
-    static std::atomic<uint64_t> processOutputCalls{0};
-    static std::atomic<uint64_t> processOutputFailures{0};
-    for (;;) {
-        MFT_OUTPUT_DATA_BUFFER out{}; ComPtr<IMFSample> allocated;
-        if (!(info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
-            if (FAILED(MFCreateSample(&allocated))) return false;
-            ComPtr<IMFMediaBuffer> bytes;
-            if (FAILED(MFCreateMemoryBuffer((std::max<DWORD>)(info.cbSize, 1024u * 1024u), &bytes)) || FAILED(allocated->AddBuffer(bytes.Get()))) return false;
-            out.pSample = allocated.Get();
-        }
-        DWORD status = 0; HRESULT hr = transform->ProcessOutput(0, 1, &out, &status);
-        const uint64_t call = processOutputCalls.fetch_add(1) + 1;
-        if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return true;
-        if (FAILED(hr) || !out.pSample) {
-            const uint64_t failures = processOutputFailures.fetch_add(1) + 1;
-            if (failures == 1 || failures % 60 == 0) {
-                std::fprintf(stderr,
-                    "[flash-capture] ProcessOutput failure #%llu on call #%llu after %zu packets: hr=0x%08lx sample=%p\n",
-                    static_cast<unsigned long long>(failures), static_cast<unsigned long long>(call),
-                    output.size(), static_cast<unsigned long>(hr), out.pSample);
-            }
-            if (out.pEvents) out.pEvents->Release(); return false;
-        }
-        const bool releaseSample = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
-        ComPtr<IMFMediaBuffer> bytes; hr = out.pSample->ConvertToContiguousBuffer(&bytes);
-        if (out.pEvents) out.pEvents->Release(); if (FAILED(hr)) { if (releaseSample) out.pSample->Release(); return false; }
-        BYTE* data = nullptr; DWORD length = 0; if (FAILED(bytes->Lock(&data, nullptr, &length))) return false;
-        EncodedPacket packet; packet.data.assign(data, data + length); bytes->Unlock();
-        LONGLONG time = 0; out.pSample->GetSampleTime(&time); packet.timestamp_us = time / 10;
-        UINT32 clean = FALSE; packet.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &clean)) && clean;
-        if (!packet.data.empty()) output.push_back(std::move(packet));
-        if (releaseSample) out.pSample->Release();
+    MFT_OUTPUT_DATA_BUFFER out{}; ComPtr<IMFSample> allocated;
+    if (!(info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
+        if (FAILED(MFCreateSample(&allocated))) return false;
+        ComPtr<IMFMediaBuffer> bytes;
+        if (FAILED(MFCreateMemoryBuffer((std::max<DWORD>)(info.cbSize, 1024u * 1024u), &bytes)) || FAILED(allocated->AddBuffer(bytes.Get()))) return false;
+        out.pSample = allocated.Get();
     }
+    DWORD status = 0; HRESULT hr = transform->ProcessOutput(0, 1, &out, &status);
+    if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return true;
+    if (FAILED(hr) || !out.pSample) { if (out.pEvents) out.pEvents->Release(); return false; }
+    const bool releaseSample = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
+    ComPtr<IMFMediaBuffer> bytes; hr = out.pSample->ConvertToContiguousBuffer(&bytes);
+    if (out.pEvents) out.pEvents->Release(); if (FAILED(hr)) { if (releaseSample) out.pSample->Release(); return false; }
+    BYTE* data = nullptr; DWORD length = 0; if (FAILED(bytes->Lock(&data, nullptr, &length))) return false;
+    EncodedPacket packet; packet.data.assign(data, data + length); bytes->Unlock();
+    LONGLONG time = 0; out.pSample->GetSampleTime(&time); packet.timestamp_us = time / 10;
+    UINT32 clean = FALSE; packet.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &clean)) && clean;
+    if (!packet.data.empty()) output.push_back(std::move(packet));
+    if (releaseSample) out.pSample->Release();
+    return true;
 }
 #endif
 
@@ -155,20 +139,11 @@ bool MfHardwareEncoder::EncodeFrame(const FrameData& frame, std::vector<EncodedP
     }
     if (!impl_->context) return false;
 
-    // The MFT signals METransformNeedInput when it is ready for a frame. Draining
-    // events non-blocking and giving up if that event has not landed yet drops
-    // the frame outright, which is a hole in the timeline. Wait a bounded slice
-    // of one frame interval for it instead, so a frame is only lost if the
-    // encoder is genuinely wedged.
-    // Budget several frame intervals, not one. The MFT reissues NeedInput only
-    // after we have drained its output, so a one-interval deadline expired in the
-    // gap and threw the frame away — it alternated submit/drop and cost exactly
-    // half of every capture. Dropping a frame is far worse than briefly pacing
-    // the capture thread: the drop is permanent and visible as chop.
+    // Wait for a NeedInput event instead of dropping a captured frame merely
+    // because the asynchronous event has not landed yet.
     const uint32_t fps = impl_->config.fps ? impl_->config.fps : 60;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4 * 1000000 / fps);
-    // One texture, created once and reused. Creating a 1080p texture per frame
-    // stalls on the driver's allocator and was costing tens of milliseconds.
+    // Allocate the input pool once rather than allocating a texture per frame.
     if (!impl_->inputTextures[0]) {
         D3D11_TEXTURE2D_DESC desc{}; frame.texture->GetDesc(&desc);
         for (auto& texture : impl_->inputTextures)
