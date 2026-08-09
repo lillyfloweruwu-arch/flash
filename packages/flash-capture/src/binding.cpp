@@ -69,6 +69,17 @@ bool StartCaptureThreads() {
 
 bool BuildPipeline(bool initializeAudio) {
     g_pipelineError.clear();
+    // Release the previous capture BEFORE building the replacement. DXGI permits
+    // only one active output duplication per output per process, and the old
+    // ScreenCapture holds one until it is destroyed — so DuplicateOutput on the
+    // new one fails with NOT_CURRENTLY_AVAILABLE and every setQuality/setDisplay
+    // call reports failure. The encoder is released first because on the
+    // zero-copy path it holds textures belonging to the old D3D device.
+    {
+        std::scoped_lock lock(g_stateMutex, g_encodeMutex);
+        g_encoder.reset();
+        g_screenCapture.reset();
+    }
     const auto displays = ScreenCapture::ListDisplays();
     if (g_displayId >= displays.size()) { g_pipelineError = "display not found"; return false; }
     const auto& display = displays[g_displayId];
@@ -140,7 +151,23 @@ Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     result.Set("bufferSeconds", g_ringBuffer ? g_ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", g_encoder ? g_encoder->GetName() : "none");
     result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); result.Set("fps", g_quality.fps); result.Set("bitrateKbps", g_quality.bitrateKbps); result.Set("displayId", g_displayId);
     result.Set("audioMode", g_audioCapture ? g_audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());
-    tracks.Set("game", g_audioGame); tracks.Set("mic", g_audioMic); tracks.Set("other", g_audioOther); result.Set("audioTracks", tracks); return result;
+    tracks.Set("game", g_audioGame); tracks.Set("mic", g_audioMic); tracks.Set("other", g_audioOther); result.Set("audioTracks", tracks);
+    // Surface why a fallback happened, and each source's own state, so a missing
+    // track is diagnosable instead of just silently absent.
+    result.Set("audioError", g_audioCapture ? g_audioCapture->GetProcessError() : "");
+    auto sources = Napi::Array::New(info.Env());
+    if (g_audioCapture) {
+        uint32_t i = 0;
+        for (const auto& source : g_audioCapture->ListSources()) {
+            auto entry = Napi::Object::New(info.Env());
+            entry.Set("id", source.id); entry.Set("name", source.name); entry.Set("kind", source.kind);
+            entry.Set("available", source.available); entry.Set("active", source.active);
+            entry.Set("channels", source.channels); entry.Set("sampleRate", source.sampleRate);
+            entry.Set("error", source.error);
+            sources.Set(i++, entry);
+        }
+    }
+    result.Set("audioSources", sources); return result;
 }
 
 Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "game name must be a string").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (info.Length() > 1 && !info[1].IsNumber()) { Napi::TypeError::New(info.Env(), "game PID must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } AudioCapture* audio; bool game, mic, other; { std::lock_guard lock(g_stateMutex); g_currentGame = info[0].As<Napi::String>().Utf8Value(); audio = g_audioCapture.get(); game = g_audioGame; mic = g_audioMic; other = g_audioOther; } if (audio && info.Length() > 1) { audio->SetGameProcess(info[1].As<Napi::Number>().Uint32Value()); audio->SetSource("game", game, 1.0f); audio->SetSource("mic", mic, 1.0f); audio->SetSource("other", other, 1.0f); } return info.Env().Undefined(); }

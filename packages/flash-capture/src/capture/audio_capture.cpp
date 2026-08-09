@@ -110,13 +110,23 @@ bool AudioCapture::InitializeProcess(const std::shared_ptr<Source>& source, uint
     auto handler = Microsoft::WRL::Make<ActivationHandler>(); ComPtr<IActivateAudioInterfaceAsyncOperation> operation;
     HRESULT hr = ActivateAudioInterfaceAsync(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, __uuidof(IAudioClient), &activate, handler.Get(), &operation);
     if (FAILED(hr) || FAILED(hr = handler->Wait(source->client))) { source->info.error = "process loopback unavailable"; return false; }
-    WAVEFORMATEX* format = nullptr; hr = source->client->GetMixFormat(&format);
-    if (FAILED(hr)) { source->info.error = "process mix format unavailable"; return false; }
-    source->info.sampleRate = format->nSamplesPerSec; source->info.channels = format->nChannels; source->bits = format->wBitsPerSample;
-    source->isFloat = format->wFormatTag == WAVE_FORMAT_IEEE_FLOAT ||
-        (format->wFormatTag == WAVE_FORMAT_EXTENSIBLE && reinterpret_cast<WAVEFORMATEXTENSIBLE*>(format)->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT);
+    // GetMixFormat() is NOT supported on a process-loopback client — it fails and
+    // takes the whole split down with it. The format has to be stated up front,
+    // as Microsoft's own ApplicationLoopback sample does. 48 kHz stereo float
+    // matches what the endpoint sources report, so every track shares a rate and
+    // the muxer does not have to resample.
+    WAVEFORMATEX format{};
+    format.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+    format.nChannels = 2;
+    format.nSamplesPerSec = 48000;
+    format.wBitsPerSample = 32;
+    format.nBlockAlign = format.nChannels * format.wBitsPerSample / 8;
+    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+    format.cbSize = 0;
+    source->info.sampleRate = format.nSamplesPerSec; source->info.channels = format.nChannels;
+    source->bits = format.wBitsPerSample; source->isFloat = true;
     hr = source->client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-        10000000, 0, format, nullptr); CoTaskMemFree(format);
+        10000000, 0, &format, nullptr);
     if (FAILED(hr)) { source->info.error = "process loopback initialization failed"; return false; }
     source->event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     if (!source->event || FAILED(source->client->SetEventHandle(source->event)) ||
@@ -148,8 +158,11 @@ void AudioCapture::BuildSources(uint32_t processId) {
     auto other = std::make_shared<Source>(); other->info = {"other", "process", "Other apps"};
     const bool split = InitializeProcess(game, processId, true) && InitializeProcess(other, processId, false);
     InitializeEndpoint(mic, eCapture);
-    if (split) { mode_ = "separate"; sources_ = {game, mic, other}; }
+    if (split) { mode_ = "separate"; processError_.clear(); sources_ = {game, mic, other}; }
     else {
+        // Keep the reason before the failed sources are discarded, otherwise a
+        // fallback to mixed is indistinguishable from "not attempted".
+        processError_ = !game->info.error.empty() ? game->info.error : other->info.error;
         auto mixed = std::make_shared<Source>(); mixed->info = {"game", "system", "System mix"}; InitializeEndpoint(mixed, eRender);
         mode_ = "mixed"; sources_ = {mixed, mic};
     }
@@ -165,6 +178,8 @@ bool AudioCapture::SetGameProcess(uint32_t processId) {
 }
 
 std::string AudioCapture::GetMode() const { std::lock_guard lock(mutex_); return mode_; }
+
+std::string AudioCapture::GetProcessError() const { std::lock_guard lock(mutex_); return processError_; }
 
 bool AudioCapture::Start(AudioCallback callback) {
     if (capturing_.exchange(true)) return false; callback_ = std::move(callback);
@@ -187,14 +202,14 @@ void AudioCapture::Stop() {
 
 void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
 #ifdef _WIN32
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED); UINT64 firstPosition = 0; int64_t firstClock = 0; bool anchored = false;
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     while (capturing_.load()) {
         if (WaitForSingleObject(source->event, 100) != WAIT_OBJECT_0) continue;
         UINT32 packet = 0; source->capture->GetNextPacketSize(&packet);
         while (packet && capturing_.load()) {
             BYTE* data = nullptr; UINT32 frames = 0; DWORD flags = 0; UINT64 position = 0;
             HRESULT hr = source->capture->GetBuffer(&data, &frames, &flags, &position, nullptr); if (FAILED(hr)) break;
-            if (!anchored) { firstPosition = position; firstClock = CaptureClockUs(); anchored = true; }
+            (void)position;  // see the timestamp note below
             std::vector<float> converted(static_cast<size_t>(frames) * source->info.channels, 0.0f);
             if (!(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
                 if (source->isFloat) std::memcpy(converted.data(), data, converted.size() * sizeof(float));
@@ -203,8 +218,16 @@ void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
             auto stereo = ResampleStereo(converted.data(), frames, source->info.channels, source->info.sampleRate);
             float gain; bool enabled; { std::lock_guard lock(mutex_); gain = source->info.gain; enabled = source->info.enabled; }
             for (float& sample : stereo) sample = (std::max)(-1.0f, (std::min)(1.0f, sample * gain));
-            AudioData value{stereo.data(), static_cast<uint32_t>(stereo.size() / 2), 2, 48000,
-                AudioPacketStartUs(static_cast<int64_t>(position), static_cast<int64_t>(firstPosition), firstClock, source->info.sampleRate), source->info.id};
+            // Timestamp from the shared capture clock, NOT from the WASAPI device
+            // position. A process-loopback client does not report a meaningful
+            // position — it stays put — so position-derived timestamps put every
+            // packet at the same instant. The muxer then waits forever for that
+            // track's timeline to advance while video runs ahead, and saveClip
+            // hangs. Wall clock is monotonic, represents silent gaps honestly,
+            // and is the same clock the video frames are stamped with.
+            const uint32_t frameCount = static_cast<uint32_t>(stereo.size() / 2);
+            const int64_t startUs = CaptureClockUs() - static_cast<int64_t>(frameCount) * 1000000 / 48000;
+            AudioData value{stereo.data(), frameCount, 2, 48000, startUs, source->info.id};
             if (enabled && callback_ && value.frameCount) callback_(value);
             source->capture->ReleaseBuffer(frames); source->capture->GetNextPacketSize(&packet);
         }

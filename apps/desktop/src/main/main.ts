@@ -100,7 +100,7 @@ type CaptureAddon = {
   stopReplayBuffer(): void
   saveClip(): Promise<{ path: string; duration: number }>
   getStatus(): { recording: boolean; bufferSeconds: number; encoder: string }
-  setCurrentGame(game: string): void
+  setCurrentGame(game: string, processId?: number): void
   setBufferLength(seconds: number): void
   setQuality?(options: { height: number; fps: number; bitrateKbps: number }): void
   listDisplays?(): Display[]
@@ -136,6 +136,7 @@ let tray: Tray | null = null
 let notificationWindow: BrowserWindow | null = null
 let isRecording = false
 let currentGame: string | null = null
+let currentGamePid = 0
 let gameDetectorInterval: ReturnType<typeof setInterval> | null = null
 
 // ── Clip Management ──────────────────────────────────────────────────────────
@@ -286,15 +287,19 @@ function loadGameDb() {
   } catch { /* Game DB not found */ }
 }
 
-function detectCurrentGame(): Promise<string | null> {
+// The PID matters as much as the name: the capture engine can only split game
+// audio from everything else by targeting the game's process tree, and without
+// a PID it falls back to a single mixed track.
+function detectCurrentGame(): Promise<{ name: string; pid: number } | null> {
   return new Promise((resolve) => {
     execFile('tasklist', ['/FO', 'CSV', '/NH'], (error, stdout) => {
       if (error) { resolve(null); return }
       for (const line of stdout.split('\n')) {
-        const match = line.match(/"([^"]+)"/)
-        if (!match) continue
-        const gameName = GAME_DB[match[1].toLowerCase()]
-        if (gameName) { resolve(gameName); return }
+        // tasklist CSV: "image.exe","1234","Console","1","12,345 K"
+        const fields = line.match(/"([^"]*)","([^"]*)"/)
+        if (!fields) continue
+        const name = GAME_DB[fields[1].toLowerCase()]
+        if (name) { resolve({ name, pid: Number(fields[2]) }); return }
       }
       resolve(null)
     })
@@ -305,10 +310,16 @@ function startGameDetection() {
   loadGameDb()
   const poll = async () => {
     const game = await detectCurrentGame()
-    if (game !== currentGame) {
-      currentGame = game
-      if (game) captureAddon?.setCurrentGame(game)
-      mainWindow?.webContents.send('game-detected', game)
+    // Re-arm on a PID change too — relaunching a game keeps the name but the old
+    // process tree is gone, and audio would stay bound to a dead PID.
+    if (game?.name !== currentGame || (game && game.pid !== currentGamePid)) {
+      currentGame = game?.name ?? null
+      currentGamePid = game?.pid ?? 0
+      if (game) {
+        try { captureAddon?.setCurrentGame(game.name, game.pid) }
+        catch (error) { console.warn('Could not target game audio', error) }
+      }
+      mainWindow?.webContents.send('game-detected', currentGame)
     }
   }
   poll()

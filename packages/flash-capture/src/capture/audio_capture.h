@@ -56,6 +56,8 @@ public:
     std::vector<AudioSourceInfo> ListSources() const;
     bool SetSource(const std::string& id, bool enabled, float gain);
     std::string GetMode() const;
+    // Why per-process splitting fell back to a mixed track, if it did.
+    std::string GetProcessError() const;
 
 private:
     struct Source;
@@ -69,6 +71,7 @@ private:
     mutable std::mutex mutex_;
     std::vector<std::shared_ptr<Source>> sources_;
     std::string mode_ = "mixed";
+    std::string processError_;
 
 #ifdef _WIN32
     ComPtr<IMMDeviceEnumerator> enumerator_;
