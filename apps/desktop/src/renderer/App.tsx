@@ -632,13 +632,22 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 // ── SettingsPanel ──────────────────────────────────────────────────────────────
 
-function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, onOpenFolder, onPickFolder }: {
+interface CaptureHealth {
+  healthy: boolean
+  fps: number
+  buffered: number
+  audioMode?: string
+  error?: string
+}
+
+function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, health, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
   hotkeyRegistered: boolean
   displays: Display[]
+  health: CaptureHealth | null
   onOpenFolder: () => void
   onPickFolder: () => void
 }) {
@@ -723,6 +732,17 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
           <Row label="Encoder">
             <span style={{ fontSize: 12, color: encoder === 'none' ? 'var(--alert)' : 'var(--ok)' }}>{encoder}</span>
           </Row>
+          {/* The engine already measures all of this; it was just never shown.
+              Every silent-failure class in the app is visible in these numbers. */}
+          {health && (
+            <Row label="Capture health">
+              <span style={{ fontSize: 12, color: health.healthy ? 'var(--ok)' : 'var(--alert)' }}>
+                {health.healthy
+                  ? `${health.fps.toFixed(0)} fps · ${health.buffered.toFixed(0)}s buffered${health.audioMode ? ` · audio ${health.audioMode}` : ''}`
+                  : health.error || 'capture stopped'}
+              </span>
+            </Row>
+          )}
         </Card>
 
         <Card title="Notifications">
@@ -807,6 +827,29 @@ export default function App() {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
   const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
+  const [health, setHealth] = useState<CaptureHealth | null>(null)
+
+  // Poll only while Settings is open — a background timer for a panel nobody is
+  // looking at is exactly the kind of idle cost this app exists to avoid.
+  useEffect(() => {
+    if (active !== 'Settings' || !window.flash) return
+    let cancelled = false
+    const read = async () => {
+      const s: any = await window.flash!.capture.getStatus()
+      if (cancelled) return
+      setHealth({
+        healthy: s.captureHealthy !== false && s.recording !== false,
+        fps: s.lastIntervalMs > 0 ? 1000 / s.lastIntervalMs : 0,
+        buffered: s.bufferSeconds ?? 0,
+        audioMode: s.audioMode,
+        error: s.captureError,
+      })
+      if (s.encoder) setEncoder(s.encoder)
+    }
+    read()
+    const timer = setInterval(read, 2000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [active])
   const [displays, setDisplays] = useState<Display[]>([])
   const [saveState, setSaveState] = useState<{ saving: boolean; error?: string }>({ saving: false })
 
@@ -923,7 +966,7 @@ export default function App() {
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
-              hotkeyRegistered={hotkeyRegistered} displays={displays}
+              hotkeyRegistered={hotkeyRegistered} displays={displays} health={health}
               onOpenFolder={() => window.flash?.openClipsFolder()}
               onPickFolder={async () => {
                 const folder = await window.flash?.pickClipsFolder()

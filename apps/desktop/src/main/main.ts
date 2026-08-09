@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard } from 'electron'
+import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, powerMonitor } from 'electron'
 import { join, basename, dirname } from 'path'
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
@@ -105,7 +105,13 @@ type CaptureAddon = {
   startReplayBuffer(): boolean
   stopReplayBuffer(): void
   saveClip(): Promise<{ path: string; duration: number }>
-  getStatus(): { recording: boolean; bufferSeconds: number; encoder: string }
+  getStatus(): {
+    recording: boolean
+    bufferSeconds: number
+    encoder: string
+    captureHealthy?: boolean
+    captureError?: string
+  }
   setCurrentGame(game: string, processId?: number): void
   setBufferLength(seconds: number): void
   setQuality?(options: { height: number; fps: number; bitrateKbps: number }): void
@@ -264,6 +270,19 @@ function saveClipNow(): Promise<{ path?: string; duration?: number; error?: stri
 async function runSaveClip(): Promise<{ path?: string; duration?: number; error?: string }> {
   if (!captureAddon) return { error: 'Capture engine not available' }
   if (!isRecording) return { error: 'Replay buffer is not running' }
+
+  // Ask the engine rather than trusting our own flag. If capture died since the
+  // last watchdog tick, the buffer holds stale frames and saving it would hand
+  // back a clip of something that happened minutes ago — worse than no clip,
+  // because it looks like it worked.
+  try {
+    const status = captureAddon.getStatus()
+    if (status.recording === false || status.captureHealthy === false) {
+      const reason = status.captureError || 'capture stopped'
+      setRecordingState(false, `Capture stopped: ${reason}`)
+      return { error: `Capture stopped: ${reason}` }
+    }
+  } catch { /* fall through and let the save attempt report the failure */ }
 
   const diskError = await checkDiskSpace()
   if (diskError) {
@@ -792,6 +811,66 @@ function setupIPC() {
   ipcMain.on('window-close', () => mainWindow?.close())
 }
 
+// ── Capture Watchdog ──────────────────────────────────────────────────────────
+
+// The capture thread can die under us — a UAC prompt, Win+L, the secure desktop,
+// a driver reset, a monitor sleeping. Nothing upstream noticed: isRecording stayed
+// true, the tray still said Stop, the overlay still blinked REC, and the hotkey
+// happily returned a clip from whenever capture actually died. Finding that out
+// while watching the clip is the failure that sends someone back to Medal.
+let watchdogTimer: ReturnType<typeof setInterval> | null = null
+let restartAttempts = 0
+let lastRestart = 0
+
+function startCaptureWatchdog() {
+  watchdogTimer = setInterval(() => {
+    if (!captureAddon || !isRecording) return
+    let status: ReturnType<CaptureAddon['getStatus']>
+    try { status = captureAddon.getStatus() } catch { return }
+
+    // captureHealthy is the engine's own view; recording is the thread state.
+    // Either going false while we believe we are recording means capture died.
+    const dead = status.recording === false || status.captureHealthy === false
+    if (!dead) { restartAttempts = 0; return }
+
+    const reason = status.captureError || 'capture stopped unexpectedly'
+    console.warn('Capture watchdog:', reason)
+
+    // Cap restarts so a genuinely broken machine does not become a restart loop.
+    const now = Date.now()
+    if (now - lastRestart > 60_000) restartAttempts = 0
+    if (restartAttempts >= 3) {
+      setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
+      return
+    }
+    restartAttempts++
+    lastRestart = now
+
+    try {
+      captureAddon.stopReplayBuffer()
+      const restarted = captureAddon.startReplayBuffer()
+      if (restarted) {
+        console.log('Capture watchdog: replay buffer restarted')
+        setRecordingState(true)
+        return
+      }
+    } catch (error) {
+      console.warn('Capture watchdog: restart failed', error)
+    }
+    setRecordingState(false, `Capture stopped: ${reason}`)
+  }, 5000)
+}
+
+// One place that fixes the flag, the tray, the overlay and the renderer together,
+// so they cannot disagree about whether Flash is recording.
+function setRecordingState(recording: boolean, error?: string) {
+  isRecording = recording
+  updateTrayMenu()
+  updateOverlay()
+  mainWindow?.webContents.send('recording-state', recording)
+  if (error) mainWindow?.webContents.send('clip-save-state', { saving: false, error })
+}
+
 // ── Hotkeys ───────────────────────────────────────────────────────────────────
 
 // True if the accelerator was claimed. Another app (or a game) holding the same
@@ -859,6 +938,13 @@ app.on('ready', () => {
   setupIPC()
   registerHotkeys()
   startGameDetection()
+  startCaptureWatchdog()
+
+  // Resume and display changes are the two events that reliably invalidate DXGI
+  // duplication. Nudge the watchdog immediately rather than waiting up to 5s.
+  powerMonitor.on('resume', () => { restartAttempts = 0; console.log('System resumed — rechecking capture') })
+  screen.on('display-metrics-changed', () => { restartAttempts = 0 })
+  screen.on('display-removed', () => { restartAttempts = 0 })
 })
 
 app.on('window-all-closed', () => { /* live in tray */ })
@@ -866,6 +952,7 @@ app.on('before-quit', () => { (app as any).isQuitting = true })
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopGameDetection()
+  if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
   try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
 })
 app.on('activate', () => { if (!mainWindow) createWindow() })
