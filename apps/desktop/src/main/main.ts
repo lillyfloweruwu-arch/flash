@@ -20,6 +20,8 @@ const DEFAULTS = {
   autoSave: true,
   notifications: true,
   autoDeleteDays: 0,  // 0 = never
+  learnedGames: {} as Record<string, string>,   // exe (lowercase) -> display name
+  ignoredGames: [] as string[],                 // exe the user said is not a game
 }
 
 type Settings = typeof DEFAULTS
@@ -32,6 +34,8 @@ function loadSettings() {
   try {
     if (existsSync(settingsPath)) {
       settings = { ...DEFAULTS, ...JSON.parse(readFileSync(settingsPath, 'utf8')) }
+      // "Not a game" answers have to survive a restart or Flash asks again.
+      for (const exe of settings.ignoredGames ?? []) ignoredExecutables.add(exe)
     }
   } catch { /* use defaults */ }
 }
@@ -139,6 +143,8 @@ let notificationWindow: BrowserWindow | null = null
 let isRecording = false
 let currentGame: string | null = null
 let currentGamePid = 0
+const askedAbout = new Set<string>()
+const ignoredExecutables = new Set<string>()
 let gameDetectorInterval: ReturnType<typeof setInterval> | null = null
 
 // ── Clip Management ──────────────────────────────────────────────────────────
@@ -295,20 +301,67 @@ function loadGameDb() {
 // The PID matters as much as the name: the capture engine can only split game
 // audio from everything else by targeting the game's process tree, and without
 // a PID it falls back to a single mixed track.
-function detectCurrentGame(): Promise<{ name: string; pid: number } | null> {
+// Processes that own a visible window but are never the game being played.
+const NOT_A_GAME = /^(explorer|chrome|msedge|firefox|discord|spotify|steam|epicgameslauncher|electron|flash|code|obs\d*|nvidia\w*|applicationframehost|textinputhost|searchhost|startmenuexperiencehost|shellexperiencehost|systemsettings|widgets|lockapp|taskmgr|powershell|cmd|windowsterminal|wt)\.exe$/i
+
+// Names the user has taught Flash, keyed by executable. Persisted in settings so
+// a game only has to be identified once.
+const learnedGames = (): Record<string, string> => settings.learnedGames ?? {}
+
+type DetectedGame = { name: string; pid: number; exe: string; unknown?: boolean }
+
+// Tier 1 + 2: the bundled database and anything the user has already named.
+// Plain tasklist, no /V — this runs every few seconds so it stays cheap.
+function detectKnownGame(): Promise<DetectedGame | null> {
   return new Promise((resolve) => {
     execFile('tasklist', ['/FO', 'CSV', '/NH'], (error, stdout) => {
       if (error) { resolve(null); return }
+      const learned = learnedGames()
       for (const line of stdout.split('\n')) {
         // tasklist CSV: "image.exe","1234","Console","1","12,345 K"
-        const fields = line.match(/"([^"]*)","([^"]*)"/)
+        const fields = line.match(/^"([^"]*)","([^"]*)"/)
         if (!fields) continue
-        const name = GAME_DB[fields[1].toLowerCase()]
-        if (name) { resolve({ name, pid: Number(fields[2]) }); return }
+        const name = GAME_DB[fields[1].toLowerCase()] ?? learned[fields[1].toLowerCase()]
+        if (name) { resolve({ name, pid: Number(fields[2]), exe: fields[1] }); return }
       }
       resolve(null)
     })
   })
+}
+
+// Tier 3: nothing recognised, so guess. tasklist's window-title column is a poor
+// signal — dwm.exe and svchost.exe both have one. .NET's MainWindowTitle is only
+// set for a real top-level window, so this asks PowerShell instead, and picks the
+// largest resident process among the candidates because games dwarf everything
+// else. Costs ~100ms, so it only runs when the cheap pass found nothing.
+function detectUnknownGame(): Promise<DetectedGame | null> {
+  const script = `Get-Process | Where-Object { $_.MainWindowTitle -and $_.Path } | ` +
+    `Select-Object ProcessName, Id, Path, MainWindowTitle, WorkingSet64 | ConvertTo-Json -Compress`
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 5000 }, (error, stdout) => {
+        if (error || !stdout.trim()) { resolve(null); return }
+        let rows: any[]
+        try { const parsed = JSON.parse(stdout); rows = Array.isArray(parsed) ? parsed : [parsed] }
+        catch { resolve(null); return }
+
+        const best = rows
+          .filter(r => r.Path && !/^C:\\Windows\\/i.test(r.Path))   // never a system binary
+          .filter(r => !NOT_A_GAME.test(`${r.ProcessName}.exe`))
+          .filter(r => !ignoredExecutables.has(`${r.ProcessName}.exe`.toLowerCase()))
+          .filter(r => r.WorkingSet64 > 200 * 1024 * 1024)          // games are not small
+          .sort((a, b) => b.WorkingSet64 - a.WorkingSet64)[0]
+
+        resolve(best ? {
+          name: String(best.MainWindowTitle).trim() || best.ProcessName,
+          pid: best.Id, exe: `${best.ProcessName}.exe`, unknown: true,
+        } : null)
+      })
+  })
+}
+
+async function detectCurrentGame(): Promise<DetectedGame | null> {
+  return (await detectKnownGame()) ?? (await detectUnknownGame())
 }
 
 function startGameDetection() {
@@ -325,6 +378,12 @@ function startGameDetection() {
         catch (error) { console.warn('Could not target game audio', error) }
       }
       mainWindow?.webContents.send('game-detected', currentGame)
+      // Unrecognised but plausible: ask rather than filing clips under a guess.
+      // Asked once per executable — declining records it as "not a game".
+      if (game?.unknown && !askedAbout.has(game.exe)) {
+        askedAbout.add(game.exe)
+        mainWindow?.webContents.send('identify-game', { exe: game.exe, suggested: game.name })
+      }
       updateOverlay()
     }
   }
@@ -640,6 +699,26 @@ function setupIPC() {
     return { ...settings }
   })
   ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, registered: hotkeyRegistered }))
+
+  // The user naming an unrecognised process. A null name means "not a game",
+  // recorded so Flash stops asking about it.
+  ipcMain.handle('identify-game', (_event, exe: string, name: string | null) => {
+    const key = exe.toLowerCase()
+    const learned = { ...learnedGames() }
+    if (name) learned[key] = name
+    else delete learned[key]
+    settings.learnedGames = learned
+    if (!name && !settings.ignoredGames.includes(key)) settings.ignoredGames = [...settings.ignoredGames, key]
+    if (!name) ignoredExecutables.add(key)
+    saveSettings()
+    if (name) {
+      currentGame = name
+      try { captureAddon?.setCurrentGame(name, currentGamePid) } catch { /* audio stays mixed */ }
+      mainWindow?.webContents.send('game-detected', name)
+      updateOverlay()
+    }
+    return { ...settings }
+  })
   ipcMain.handle('pick-clips-folder', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, {

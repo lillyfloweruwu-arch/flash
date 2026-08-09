@@ -143,6 +143,48 @@ function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; onClose:
   )
 }
 
+// ── Identify Game Prompt ──────────────────────────────────────────────────────
+
+// Shown when something is running that looks like a game but is not in the
+// bundled database. Naming it once teaches Flash permanently; dismissing it
+// records the executable as "not a game" so it stops asking.
+function IdentifyGamePrompt({ request, onClose }: {
+  request: { exe: string; suggested: string }
+  onClose: (name: string | null) => void
+}) {
+  const [name, setName] = useState(request.suggested)
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ background: 'color-mix(in srgb, var(--bg) 72%, transparent)', backdropFilter: 'blur(3px)', animation: 'overlay-in 0.12s ease-out' }}>
+      <div role="dialog" aria-modal="true" className="rounded-xl"
+        style={{ width: 420, padding: 22, background: 'var(--panel)', border: '1px solid var(--edge)', boxShadow: '0 24px 60px rgba(0,0,0,0.6)', animation: 'dialog-in 0.14s ease-out' }}>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg)', marginBottom: 8 }}>Is this a game?</h2>
+        <p style={{ fontSize: 13, color: 'var(--muted-2)', lineHeight: 1.55, marginBottom: 14 }}>
+          Flash does not recognise <span style={{ color: 'var(--fg)' }}>{request.exe}</span>. Name it and
+          your clips will be filed under it from now on.
+        </p>
+        <input value={name} onChange={e => setName(e.target.value)} autoFocus
+          onKeyDown={e => { if (e.key === 'Enter' && name.trim()) onClose(name.trim()); if (e.key === 'Escape') onClose(null) }}
+          className="w-full rounded-lg mb-4"
+          style={{ fontSize: 13, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', padding: '9px 11px', outline: 'none' }} />
+        <div className="flex justify-end gap-2">
+          <button onClick={() => onClose(null)}
+            className="px-3.5 py-2 rounded-lg text-xs transition-all hover:brightness-125"
+            style={{ color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)' }}>
+            Not a game
+          </button>
+          <button onClick={() => name.trim() && onClose(name.trim())} disabled={!name.trim()}
+            className="px-3.5 py-2 rounded-lg text-xs transition-all hover:brightness-110"
+            style={{ fontWeight: 600, color: 'var(--on-accent)', background: 'var(--accent)', opacity: name.trim() ? 1 : 0.5 }}>
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Window Controls ───────────────────────────────────────────────────────────
 
 // Drawn in React rather than via Electron's titleBarOverlay, which paints native
@@ -358,7 +400,7 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
       <div className="p-3">
         <button onClick={onOpenFolder}
           className="w-full py-2 rounded-lg transition-all hover:brightness-110 active:scale-95 mb-4"
-          style={{ fontWeight: 600, fontSize: 13, background: 'var(--accent)', color: 'white' }}>
+          style={{ fontWeight: 600, fontSize: 13, background: 'var(--accent)', color: 'var(--on-accent)' }}>
           Open Clips Folder
         </button>
 
@@ -717,7 +759,7 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
           <Row label="Format"><span style={{ fontSize: 12, color: 'var(--muted-2)' }}>MP4 / H.264</span></Row>
           <button onClick={onOpenFolder}
             className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:brightness-110"
-            style={{ fontWeight: 600, background: 'var(--accent)', color: 'white' }}>
+            style={{ fontWeight: 600, background: 'var(--accent)', color: 'var(--on-accent)' }}>
             Open Clips Folder
           </button>
         </Card>
@@ -745,6 +787,7 @@ export default function App() {
   const [captureAvailable, setCaptureAvailable] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
+  const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
   const [displays, setDisplays] = useState<Display[]>([])
   const [saveState, setSaveState] = useState<{ saving: boolean; error?: string }>({ saving: false })
 
@@ -826,6 +869,7 @@ export default function App() {
     window.flash.getHotkeyStatus().then(s => setHotkeyRegistered(s.registered))
     window.flash.capture.listDisplays().then(setDisplays)
     window.flash.capture.onSaveState(setSaveState)
+    window.flash.onIdentifyGame(setIdentifyRequest)
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
     window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
     window.flash.onGameDetected(setDetectedGame)
@@ -885,6 +929,12 @@ export default function App() {
       )}
       {confirmRequest && (
         <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
+      )}
+      {identifyRequest && (
+        <IdentifyGamePrompt request={identifyRequest} onClose={name => {
+          window.flash?.identifyGame(identifyRequest.exe, name)
+          setIdentifyRequest(null)
+        }} />
       )}
     </div>
   )

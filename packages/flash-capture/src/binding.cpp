@@ -5,6 +5,8 @@
 #include "buffer/ring_buffer.h"
 #include "buffer/clip_writer.h"
 #include "quality.h"
+#include <atomic>
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -40,17 +42,31 @@ void StopCapture() {
     if (screen) screen->Stop(); if (audio) audio->Stop();
 }
 
+// Rolling capture timings, surfaced through getStatus(). Cheap to keep, and the
+// difference between "the encoder is slow" and "frames never arrive" is not
+// guessable from the outside.
+std::atomic<int64_t> g_framesDelivered{0}, g_encodeUs{0}, g_intervalUs{0}, g_packetsPushed{0}, g_encodeFailures{0};
+
 bool StartCaptureThreads() {
     ScreenCapture* screen; AudioCapture* audio;
     { std::lock_guard lock(g_stateMutex); screen = g_screenCapture.get(); audio = g_audioCapture.get(); }
     if (!screen) return false;
     bool ok = screen->Start([](const FrameData& frame) {
+        const auto arrived = std::chrono::steady_clock::now();
+        static auto lastArrival = arrived;
+        g_intervalUs.store(std::chrono::duration_cast<std::chrono::microseconds>(arrived - lastArrival).count());
+        lastArrival = arrived;
+
         std::vector<EncodedPacket> packets;
         bool ready = false;
         { std::lock_guard encodeLock(g_encodeMutex);
           if (!g_encoder || !g_ringBuffer) return;
-          g_encoder->EncodeFrame(frame, packets);
-          for (const auto& packet : packets) { g_ringBuffer->Push(packet); ready = ready || packet.isKeyframe; }
+          const auto encodeStart = std::chrono::steady_clock::now();
+          if (!g_encoder->EncodeFrame(frame, packets)) g_encodeFailures.fetch_add(1);
+          g_encodeUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
+              std::chrono::steady_clock::now() - encodeStart).count());
+          g_framesDelivered.fetch_add(1);
+          for (const auto& packet : packets) { g_ringBuffer->Push(packet); g_packetsPushed.fetch_add(1); ready = ready || packet.isKeyframe; }
         }
         if (ready) { std::lock_guard lock(g_stateMutex); g_awaitingFirstKeyframe = false; g_previousVideo.clear(); g_previousAudio.clear(); }
     });
@@ -167,7 +183,13 @@ Napi::Value GetStatus(const Napi::CallbackInfo& info) {
             sources.Set(i++, entry);
         }
     }
-    result.Set("audioSources", sources); return result;
+    result.Set("audioSources", sources);
+    result.Set("framesDelivered", static_cast<double>(g_framesDelivered.load()));
+    result.Set("lastEncodeMs", g_encodeUs.load() / 1000.0);
+    result.Set("lastIntervalMs", g_intervalUs.load() / 1000.0);
+    result.Set("packetsPushed", static_cast<double>(g_packetsPushed.load()));
+    result.Set("encodeFailures", static_cast<double>(g_encodeFailures.load()));
+    return result;
 }
 
 Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "game name must be a string").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (info.Length() > 1 && !info[1].IsNumber()) { Napi::TypeError::New(info.Env(), "game PID must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } AudioCapture* audio; bool game, mic, other; { std::lock_guard lock(g_stateMutex); g_currentGame = info[0].As<Napi::String>().Utf8Value(); audio = g_audioCapture.get(); game = g_audioGame; mic = g_audioMic; other = g_audioOther; } if (audio && info.Length() > 1) { audio->SetGameProcess(info[1].As<Napi::Number>().Uint32Value()); audio->SetSource("game", game, 1.0f); audio->SetSource("mic", mic, 1.0f); audio->SetSource("other", other, 1.0f); } return info.Env().Undefined(); }

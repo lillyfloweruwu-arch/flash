@@ -4,6 +4,10 @@
 #include <codecapi.h>
 #include <strmif.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <thread>
 #include <mfapi.h>
 #include <mferror.h>
 #include <mfidl.h>
@@ -20,10 +24,23 @@ struct MfHardwareEncoder::Impl {
     ComPtr<IMFTransform> transform; ComPtr<IMFMediaEventGenerator> events;
     ComPtr<IMFDXGIDeviceManager> manager; UINT resetToken = 0; MFT_OUTPUT_STREAM_INFO outputInfo{};
     ComPtr<ID3D11DeviceContext> context;
+    // A rotating pool, not one texture. Allocating per frame stalls on the driver
+    // allocator; a single reused texture is worse in the other direction — the
+    // encoder still holds frame N while we overwrite it for N+1, which serialises
+    // the pipeline and costs exactly half the frame rate. Four is enough depth to
+    // keep a hardware encoder busy.
+    static constexpr size_t kInputPool = 4;
+    ComPtr<ID3D11Texture2D> inputTextures[kInputPool];
+    size_t inputIndex = 0;
+    // METransformNeedInput is a credit: the MFT issues one per frame it will
+    // accept. Surplus credits seen in one call must be carried, not dropped.
+    int needInputCredits = 0;
     bool mfStarted = false; uint64_t frameIndex = 0;
     void Reset() {
         if (transform) { transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0); transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0); }
-        events.Reset(); transform.Reset(); manager.Reset(); context.Reset(); initialized = false;
+        events.Reset(); transform.Reset(); manager.Reset(); context.Reset();
+        for (auto& texture : inputTextures) texture.Reset();
+        inputIndex = 0; needInputCredits = 0; initialized = false;
         if (mfStarted) MFShutdown(); mfStarted = false;
     }
 #endif
@@ -47,6 +64,8 @@ static bool ConfigureType(IMFMediaType* type, const GUID& subtype, const Encoder
 }
 
 static bool AppendOutput(IMFTransform* transform, const MFT_OUTPUT_STREAM_INFO& info, std::vector<EncodedPacket>& output) {
+    static std::atomic<uint64_t> processOutputCalls{0};
+    static std::atomic<uint64_t> processOutputFailures{0};
     for (;;) {
         MFT_OUTPUT_DATA_BUFFER out{}; ComPtr<IMFSample> allocated;
         if (!(info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES)) {
@@ -56,8 +75,18 @@ static bool AppendOutput(IMFTransform* transform, const MFT_OUTPUT_STREAM_INFO& 
             out.pSample = allocated.Get();
         }
         DWORD status = 0; HRESULT hr = transform->ProcessOutput(0, 1, &out, &status);
+        const uint64_t call = processOutputCalls.fetch_add(1) + 1;
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) return true;
-        if (FAILED(hr) || !out.pSample) { if (out.pEvents) out.pEvents->Release(); return false; }
+        if (FAILED(hr) || !out.pSample) {
+            const uint64_t failures = processOutputFailures.fetch_add(1) + 1;
+            if (failures == 1 || failures % 60 == 0) {
+                std::fprintf(stderr,
+                    "[flash-capture] ProcessOutput failure #%llu on call #%llu after %zu packets: hr=0x%08lx sample=%p\n",
+                    static_cast<unsigned long long>(failures), static_cast<unsigned long long>(call),
+                    output.size(), static_cast<unsigned long>(hr), out.pSample);
+            }
+            if (out.pEvents) out.pEvents->Release(); return false;
+        }
         const bool releaseSample = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
         ComPtr<IMFMediaBuffer> bytes; hr = out.pSample->ConvertToContiguousBuffer(&bytes);
         if (out.pEvents) out.pEvents->Release(); if (FAILED(hr)) { if (releaseSample) out.pSample->Release(); return false; }
@@ -120,24 +149,63 @@ bool MfHardwareEncoder::Initialize(const EncoderConfig& config) {
 
 bool MfHardwareEncoder::EncodeFrame(const FrameData& frame, std::vector<EncodedPacket>& output) {
 #ifdef _WIN32
-    if (!impl_->initialized || !frame.texture || frame.device != impl_->config.device || frame.width != impl_->config.width || frame.height != impl_->config.height) return false;
+    if (!impl_->initialized || !frame.texture || frame.device != impl_->config.device ||
+        frame.width != impl_->config.width || frame.height != impl_->config.height) {
+        return false;
+    }
+    if (!impl_->context) return false;
+
+    // The MFT signals METransformNeedInput when it is ready for a frame. Draining
+    // events non-blocking and giving up if that event has not landed yet drops
+    // the frame outright, which is a hole in the timeline. Wait a bounded slice
+    // of one frame interval for it instead, so a frame is only lost if the
+    // encoder is genuinely wedged.
+    // Budget several frame intervals, not one. The MFT reissues NeedInput only
+    // after we have drained its output, so a one-interval deadline expired in the
+    // gap and threw the frame away — it alternated submit/drop and cost exactly
+    // half of every capture. Dropping a frame is far worse than briefly pacing
+    // the capture thread: the drop is permanent and visible as chop.
+    const uint32_t fps = impl_->config.fps ? impl_->config.fps : 60;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4 * 1000000 / fps);
+    // One texture, created once and reused. Creating a 1080p texture per frame
+    // stalls on the driver's allocator and was costing tens of milliseconds.
+    if (!impl_->inputTextures[0]) {
+        D3D11_TEXTURE2D_DESC desc{}; frame.texture->GetDesc(&desc);
+        for (auto& texture : impl_->inputTextures)
+            if (FAILED(impl_->config.device->CreateTexture2D(&desc, nullptr, &texture))) return false;
+    }
+
+    auto submit = [&]() -> bool {
+        ID3D11Texture2D* input = impl_->inputTextures[impl_->inputIndex].Get();
+        impl_->inputIndex = (impl_->inputIndex + 1) % Impl::kInputPool;
+        ComPtr<IMFMediaBuffer> buffer; ComPtr<IMFSample> sample;
+        impl_->context->CopyResource(input, frame.texture);
+        if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), input, 0, FALSE, &buffer)) ||
+            FAILED(MFCreateSample(&sample)) || FAILED(sample->AddBuffer(buffer.Get()))) return false;
+        const LONGLONG duration = 10000000LL / fps, timestamp = frame.timestamp_us * 10;
+        sample->SetSampleTime(timestamp); sample->SetSampleDuration(duration);
+        if (FAILED(impl_->transform->ProcessInput(0, sample.Get(), 0))) return false;
+        ++impl_->frameIndex; return true;
+    };
+
     bool submitted = false;
-    for (int i = 0; i < 32; ++i) {
+    // Spend a carried-over credit first, so a frame is never made to wait for an
+    // event that already arrived during an earlier call.
+    if (impl_->needInputCredits > 0) { --impl_->needInputCredits; if (!submit()) return false; submitted = true; }
+
+    while (true) {
         ComPtr<IMFMediaEvent> event; HRESULT hr = impl_->events->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
-        if (hr == MF_E_NO_EVENTS_AVAILABLE) break; if (FAILED(hr)) return false;
+        if (hr == MF_E_NO_EVENTS_AVAILABLE) {
+            if (submitted || std::chrono::steady_clock::now() >= deadline) break;
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            continue;
+        }
+        if (FAILED(hr)) return false;
         MediaEventType type = MEUnknown; event->GetType(&type);
         if (type == METransformHaveOutput) { if (!AppendOutput(impl_->transform.Get(), impl_->outputInfo, output)) return false; }
-        else if (type == METransformNeedInput && !submitted) {
-            D3D11_TEXTURE2D_DESC desc{}; frame.texture->GetDesc(&desc);
-            ComPtr<ID3D11Texture2D> inputTexture; ComPtr<IMFMediaBuffer> buffer; ComPtr<IMFSample> sample;
-            if (!impl_->context || FAILED(impl_->config.device->CreateTexture2D(&desc, nullptr, &inputTexture))) return false;
-            impl_->context->CopyResource(inputTexture.Get(), frame.texture);
-            if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), inputTexture.Get(), 0, FALSE, &buffer)) ||
-                FAILED(MFCreateSample(&sample)) || FAILED(sample->AddBuffer(buffer.Get()))) return false;
-            const LONGLONG duration = 10000000LL / impl_->config.fps, timestamp = frame.timestamp_us * 10;
-            sample->SetSampleTime(timestamp); sample->SetSampleDuration(duration);
-            if (FAILED(impl_->transform->ProcessInput(0, sample.Get(), 0))) return false;
-            submitted = true; ++impl_->frameIndex;
+        else if (type == METransformNeedInput) {
+            if (submitted) ++impl_->needInputCredits;   // bank it for the next frame
+            else { if (!submit()) return false; submitted = true; }
         }
     }
     return submitted;

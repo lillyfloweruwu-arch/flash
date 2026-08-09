@@ -187,6 +187,16 @@ void ScreenCapture::CaptureLoop() {
     using clock = std::chrono::steady_clock;
     const auto duration = std::chrono::microseconds(1000000 / targetFps_);
 #ifdef _WIN32
+    // Windows' default timer granularity is ~15.6ms, so std::this_thread::sleep_for
+    // of a sub-millisecond remainder actually sleeps a whole tick. That capped
+    // capture at ~32fps (16ms AcquireNextFrame + a 15.6ms quantised sleep) and made
+    // frame intervals lurch between 15ms and 123ms — which is what reads as choppy
+    // playback. A high-resolution waitable timer hits the real deadline without
+    // raising the global timer resolution for the entire system the way
+    // timeBeginPeriod(1) would.
+    HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr,
+        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+
     while (capturing_.load()) {
         const auto frameStart = clock::now();
         ComPtr<IDXGIResource> resource; DXGI_OUTDUPL_FRAME_INFO info{};
@@ -212,8 +222,18 @@ void ScreenCapture::CaptureLoop() {
             duplication_->ReleaseFrame();
         }
         const auto elapsed = clock::now() - frameStart;
-        if (elapsed < duration) std::this_thread::sleep_for(duration - elapsed);
+        if (elapsed < duration) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(duration - elapsed);
+            if (timer) {
+                LARGE_INTEGER due{};
+                due.QuadPart = -(remaining.count() / 100);   // negative = relative, 100ns units
+                if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) WaitForSingleObject(timer, INFINITE);
+            } else {
+                std::this_thread::sleep_for(remaining);   // pre-1803 fallback
+            }
+        }
     }
+    if (timer) CloseHandle(timer);
 #endif
 }
 
