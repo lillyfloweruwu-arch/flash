@@ -15,6 +15,8 @@ export interface Settings {
   clipsFolder: string
   theme: string
   hotkey: string
+  hotkeyShort: string
+  shortClipSeconds: number
   displayId: number
   overlay: boolean
   overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'

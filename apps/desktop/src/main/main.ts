@@ -11,6 +11,8 @@ const DEFAULTS = {
   clipsFolder: join(app.getPath('videos'), 'Flash'),
   theme: 'blood',
   hotkey: 'F8',
+  hotkeyShort: 'Shift+F8',
+  shortClipSeconds: 15,
   displayId: 0,
   overlay: true,
   overlayPosition: 'top-left' as 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
@@ -104,7 +106,9 @@ type CaptureAddon = {
   initialize(clipsDir: string, displayId?: number): { error?: string }
   startReplayBuffer(): boolean
   stopReplayBuffer(): void
-  saveClip(): Promise<{ path: string; duration: number }>
+  // seconds omitted = the whole buffer, exactly as before.
+  saveClip(seconds?: number): Promise<{ path: string; duration: number }>
+  setClipsDir?(path: string): void
   getStatus(): {
     recording: boolean
     bufferSeconds: number
@@ -261,13 +265,13 @@ function onClipSaved(clip: { path: string; duration: number }) {
 // Coalesce instead: a second press while one is in flight returns that same save.
 let saveInFlight: Promise<{ path?: string; duration?: number; error?: string }> | null = null
 
-function saveClipNow(): Promise<{ path?: string; duration?: number; error?: string }> {
+function saveClipNow(seconds?: number): Promise<{ path?: string; duration?: number; error?: string }> {
   if (saveInFlight) return saveInFlight
-  saveInFlight = runSaveClip().finally(() => { saveInFlight = null })
+  saveInFlight = runSaveClip(seconds).finally(() => { saveInFlight = null })
   return saveInFlight
 }
 
-async function runSaveClip(): Promise<{ path?: string; duration?: number; error?: string }> {
+async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?: number; error?: string }> {
   if (!captureAddon) return { error: 'Capture engine not available' }
   if (!isRecording) return { error: 'Replay buffer is not running' }
 
@@ -294,7 +298,9 @@ async function runSaveClip(): Promise<{ path?: string; duration?: number; error?
   mainWindow?.webContents.send('clip-save-state', { saving: true })
   updateOverlay(true)
   try {
-    const clip = await captureAddon.saveClip()
+    // Older engines ignore the argument and return the whole buffer, which is
+    // the same behaviour as before rather than a failure.
+    const clip = await captureAddon.saveClip(seconds)
     onClipSaved(clip)
     mainWindow?.webContents.send('clip-save-state', { saving: false })
     updateOverlay()
@@ -674,7 +680,7 @@ function setupIPC() {
     mainWindow?.webContents.send('recording-state', isRecording)
   })
 
-  ipcMain.handle('capture-save-clip', () => saveClipNow())
+  ipcMain.handle('capture-save-clip', (_event, seconds?: number) => saveClipNow(seconds))
 
   ipcMain.handle('list-displays', () => {
     try { return captureAddon?.listDisplays?.() ?? [] } catch { return [] }
@@ -746,7 +752,7 @@ function setupIPC() {
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
     if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
-    if (partial.hotkey !== undefined) registerHotkeys()
+    if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined) registerHotkeys()
     if (partial.displayId !== undefined) {
       try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
     }
@@ -783,6 +789,10 @@ function setupIPC() {
     settings.clipsFolder = result.filePaths[0]
     saveSettings()
     ensureClipsFolder()
+    // Without this the engine keeps writing MP4s to the old folder while the
+    // library reads the new one: clips save fine and never appear.
+    try { captureAddon?.setClipsDir?.(settings.clipsFolder) }
+    catch (error) { console.warn('Could not update engine clips folder', error) }
     return settings.clipsFolder
   })
 
@@ -884,6 +894,16 @@ function registerHotkeys(): boolean {
       mainWindow?.webContents.send('hotkey-clip')
       void saveClipNow()
     })
+    // A second key for a short clip. An eight-second play should not ship as
+    // thirty seconds of nothing, and there is no editor yet to fix it after.
+    if (settings.hotkeyShort && settings.hotkeyShort !== settings.hotkey) {
+      try {
+        globalShortcut.register(settings.hotkeyShort, () => {
+          mainWindow?.webContents.send('hotkey-clip')
+          void saveClipNow(settings.shortClipSeconds)
+        })
+      } catch { console.warn(`Could not register short-clip hotkey ${settings.hotkeyShort}`) }
+    }
   } catch {
     hotkeyRegistered = false  // malformed accelerator
   }

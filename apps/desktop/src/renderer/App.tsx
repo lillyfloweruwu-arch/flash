@@ -27,6 +27,8 @@ interface Settings {
   clipsFolder: string
   theme: string
   hotkey: string
+  hotkeyShort: string
+  shortClipSeconds: number
   displayId: number
   overlay: boolean
   overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
@@ -699,9 +701,18 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
         </Card>
 
         <Card title="Capture">
-          <Row label="Clip hotkey">
+          <Row label={`Clip hotkey — full ${settings.bufferLength}s`}>
             <HotkeyInput value={settings.hotkey} registered={hotkeyRegistered}
               onChange={hotkey => onChange({ hotkey })} />
+          </Row>
+          <Row label={`Short clip hotkey — last ${settings.shortClipSeconds}s`}>
+            <HotkeyInput value={settings.hotkeyShort} registered
+              onChange={hotkeyShort => onChange({ hotkeyShort })} />
+          </Row>
+          <Row label="Short clip length">
+            <input type="range" min={5} max={60} step={5} value={settings.shortClipSeconds}
+              onChange={e => onChange({ shortClipSeconds: +e.target.value })}
+              style={{ accentColor: 'var(--accent)', width: 120 }} />
           </Row>
           {displays.length > 1 && (
             <Row label="Capture display">
@@ -818,7 +829,8 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', displayId: 0, overlay: true, overlayPosition: 'top-left',
+    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', hotkeyShort: 'Shift+F8',
+    shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
     quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
