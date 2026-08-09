@@ -226,6 +226,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
   onDelete: (clip: Clip) => void
 }) {
   const [index, setIndex] = useState(startIndex)
+  const [copied, setCopied] = useState<string | null>(null)
   const clip = clips[index]
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
@@ -257,6 +258,19 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            draggable
+            onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(clip.filePath) }}
+            onClick={async () => {
+              const ok = await window.flash?.copyClipFile(clip.filePath)
+              setCopied(ok ? 'Copied' : 'Copy failed')
+              setTimeout(() => setCopied(null), 1600)
+            }}
+            title="Click to copy the file, or drag this straight into Discord"
+            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
+            style={{ color: copied ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${copied ? 'var(--accent-line)' : 'var(--edge-soft)'}`, cursor: 'grab' }}>
+            {copied ?? 'Copy / Drag'}
+          </button>
           <button onClick={() => window.flash?.showClipInFolder(clip.filePath)}
             className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
             style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>Show in Folder</button>
@@ -457,7 +471,12 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
   }, [])
 
   return (
-    <div ref={cardRef} className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
+    <div ref={cardRef}
+      // Native OS drag: drop the tile straight into Discord. preventDefault stops
+      // Chromium starting its own (useless) HTML drag first.
+      draggable
+      onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(clip.filePath) }}
+      className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
       style={{ background: 'var(--panel)', border: `1px solid ${hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog } from 'electron'
+import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard } from 'electron'
 import { join, basename, dirname } from 'path'
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
@@ -250,7 +250,18 @@ function onClipSaved(clip: { path: string; duration: number }) {
 
 // Single save path for the hotkey, the tray and the renderer, so the disk check
 // and the in-progress signal cannot be skipped by one caller.
-async function saveClipNow(): Promise<{ path?: string; duration?: number; error?: string }> {
+// Mashing the clip key is exactly what people do when something good happens, and
+// two saves in the same second used to open two sink writers on the same path.
+// Coalesce instead: a second press while one is in flight returns that same save.
+let saveInFlight: Promise<{ path?: string; duration?: number; error?: string }> | null = null
+
+function saveClipNow(): Promise<{ path?: string; duration?: number; error?: string }> {
+  if (saveInFlight) return saveInFlight
+  saveInFlight = runSaveClip().finally(() => { saveInFlight = null })
+  return saveInFlight
+}
+
+async function runSaveClip(): Promise<{ path?: string; duration?: number; error?: string }> {
   if (!captureAddon) return { error: 'Capture engine not available' }
   if (!isRecording) return { error: 'Replay buffer is not running' }
 
@@ -680,6 +691,30 @@ function setupIPC() {
     shell.showItemInFolder(filePath)
   })
 
+  // Native OS drag, so a clip can be dropped straight into Discord. Must be
+  // startDrag on the sender's webContents — an ipcMain.handle reply cannot start
+  // a drag, so this is `on`, not `handle`.
+  ipcMain.on('start-clip-drag', (event, filePath: string) => {
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return
+    const thumb = nativeImage.createFromPath(
+      resource(`assets/icons/${settings.theme}.png`, `assets/icons/${settings.theme}.png`))
+    event.sender.startDrag({ file: filePath, icon: thumb.resize({ width: 64, height: 64 }) })
+  })
+
+  // Copy as a file (not a path) so Ctrl+V in Explorer or Discord pastes the clip.
+  // CF_HDROP is not exposed by Electron, but Windows also accepts the shell's
+  // "FileNameW" format, which is a single null-terminated UTF-16 path.
+  ipcMain.handle('copy-clip-file', (_event, filePath: string) => {
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return false
+    try {
+      clipboard.writeBuffer('FileNameW', Buffer.from(`${filePath}\0`, 'ucs2'))
+      return true
+    } catch (error) {
+      console.warn('Could not copy clip to clipboard', error)
+      return false
+    }
+  })
+
   // ── Settings ──
   ipcMain.handle('get-settings', () => ({ ...settings }))
   ipcMain.handle('set-settings', (_event, partial: Partial<Settings>) => {
@@ -779,6 +814,21 @@ function registerHotkeys(): boolean {
 }
 
 // ── App Lifecycle ─────────────────────────────────────────────────────────────
+
+// The window hides to tray on close, so clicking the shortcut again is the most
+// natural thing a user does — and without this it starts a SECOND instance with
+// its own capture thread, encoder and settings writer, whose hotkey registration
+// then fails, leaving the window you are looking at unable to clip.
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) createWindow()
+    mainWindow?.show()
+    if (mainWindow?.isMinimized()) mainWindow.restore()
+    mainWindow?.focus()
+  })
+}
 
 app.on('ready', () => {
   loadSettings()
