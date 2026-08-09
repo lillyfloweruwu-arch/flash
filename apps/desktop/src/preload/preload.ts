@@ -14,6 +14,7 @@ export interface ClipInfo {
 export interface Settings {
   clipsFolder: string
   theme: string
+  hotkey: string
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -52,6 +53,7 @@ contextBridge.exposeInMainWorld('flash', {
 
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
+  getHotkeyStatus: () => ipcRenderer.invoke('hotkey-status'),
   setSettings: (partial: Partial<Settings>) => ipcRenderer.invoke('set-settings', partial),
   pickClipsFolder: () => ipcRenderer.invoke('pick-clips-folder'),
 
@@ -98,6 +100,7 @@ export type FlashAPI = {
   onHotkeyClip: (callback: () => void) => void
   onClipSavedRefresh: (callback: () => void) => void
   getSettings: () => Promise<Settings>
+  getHotkeyStatus: () => Promise<{ hotkey: string; registered: boolean }>
   setSettings: (partial: Partial<Settings>) => Promise<Settings>
   pickClipsFolder: () => Promise<string | null>
   onNavigate: (callback: (page: string) => void) => void

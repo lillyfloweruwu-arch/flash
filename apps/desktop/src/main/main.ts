@@ -9,6 +9,7 @@ import { getTheme } from '../shared/themes'
 const DEFAULTS = {
   clipsFolder: join(app.getPath('videos'), 'Flash'),
   theme: 'blood',
+  hotkey: 'F8',
   quality: '1080p 60fps',
   bufferLength: 30,
   audioCapture: true,
@@ -46,6 +47,36 @@ function parseQuality(quality: string) {
   const fps = match ? Number(match[2]) : 60
   const bitrateKbps = Math.round((height * (height * 16 / 9) * fps * 0.09) / 1000)
   return { height, fps, bitrateKbps }
+}
+
+// Repaints the tray, taskbar and shortcut icons to match the active theme.
+// Shortcuts only exist in an installed build, so this is a no-op in dev.
+function applyThemeIcons() {
+  const png = resource(`assets/icons/${settings.theme}.png`, `assets/icons/${settings.theme}.png`)
+  const ico = resource(`assets/icons/${settings.theme}.ico`, `assets/icons/${settings.theme}.ico`)
+  if (!existsSync(png)) return
+
+  const image = nativeImage.createFromPath(png)
+  tray?.setImage(image.resize({ width: 16, height: 16 }))
+  mainWindow?.setIcon(image)
+
+  if (!app.isPackaged || !existsSync(ico)) return
+  const shortcuts = [
+    join(app.getPath('desktop'), 'Flash.lnk'),
+    join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs/Flash.lnk'),
+  ]
+  for (const link of shortcuts) {
+    if (!existsSync(link)) continue
+    // ponytail: Explorer caches shortcut icons, so a changed theme can take a
+    // refresh (or a relogin) to show up on the desktop. Call SHChangeNotify via
+    // a native module if that ever becomes annoying enough to matter.
+    // 'update' still requires the full details object, so read the existing
+    // shortcut and change only the icon.
+    try {
+      const existing = shell.readShortcutLink(link)
+      shell.writeShortcutLink(link, 'update', { ...existing, icon: ico, iconIndex: 0 })
+    } catch (error) { console.warn(`Could not update shortcut icon at ${link}`, error) }
+  }
 }
 
 function applyQuality() {
@@ -320,9 +351,8 @@ function playClipSound() {
 // ── Tray ──────────────────────────────────────────────────────────────────────
 
 function createTray() {
-  const iconPath = resource('assets/icon.png', 'assets/icon.png')
-  const icon = nativeImage.createFromPath(iconPath)
-  tray = new Tray(icon)
+  // Placeholder image only — applyThemeIcons() swaps in the themed one.
+  tray = new Tray(nativeImage.createFromPath(resource('assets/icon.png', 'assets/icon.png')))
   updateTrayMenu()
   tray.setToolTip('Flash — Game Clipper')
   tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus() })
@@ -460,8 +490,11 @@ function setupIPC() {
     }
     if (partial.quality !== undefined) applyQuality()
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
+    if (partial.theme !== undefined) applyThemeIcons()
+    if (partial.hotkey !== undefined) registerHotkeys()
     return { ...settings }
   })
+  ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, registered: hotkeyRegistered }))
   ipcMain.handle('pick-clips-folder', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, {
@@ -502,18 +535,29 @@ function setupIPC() {
 
 // ── Hotkeys ───────────────────────────────────────────────────────────────────
 
-function registerHotkeys() {
-  globalShortcut.register('F8', () => {
-    mainWindow?.webContents.send('hotkey-clip')
-    if (!captureAddon || !isRecording) {
-      // Don't crash — just ignore if not recording
-      console.log('F8 pressed but replay buffer not active')
-      return
-    }
-    captureAddon.saveClip()
-      .then(onClipSaved)
-      .catch((error) => console.error('Failed to save clip via F8', error))
-  })
+// True if the accelerator was claimed. Another app (or a game) holding the same
+// key makes this false, which the UI surfaces rather than failing silently.
+let hotkeyRegistered = false
+
+function registerHotkeys(): boolean {
+  globalShortcut.unregisterAll()
+  try {
+    hotkeyRegistered = globalShortcut.register(settings.hotkey, () => {
+      mainWindow?.webContents.send('hotkey-clip')
+      if (!captureAddon || !isRecording) {
+        console.log(`${settings.hotkey} pressed but replay buffer not active`)
+        return
+      }
+      captureAddon.saveClip()
+        .then(onClipSaved)
+        .catch((error) => console.error('Failed to save clip via hotkey', error))
+    })
+  } catch {
+    hotkeyRegistered = false  // malformed accelerator
+  }
+  if (!hotkeyRegistered) console.warn(`Could not register hotkey ${settings.hotkey} — already taken`)
+  updateTrayMenu()
+  return hotkeyRegistered
 }
 
 // ── App Lifecycle ─────────────────────────────────────────────────────────────
@@ -542,6 +586,7 @@ app.on('ready', () => {
 
   createWindow()
   createTray()
+  applyThemeIcons()
   setupIPC()
   registerHotkeys()
   startGameDetection()

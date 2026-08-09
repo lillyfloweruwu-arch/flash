@@ -10,6 +10,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",
+    // Self-checks run straight through node's type stripping, which requires the
+    // .ts extension on relative imports.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/renderer/*"]

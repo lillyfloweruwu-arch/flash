@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
+import { toAccelerator } from '../shared/accelerator'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -17,6 +18,7 @@ interface Clip {
 interface Settings {
   clipsFolder: string
   theme: string
+  hotkey: string
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -255,13 +257,14 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
 
 // ── TopBar ─────────────────────────────────────────────────────────────────────
 
-function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGame, captureAvailable }: {
+function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGame, captureAvailable, hotkey }: {
   active: string
   setActive: (c: string) => void
   isRecording: boolean
   onToggleRecording: () => void
   detectedGame: string | null
   captureAvailable: boolean
+  hotkey: string
 }) {
   return (
     <header className="flex items-center shrink-0 px-4 titlebar-drag" style={{ height: 48, background: 'var(--panel)', borderBottom: '1px solid var(--edge-soft)' }}>
@@ -305,7 +308,7 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
           </span>
         </button>
 
-        <kbd style={{ fontSize: 11, color: 'var(--muted-3)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 4, padding: '2px 6px' }}>F8</kbd>
+        <kbd style={{ fontSize: 11, color: 'var(--muted-3)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 4, padding: '2px 6px' }}>{hotkey}</kbd>
 
         <WindowControls />
       </div>
@@ -414,12 +417,14 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable }: {
+function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength }: {
   clips: Clip[]
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
   isRecording: boolean
   captureAvailable: boolean
+  hotkey: string
+  bufferLength: number
 }) {
   const [sort, setSort] = useState<'Recent' | 'Longest' | 'Largest'>('Recent')
 
@@ -452,8 +457,8 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
             {!captureAvailable
               ? 'Capture engine unavailable. Check that the native addon is built.'
               : isRecording
-                ? <>Replay buffer is running. Press <kbd style={{ background: 'var(--field)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '1px 6px', color: 'var(--accent)', fontSize: 12 }}>F8</kbd> to save the last {30} seconds.</>
-                : 'Click the IDLE badge in the top bar to start the replay buffer, then press F8 to clip.'}
+                ? <>Replay buffer is running. Press <kbd style={{ background: 'var(--field)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '1px 6px', color: 'var(--accent)', fontSize: 12 }}>{hotkey}</kbd> to save the last {bufferLength} seconds.</>
+                : `Click the IDLE badge in the top bar to start the replay buffer, then press ${hotkey} to clip.`}
           </p>
         </div>
       ) : (
@@ -464,6 +469,46 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
         </div>
       )}
     </div>
+  )
+}
+
+// ── Hotkey Input ──────────────────────────────────────────────────────────────
+
+function HotkeyInput({ value, registered, onChange }: {
+  value: string
+  registered: boolean
+  onChange: (accelerator: string) => void
+}) {
+  const [listening, setListening] = useState(false)
+
+  useEffect(() => {
+    if (!listening) return
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') { setListening(false); return }
+      const accelerator = toAccelerator(e)
+      if (!accelerator) return   // keep listening through bare modifiers
+      onChange(accelerator)
+      setListening(false)
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [listening, onChange])
+
+  const failed = !registered && !listening
+  return (
+    <button onClick={() => setListening(l => !l)}
+      title={failed ? 'Another program already owns this key — pick a different one' : 'Click, then press a key'}
+      className="px-2.5 py-1 rounded transition-all"
+      style={{
+        fontSize: 11, minWidth: 96,
+        color: listening ? 'var(--fg)' : failed ? 'var(--alert)' : 'var(--accent)',
+        background: listening ? 'var(--field)' : failed ? 'transparent' : 'var(--accent-wash)',
+        border: `1px solid ${listening ? 'var(--accent)' : failed ? 'var(--alert)' : 'var(--accent-line)'}`,
+      }}>
+      {listening ? 'Press a key…' : failed ? `${value} — in use` : value}
+    </button>
   )
 }
 
@@ -480,11 +525,12 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 // ── SettingsPanel ──────────────────────────────────────────────────────────────
 
-function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
+  hotkeyRegistered: boolean
   onOpenFolder: () => void
   onPickFolder: () => void
 }) {
@@ -536,8 +582,9 @@ function SettingsPanel({ settings, onChange, storage, encoder, onOpenFolder, onP
         </Card>
 
         <Card title="Capture">
-          <Row label="Hotkey">
-            <kbd style={{ fontSize: 11, color: 'var(--accent)', background: 'var(--accent-wash)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '2px 8px' }}>F8</kbd>
+          <Row label="Clip hotkey">
+            <HotkeyInput value={settings.hotkey} registered={hotkeyRegistered}
+              onChange={hotkey => onChange({ hotkey })} />
           </Row>
           <Row label="Quality">
             <select value={settings.quality} onChange={e => onChange({ quality: e.target.value })}
@@ -614,12 +661,13 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', theme: DEFAULT_THEME, quality: '1080p 60fps', bufferLength: 30,
+    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
   const [encoder, setEncoder] = useState('none')
   const [captureAvailable, setCaptureAvailable] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
+  const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
 
   // The theme is a data attribute on <html>; index.css keys every palette off it.
   useEffect(() => {
@@ -654,6 +702,11 @@ export default function App() {
     const updated = await window.flash.setSettings(partial)
     setSettings(updated)
     if (partial.clipsFolder) refreshClips()
+    // A rebind can fail if another program already owns the key.
+    if (partial.hotkey) {
+      const status = await window.flash.getHotkeyStatus()
+      setHotkeyRegistered(status.registered)
+    }
   }, [refreshClips])
 
   // Confirmation lives here so ClipCard and ClipPlayer both get the same dialog
@@ -684,6 +737,7 @@ export default function App() {
     window.flash.onNavigate(setActive)
     window.flash.getRecordingState().then(setIsRecording)
     window.flash.getSettings().then(setSettings)
+    window.flash.getHotkeyStatus().then(s => setHotkeyRegistered(s.registered))
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
     window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
     window.flash.onGameDetected(setDetectedGame)
@@ -705,6 +759,7 @@ export default function App() {
         active={active} setActive={setActive}
         isRecording={isRecording} onToggleRecording={toggleRecording}
         detectedGame={detectedGame} captureAvailable={captureAvailable}
+        hotkey={settings.hotkey}
       />
       <div className="flex flex-1 overflow-hidden">
         {active !== 'Settings' && (
@@ -717,6 +772,7 @@ export default function App() {
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
+              hotkeyRegistered={hotkeyRegistered}
               onOpenFolder={() => window.flash?.openClipsFolder()}
               onPickFolder={async () => {
                 const folder = await window.flash?.pickClipsFolder()
@@ -731,6 +787,7 @@ export default function App() {
               onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}
               onDeleteClip={deleteClip}
               isRecording={isRecording} captureAvailable={captureAvailable}
+              hotkey={settings.hotkey} bufferLength={settings.bufferLength}
             />
           )}
         </main>
