@@ -16,6 +16,8 @@ export interface Settings {
   theme: string
   hotkey: string
   displayId: number
+  overlay: boolean
+  overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   quality: string
   bufferLength: number
   audioCapture: boolean

@@ -12,6 +12,8 @@ const DEFAULTS = {
   theme: 'blood',
   hotkey: 'F8',
   displayId: 0,
+  overlay: true,
+  overlayPosition: 'top-left' as 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
   quality: '1080p 60fps',
   bufferLength: 30,
   audioCapture: true,
@@ -254,15 +256,18 @@ async function saveClipNow(): Promise<{ path?: string; duration?: number; error?
 
   // Muxing a long clip takes real time; without this the hotkey feels dead.
   mainWindow?.webContents.send('clip-save-state', { saving: true })
+  updateOverlay(true)
   try {
     const clip = await captureAddon.saveClip()
     onClipSaved(clip)
     mainWindow?.webContents.send('clip-save-state', { saving: false })
+    updateOverlay()
     return { path: clip.path, duration: clip.duration }
   } catch (error: any) {
     const message = error?.message || 'Failed to save clip'
     console.error('Failed to save clip', error)
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
+    updateOverlay()
     return { error: message }
   }
 }
@@ -320,6 +325,7 @@ function startGameDetection() {
         catch (error) { console.warn('Could not target game audio', error) }
       }
       mainWindow?.webContents.send('game-detected', currentGame)
+      updateOverlay()
     }
   }
   poll()
@@ -411,6 +417,83 @@ function playClipSound() {
   if (!settings.notifications) return
   const soundPath = resource('assets/sounds/clip-saved.wav', 'assets/sounds/clip-saved.wav')
   mainWindow?.webContents.send('play-clip-sound', soundPath)
+}
+
+// ── In-Game Overlay ───────────────────────────────────────────────────────────
+
+// Deliberately NOT a DirectX/Vulkan hook. Injecting into a game's render loop is
+// what kernel anti-cheat (Vanguard, EAC, BattlEye) flags, and a false positive
+// costs real accounts. This is our own click-through window composited by DWM:
+// it never touches the game process. The tradeoff is that it cannot draw over
+// true exclusive-fullscreen — borderless and windowed are fine.
+let overlayWindow: BrowserWindow | null = null
+
+function overlayBounds() {
+  const display = screen.getPrimaryDisplay().workArea
+  const [w, h, pad] = [188, 40, 16]
+  const right = settings.overlayPosition.endsWith('right')
+  const bottom = settings.overlayPosition.startsWith('bottom')
+  return {
+    width: w, height: h,
+    x: right ? display.x + display.width - w - pad : display.x + pad,
+    y: bottom ? display.y + display.height - h - pad : display.y + pad,
+  }
+}
+
+function createOverlay() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return
+  overlayWindow = new BrowserWindow({
+    ...overlayBounds(),
+    frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true,
+    resizable: false, focusable: false, show: false, hasShadow: false, type: 'toolbar',
+  })
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  overlayWindow.setIgnoreMouseEvents(true, { forward: true })
+
+  const t = getTheme(settings.theme)
+  const html = `<!DOCTYPE html><html><head><style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Segoe UI Variable Display','Segoe UI',system-ui,sans-serif;background:transparent;overflow:hidden}
+    .pill{display:flex;align-items:center;gap:9px;padding:10px 14px;border-radius:10px;
+      background:${t.panel}e0;border:1px solid ${t.edge};backdrop-filter:blur(12px);
+      opacity:0;transition:opacity .25s ease}
+    .pill.on{opacity:1}
+    .dot{width:7px;height:7px;border-radius:50%;background:${t.accent};flex-shrink:0}
+    .dot.live{animation:blink 1.4s ease-in-out infinite}
+    .dot.idle{background:${t.muted}}
+    .label{font-size:11px;font-weight:600;color:${t.fg};letter-spacing:.02em}
+    .game{font-size:11px;color:${t.muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+  </style></head><body>
+    <div class="pill" id="pill"><div class="dot" id="dot"></div>
+      <span class="label" id="label">REC</span><span class="game" id="game"></span></div>
+    <script>
+      window.setState = (s) => {
+        document.getElementById('pill').className = 'pill' + (s.visible ? ' on' : '')
+        document.getElementById('dot').className = 'dot ' + (s.recording ? 'live' : 'idle')
+        document.getElementById('label').textContent = s.saving ? 'SAVING' : s.recording ? 'REC' : 'IDLE'
+        document.getElementById('game').textContent = s.game || ''
+      }
+    </script>
+  </body></html>`
+  overlayWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  overlayWindow.once('ready-to-show', () => { overlayWindow?.showInactive(); updateOverlay() })
+}
+
+function destroyOverlay() {
+  if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close()
+  overlayWindow = null
+}
+
+function updateOverlay(saving = false) {
+  if (!settings.overlay) { destroyOverlay(); return }
+  if (!overlayWindow || overlayWindow.isDestroyed()) { createOverlay(); return }
+  overlayWindow.setBounds(overlayBounds())
+  overlayWindow.setAlwaysOnTop(true, 'screen-saver')
+  // Only worth showing while a game is up — a permanent desktop badge is clutter.
+  const state = { visible: !!currentGame || saving, recording: isRecording, game: currentGame, saving }
+  overlayWindow.webContents.executeJavaScript(`window.setState(${JSON.stringify(state)})`).catch(() => {})
 }
 
 // ── Tray ──────────────────────────────────────────────────────────────────────
@@ -548,7 +631,8 @@ function setupIPC() {
     }
     if (partial.quality !== undefined) applyQuality()
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
-    if (partial.theme !== undefined) applyThemeIcons()
+    if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
+    if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
     if (partial.hotkey !== undefined) registerHotkeys()
     if (partial.displayId !== undefined) {
       try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
@@ -642,6 +726,7 @@ app.on('ready', () => {
   createWindow()
   createTray()
   applyThemeIcons()
+  updateOverlay()
   setupIPC()
   registerHotkeys()
   startGameDetection()

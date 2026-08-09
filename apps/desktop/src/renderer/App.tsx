@@ -28,6 +28,8 @@ interface Settings {
   theme: string
   hotkey: string
   displayId: number
+  overlay: boolean
+  overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -666,8 +668,25 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
           <Row label="Clip saved notification">
             <Toggle on={settings.notifications} onChange={() => onChange({ notifications: !settings.notifications })} />
           </Row>
+          <Row label="In-game overlay">
+            <Toggle on={settings.overlay} onChange={() => onChange({ overlay: !settings.overlay })} />
+          </Row>
+          {settings.overlay && (
+            <Row label="Overlay corner">
+              <select value={settings.overlayPosition} onChange={e => onChange({ overlayPosition: e.target.value as Settings['overlayPosition'] })}
+                style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '4px 8px' }}>
+                <option value="top-left">Top left</option>
+                <option value="top-right">Top right</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-right">Bottom right</option>
+              </select>
+            </Row>
+          )}
           <p style={{ fontSize: 11, color: 'var(--muted-3)', paddingTop: 12, lineHeight: 1.5 }}>
-            Shows a popup in the top-left corner and plays a sound when a clip is saved.
+            The overlay shows recording status while a game is running, and draws over
+            borderless and windowed games. It does not hook into the game, so it is safe
+            with anti-cheat — but for the same reason it cannot draw over true
+            exclusive-fullscreen. Switch a game to borderless if you do not see it.
           </p>
         </Card>
 
@@ -718,7 +737,7 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', displayId: 0,
+    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', displayId: 0, overlay: true, overlayPosition: 'top-left',
     quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
