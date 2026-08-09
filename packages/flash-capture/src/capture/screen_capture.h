@@ -58,6 +58,8 @@ public:
 
     // Query state
     bool IsCapturing() const { return capturing_.load(); }
+    bool IsHealthy() const { return captureHealthy_.load(); }
+    std::string GetCaptureError() const;
     uint32_t GetWidth() const { return width_; }
     uint32_t GetHeight() const { return height_; }
     uint32_t GetOutputWidth() const { return outputWidth_; }
@@ -73,9 +75,11 @@ private:
     bool CreateDuplication();
     bool CreateFrameResources();
     bool RecreateDuplication();
+    void SetCaptureError(const std::string& error);
     void DeliverFrame(ID3D11Texture2D* desktopTexture, int64_t timestampUs);
 
     std::atomic<bool> capturing_{false};
+    std::atomic<bool> captureHealthy_{false};
     std::thread captureThread_;
     FrameCallback callback_;
     uint32_t targetFps_ = 60;
@@ -85,6 +89,8 @@ private:
     uint32_t outputHeight_ = 0;
     uint32_t displayId_ = 0;
     std::mutex stopMutex_;
+    mutable std::mutex statusMutex_;
+    std::string captureError_;
     std::atomic<bool> gpuOutputEnabled_{true};
 
 #ifdef _WIN32
@@ -99,6 +105,7 @@ private:
     ComPtr<ID3D11Texture2D> nv12Texture_;
     ComPtr<ID3D11VideoProcessorOutputView> outputView_;
     ComPtr<ID3D11Texture2D> previousDesktopTexture_;
+    HRESULT lastDuplicationError_ = S_OK;
 #endif
 };
 

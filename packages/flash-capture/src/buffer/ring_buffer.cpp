@@ -21,7 +21,7 @@ void RingBuffer::Push(const EncodedPacket& packet) {
     }
 }
 
-std::vector<EncodedPacket> RingBuffer::Flush() {
+std::vector<EncodedPacket> RingBuffer::Flush(double windowSeconds) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (count_ == 0 || capacity_ == 0) return {};
 
@@ -39,8 +39,10 @@ std::vector<EncodedPacket> RingBuffer::Flush() {
     // The ring is sized in frames, but DXGI only delivers a frame when the screen
     // changes — on a static screen count_/fps_ spans far more than the requested
     // seconds. Trim by timestamp so the clip is the length the user asked for.
-    const int64_t cutoff = result.back().timestamp_us -
-        static_cast<int64_t>(maxDurationSeconds_) * 1000000;
+    const double duration = windowSeconds > 0.0
+        ? (std::min)(windowSeconds, static_cast<double>(maxDurationSeconds_))
+        : static_cast<double>(maxDurationSeconds_);
+    const int64_t cutoff = result.back().timestamp_us - static_cast<int64_t>(duration * 1000000.0);
     size_t start = 0;
     while (start < result.size() && result[start].timestamp_us < cutoff) start++;
 

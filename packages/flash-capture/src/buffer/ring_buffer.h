@@ -20,7 +20,7 @@ public:
 
     // Flush all buffered packets (for clip save)
     // Returns packets in chronological order
-    std::vector<EncodedPacket> Flush();
+    std::vector<EncodedPacket> Flush(double windowSeconds = 0.0);
 
     // Get current buffer duration in seconds
     float GetDurationSeconds() const;

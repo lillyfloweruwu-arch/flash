@@ -71,6 +71,17 @@ int main() {
         assert(buffer.Flush().empty());
     }
 
+    // A requested save window returns only the trailing span and still walks
+    // back to a decodable keyframe.
+    {
+        RingBuffer buffer(10, kFps);
+        PushFrames(buffer, 10 * kFps);
+        const auto clip = buffer.Flush(4.0);
+        const int64_t span = clip.back().timestamp_us - clip.front().timestamp_us;
+        assert(clip.front().isKeyframe);
+        assert(span > 3900000 && span < 4100000);
+    }
+
     // Status duration follows timestamps, not the configured/previous frame rate.
     {
         RingBuffer buffer(10, 60);

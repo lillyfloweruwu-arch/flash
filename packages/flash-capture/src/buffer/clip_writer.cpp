@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <mutex>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -72,7 +73,8 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     struct Shutdown { ~Shutdown() { MFShutdown(); } } shutdown;
     ComPtr<IMFSinkWriter> writer;
     std::wstring widePath = ToWide(outputPath);
-    Check(MFCreateSinkWriterFromURL(widePath.c_str(), nullptr, nullptr, &writer), "MFCreateSinkWriterFromURL");
+    try {
+        Check(MFCreateSinkWriterFromURL(widePath.c_str(), nullptr, nullptr, &writer), "MFCreateSinkWriterFromURL");
 
     DWORD videoStream = 0;
     ComPtr<IMFMediaType> videoType;
@@ -147,7 +149,13 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
             Check(writer->WriteSample(w.stream, sample.Get()), "WriteSample(audio)");
         }
     }
-    Check(writer->Finalize(), "IMFSinkWriter::Finalize");
+        Check(writer->Finalize(), "IMFSinkWriter::Finalize");
+    } catch (...) {
+        writer.Reset();
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+        throw;
+    }
     return meta;
 #else
     (void)audioPackets;
@@ -165,10 +173,22 @@ std::string ClipWriter::GenerateClipPath(const std::string& baseDir, const std::
     localtime_r(&time, &local);
 #endif
     char stamp[32];
-    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S.mp4", &local);
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &local);
     std::string safe = gameName.empty() ? "Unknown" : gameName;
     for (char& c : safe) if (c == '<' || c == '>' || c == ':' || c == '"' || c == '/' || c == '\\' || c == '|' || c == '?' || c == '*') c = '_';
-    return (std::filesystem::u8path(baseDir) / std::filesystem::u8path(safe) / stamp).string();
+    const auto dir = std::filesystem::u8path(baseDir) / std::filesystem::u8path(safe);
+    static std::mutex pathMutex;
+    static std::string reservedStamp;
+    static std::vector<std::filesystem::path> reserved;
+    std::lock_guard lock(pathMutex);
+    if (reservedStamp != stamp) { reservedStamp = stamp; reserved.clear(); }
+    for (uint32_t counter = 1;; ++counter) {
+        const auto name = std::string(stamp) + (counter == 1 ? "" : "_" + std::to_string(counter)) + ".mp4";
+        const auto candidate = dir / std::filesystem::u8path(name);
+        if (!std::filesystem::exists(candidate) && std::find(reserved.begin(), reserved.end(), candidate) == reserved.end()) {
+            reserved.push_back(candidate); return candidate.string();
+        }
+    }
 }
 
 } // namespace flash

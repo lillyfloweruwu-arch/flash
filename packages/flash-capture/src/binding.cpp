@@ -5,8 +5,10 @@
 #include "buffer/ring_buffer.h"
 #include "buffer/clip_writer.h"
 #include "quality.h"
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <deque>
 #include <filesystem>
 #include <memory>
@@ -140,6 +142,13 @@ Napi::Value StartReplayBuffer(const Napi::CallbackInfo& info) {
 }
 Napi::Value StopReplayBuffer(const Napi::CallbackInfo& info) { StopCapture(); return info.Env().Undefined(); }
 
+Napi::Value SetClipsDir(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "clips directory must be a non-empty string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    std::string path = info[0].As<Napi::String>().Utf8Value();
+    if (path.empty()) { Napi::TypeError::New(info.Env(), "clips directory must be a non-empty string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    std::lock_guard lock(g_stateMutex); g_clipsDir = std::move(path); return info.Env().Undefined();
+}
+
 class SaveClipWorker final : public Napi::AsyncWorker {
 public:
     SaveClipWorker(Napi::Env env, std::string path, std::string game, std::vector<EncodedPacket> video, std::vector<OwnedAudio> audio, uint32_t width, uint32_t height, uint32_t fps)
@@ -153,17 +162,35 @@ private:
 };
 
 Napi::Value SaveClip(const Napi::CallbackInfo& info) {
+    double windowSeconds = 0.0;
+    if (info.Length()) {
+        if (!info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "clip length must be a positive number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+        windowSeconds = info[0].As<Napi::Number>().DoubleValue();
+        if (!std::isfinite(windowSeconds) || windowSeconds <= 0.0) { Napi::TypeError::New(info.Env(), "clip length must be a positive number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    }
     std::vector<EncodedPacket> video; std::vector<OwnedAudio> audio; std::string path, game; uint32_t width, height, fps;
     { std::lock_guard lock(g_stateMutex); if (!g_ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-      if (g_awaitingFirstKeyframe && !g_previousVideo.empty()) { video = g_previousVideo; audio = g_previousAudio; width = g_previousWidth; height = g_previousHeight; fps = g_previousFps; }
-      else { video = g_ringBuffer->Flush(); audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); width = g_encodeWidth; height = g_encodeHeight; fps = g_quality.fps; }
+      if (g_awaitingFirstKeyframe && !g_previousVideo.empty()) {
+          width = g_previousWidth; height = g_previousHeight; fps = g_previousFps; audio = g_previousAudio;
+          if (windowSeconds > 0.0) { RingBuffer previous(g_bufferSeconds, fps); for (const auto& packet : g_previousVideo) previous.Push(packet); video = previous.Flush(windowSeconds); }
+          else video = g_previousVideo;
+      }
+      else { video = g_ringBuffer->Flush(windowSeconds); audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); width = g_encodeWidth; height = g_encodeHeight; fps = g_quality.fps; }
       if (video.empty()) { Napi::Error::New(info.Env(), "replay buffer is empty").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+      if (windowSeconds > 0.0) {
+          const int64_t startUs = video.front().timestamp_us, endUs = video.back().timestamp_us + 1000000 / fps;
+          audio.erase(std::remove_if(audio.begin(), audio.end(), [=](const OwnedAudio& packet) {
+              const int64_t packetEndUs = packet.timestampUs + (packet.sampleRate ? static_cast<int64_t>(packet.frameCount) * 1000000 / packet.sampleRate : 0);
+              return !packet.sampleRate || packet.timestampUs < startUs || packetEndUs > endUs;
+          }), audio.end());
+      }
       game = g_currentGame; path = ClipWriter::GenerateClipPath(g_clipsDir, game); }
     auto* worker = new SaveClipWorker(info.Env(), std::move(path), std::move(game), std::move(video), std::move(audio), width, height, fps); auto promise = worker->Promise(); worker->Queue(); return promise;
 }
 
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", g_screenCapture && g_screenCapture->IsCapturing());
+    result.Set("captureHealthy", g_screenCapture && g_screenCapture->IsHealthy()); result.Set("captureError", g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError);
     result.Set("bufferSeconds", g_ringBuffer ? g_ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", g_encoder ? g_encoder->GetName() : "none");
     result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); result.Set("fps", g_quality.fps); result.Set("bitrateKbps", g_quality.bitrateKbps); result.Set("displayId", g_displayId);
     result.Set("audioMode", g_audioCapture ? g_audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());
@@ -218,7 +245,7 @@ Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
-    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength));
+    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
     exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks)); return exports;
 }
 NODE_API_MODULE(flash_capture, Init)

@@ -1,5 +1,6 @@
 #include "screen_capture.h"
 #include "capture_clock.h"
+#include <algorithm>
 #include <chrono>
 
 #ifdef _WIN32
@@ -9,6 +10,12 @@
 #endif
 
 namespace flash {
+
+#ifdef _WIN32
+static bool IsDeviceLost(HRESULT hr) {
+    return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET;
+}
+#endif
 
 ScreenCapture::ScreenCapture() = default;
 ScreenCapture::~ScreenCapture() { Stop(); }
@@ -42,11 +49,15 @@ bool ScreenCapture::CreateDuplication() {
 #ifdef _WIN32
     ComPtr<IDXGIDevice> dxgiDevice;
     ComPtr<IDXGIAdapter> adapter;
-    if (FAILED(device_.As(&dxgiDevice)) || FAILED(dxgiDevice->GetAdapter(&adapter))) return false;
+    lastDuplicationError_ = device_.As(&dxgiDevice);
+    if (FAILED(lastDuplicationError_)) return false;
+    lastDuplicationError_ = dxgiDevice->GetAdapter(&adapter);
+    if (FAILED(lastDuplicationError_)) return false;
     ComPtr<IDXGIOutput> selected;
     uint32_t id = 0;
     ComPtr<IDXGIFactory1> factory;
-    if (FAILED(adapter->GetParent(IID_PPV_ARGS(&factory)))) return false;
+    lastDuplicationError_ = adapter->GetParent(IID_PPV_ARGS(&factory));
+    if (FAILED(lastDuplicationError_)) return false;
     for (UINT ai = 0; !selected; ++ai) {
         ComPtr<IDXGIAdapter1> candidate;
         if (factory->EnumAdapters1(ai, &candidate) == DXGI_ERROR_NOT_FOUND) break;
@@ -56,10 +67,11 @@ bool ScreenCapture::CreateDuplication() {
             if (id++ == displayId_) { selected = output; break; }
         }
     }
-    if (!selected) return false;
+    if (!selected) { lastDuplicationError_ = DXGI_ERROR_NOT_FOUND; return false; }
     ComPtr<IDXGIOutput1> output1;
     HRESULT duplicateHr = selected.As(&output1);
     if (SUCCEEDED(duplicateHr)) duplicateHr = output1->DuplicateOutput(device_.Get(), &duplication_);
+    lastDuplicationError_ = duplicateHr;
     if (FAILED(duplicateHr)) return false;
     DXGI_OUTDUPL_DESC desc{};
     duplication_->GetDesc(&desc);
@@ -141,6 +153,8 @@ bool ScreenCapture::Start(FrameCallback callback) {
     std::lock_guard lock(stopMutex_);
     if (capturing_.exchange(true)) return false;
     if (captureThread_.joinable()) captureThread_.join();
+    { std::lock_guard statusLock(statusMutex_); captureError_.clear(); }
+    captureHealthy_.store(true);
     callback_ = std::move(callback); captureThread_ = std::thread(&ScreenCapture::CaptureLoop, this); return true;
 }
 
@@ -148,15 +162,36 @@ void ScreenCapture::Stop() {
     std::lock_guard lock(stopMutex_);
     capturing_.store(false);
     if (captureThread_.joinable() && captureThread_.get_id() != std::this_thread::get_id()) captureThread_.join();
+    captureHealthy_.store(false);
 }
 
 bool ScreenCapture::RecreateDuplication() {
-    duplication_.Reset(); previousDesktopTexture_.Reset();
-    for (int attempt = 0; attempt < 10 && capturing_.load(); ++attempt) {
-        if (CreateDuplication()) return true;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const uint32_t previousWidth = width_, previousHeight = height_;
+    previousDesktopTexture_.Reset();
+    int backoffMs = 100;
+    while (capturing_.load()) {
+        duplication_.Reset();
+        if (CreateDuplication()) {
+            if ((width_ == previousWidth && height_ == previousHeight) || CreateFrameResources()) return true;
+        }
+        const HRESULT reason = device_ ? device_->GetDeviceRemovedReason() : lastDuplicationError_;
+        if (IsDeviceLost(lastDuplicationError_) || IsDeviceLost(reason)) {
+            SetCaptureError("D3D11 device was removed or reset; pipeline rebuild required");
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+        backoffMs = (std::min)(backoffMs * 2, 1000);
     }
     return false;
+}
+
+void ScreenCapture::SetCaptureError(const std::string& error) {
+    { std::lock_guard lock(statusMutex_); captureError_ = error; }
+    captureHealthy_.store(false);
+}
+
+std::string ScreenCapture::GetCaptureError() const {
+    std::lock_guard lock(statusMutex_); return captureError_;
 }
 
 void ScreenCapture::DeliverFrame(ID3D11Texture2D* texture, int64_t timestampUs) {
@@ -204,8 +239,11 @@ void ScreenCapture::CaptureLoop() {
         const int64_t timestamp = CaptureClockUs();
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             DeliverFrame(previousDesktopTexture_.Get(), timestamp);
-        } else if (hr == DXGI_ERROR_ACCESS_LOST) {
+        } else if (hr == DXGI_ERROR_ACCESS_LOST || hr == E_ACCESSDENIED) {
             if (!RecreateDuplication()) { capturing_.store(false); break; }
+        } else if (IsDeviceLost(hr)) {
+            SetCaptureError("D3D11 device was removed or reset; pipeline rebuild required");
+            capturing_.store(false); break;
         } else if (FAILED(hr)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
@@ -235,6 +273,7 @@ void ScreenCapture::CaptureLoop() {
     }
     if (timer) CloseHandle(timer);
 #endif
+    captureHealthy_.store(false);
 }
 
 } // namespace flash
