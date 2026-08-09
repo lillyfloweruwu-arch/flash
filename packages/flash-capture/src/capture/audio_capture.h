@@ -5,6 +5,9 @@
 #include <atomic>
 #include <thread>
 #include <string>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 #ifdef _WIN32
 #include <mmdeviceapi.h>
@@ -21,6 +24,15 @@ struct AudioData {
     uint32_t channels;    // Number of channels
     uint32_t sampleRate;  // Sample rate in Hz
     int64_t timestamp_us; // Microseconds since capture start
+    std::string sourceId;
+};
+
+struct AudioSourceInfo {
+    std::string id, kind, name;
+    bool available = false, enabled = true, active = false;
+    float gain = 1.0f;
+    uint32_t sampleRate = 0, channels = 0, processId = 0;
+    std::string error;
 };
 
 using AudioCallback = std::function<void(const AudioData& audio)>;
@@ -32,6 +44,7 @@ public:
 
     // Initialize WASAPI loopback capture (captures game audio)
     bool Initialize();
+    bool SetGameProcess(uint32_t processId);
 
     // Start capturing audio
     bool Start(AudioCallback callback);
@@ -40,24 +53,25 @@ public:
     void Stop();
 
     bool IsCapturing() const { return capturing_.load(); }
-    uint32_t GetSampleRate() const { return sampleRate_; }
-    uint32_t GetChannels() const { return channels_; }
+    std::vector<AudioSourceInfo> ListSources() const;
+    bool SetSource(const std::string& id, bool enabled, float gain);
+    std::string GetMode() const;
 
 private:
-    void CaptureLoop();
+    struct Source;
+    bool InitializeEndpoint(const std::shared_ptr<Source>& source, int flow);
+    bool InitializeProcess(const std::shared_ptr<Source>& source, uint32_t processId, bool include);
+    void BuildSources(uint32_t processId);
+    void CaptureLoop(std::shared_ptr<Source> source);
 
     std::atomic<bool> capturing_{false};
-    std::thread captureThread_;
     AudioCallback callback_;
-    uint32_t sampleRate_ = 48000;
-    uint32_t channels_ = 2;
+    mutable std::mutex mutex_;
+    std::vector<std::shared_ptr<Source>> sources_;
+    std::string mode_ = "mixed";
 
 #ifdef _WIN32
     ComPtr<IMMDeviceEnumerator> enumerator_;
-    ComPtr<IMMDevice> device_;
-    ComPtr<IAudioClient> audioClient_;
-    ComPtr<IAudioCaptureClient> captureClient_;
-    HANDLE audioEvent_ = nullptr;
 #endif
 };
 

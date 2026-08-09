@@ -71,6 +71,15 @@ int main() {
         assert(buffer.Flush().empty());
     }
 
+    // Status duration follows timestamps, not the configured/previous frame rate.
+    {
+        RingBuffer buffer(10, 60);
+        for (int i = 0; i < 6; ++i) {
+            EncodedPacket packet; packet.timestamp_us = i * 200000; packet.isKeyframe = true; buffer.Push(packet);
+        }
+        assert(buffer.GetDurationSeconds() > 0.99f && buffer.GetDurationSeconds() < 1.01f);
+    }
+
     std::puts("ring_buffer: ok");
     return 0;
 }

@@ -1,4 +1,5 @@
 #include "clip_writer.h"
+#include "audio_tracks.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -62,8 +63,8 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     meta.timestamp = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const int64_t baseUs = videoPackets.front().timestamp_us;
-    const int64_t endUs = std::max(videoPackets.back().timestamp_us,
-        audioPackets.empty() ? baseUs : audioPackets.back().timestamp_us);
+    int64_t endUs = videoPackets.back().timestamp_us;
+    for (const auto& packet : audioPackets) endUs = (std::max)(endUs, packet.timestamp_us);
     meta.durationSeconds = static_cast<uint32_t>(std::max<int64_t>(0, endUs - baseUs + 999999) / 1000000);
 
 #ifdef _WIN32
@@ -85,50 +86,65 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     Check(writer->AddStream(videoType.Get(), &videoStream), "AddStream(video)");
     Check(writer->SetInputMediaType(videoStream, videoType.Get(), nullptr), "SetInputMediaType(video)");
 
-    DWORD audioStream = 0;
-    bool hasAudio = !audioPackets.empty();
-    uint32_t sampleRate = hasAudio ? audioPackets.front().sampleRate : 48000;
-    uint32_t channels = hasAudio ? audioPackets.front().channels : 2;
-    if (hasAudio) {
+    struct AudioStream { std::string_view id; DWORD index = 0; uint32_t sampleRate = 0, channels = 0; bool present = false; };
+    std::array<AudioStream, 3> audioStreams{};
+    for (size_t i = 0; i < kAudioTrackOrder.size(); ++i) {
+        audioStreams[i].id = kAudioTrackOrder[i];
+        auto first = std::find_if(audioPackets.begin(), audioPackets.end(), [&](const AudioData& p) { return p.sourceId == kAudioTrackOrder[i]; });
+        if (first == audioPackets.end()) continue;
+        auto& stream = audioStreams[i]; stream.present = true; stream.sampleRate = first->sampleRate; stream.channels = first->channels;
         ComPtr<IMFMediaType> aacType, pcmType;
         Check(MFCreateMediaType(&aacType), "MFCreateMediaType(AAC)");
         aacType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
         aacType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
-        aacType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels);
-        aacType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sampleRate);
+        aacType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, stream.channels);
+        aacType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, stream.sampleRate);
         aacType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 24000);
         aacType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 16);
         aacType->SetUINT32(MF_MT_AAC_AUDIO_PROFILE_LEVEL_INDICATION, 0x29);
-        Check(writer->AddStream(aacType.Get(), &audioStream), "AddStream(AAC)");
+        Check(writer->AddStream(aacType.Get(), &stream.index), "AddStream(AAC)");
         Check(MFCreateMediaType(&pcmType), "MFCreateMediaType(float PCM)");
         pcmType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
         pcmType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_Float);
-        pcmType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels);
-        pcmType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sampleRate);
+        pcmType->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, stream.channels);
+        pcmType->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, stream.sampleRate);
         pcmType->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, 32);
-        pcmType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, channels * sizeof(float));
-        pcmType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, sampleRate * channels * sizeof(float));
-        Check(writer->SetInputMediaType(audioStream, pcmType.Get(), nullptr), "SetInputMediaType(float PCM)");
+        pcmType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, stream.channels * sizeof(float));
+        pcmType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, stream.sampleRate * stream.channels * sizeof(float));
+        Check(writer->SetInputMediaType(stream.index, pcmType.Get(), nullptr), "SetInputMediaType(float PCM)");
     }
     Check(writer->BeginWriting(), "BeginWriting");
 
-    size_t vi = 0, ai = 0;
-    while (vi < videoPackets.size() || ai < audioPackets.size()) {
-        const bool writeVideo = ai == audioPackets.size() ||
-            (vi < videoPackets.size() && videoPackets[vi].timestamp_us <= audioPackets[ai].timestamp_us);
-        if (writeVideo) {
-            const auto& p = videoPackets[vi++];
-            auto sample = MakeSample(p.data.data(), static_cast<DWORD>(p.data.size()),
-                std::max<int64_t>(0, p.timestamp_us - baseUs) * 10, 10000000LL / fps);
-            if (p.isKeyframe) sample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
-            Check(writer->WriteSample(videoStream, sample.Get()), "WriteSample(video)");
+    // IMFSinkWriter needs samples delivered in roughly increasing timestamp order
+    // ACROSS streams. Writing one stream to completion and then rewinding to t=0
+    // for the next makes it buffer the entire clip and stall, so collect every
+    // sample into one time-ordered schedule and write that.
+    struct Write { int64_t timeUs; DWORD stream; const EncodedPacket* video; const AudioData* audio; };
+    std::vector<Write> schedule;
+    schedule.reserve(videoPackets.size() + audioPackets.size());
+    for (const auto& p : videoPackets) schedule.push_back({p.timestamp_us, videoStream, &p, nullptr});
+    for (const auto& stream : audioStreams) if (stream.present) {
+        for (const auto& p : audioPackets) {
+            if (p.sourceId != stream.id || !p.samples || p.channels != stream.channels || p.sampleRate != stream.sampleRate) continue;
+            schedule.push_back({p.timestamp_us, stream.index, nullptr, &p});
+        }
+    }
+    // Stable so that samples sharing a timestamp keep video-before-audio order.
+    std::stable_sort(schedule.begin(), schedule.end(),
+        [](const Write& a, const Write& b) { return a.timeUs < b.timeUs; });
+
+    for (const auto& w : schedule) {
+        const LONGLONG time = std::max<int64_t>(0, w.timeUs - baseUs) * 10;
+        if (w.video) {
+            auto sample = MakeSample(w.video->data.data(), static_cast<DWORD>(w.video->data.size()),
+                time, 10000000LL / fps);
+            if (w.video->isKeyframe) sample->SetUINT32(MFSampleExtension_CleanPoint, TRUE);
+            Check(writer->WriteSample(w.stream, sample.Get()), "WriteSample(video)");
         } else {
-            const auto& p = audioPackets[ai++];
-            if (!p.samples || p.channels != channels || p.sampleRate != sampleRate) continue;
-            const DWORD bytes = p.frameCount * p.channels * sizeof(float);
-            auto sample = MakeSample(p.samples, bytes, std::max<int64_t>(0, p.timestamp_us - baseUs) * 10,
-                static_cast<LONGLONG>(p.frameCount) * 10000000LL / p.sampleRate);
-            Check(writer->WriteSample(audioStream, sample.Get()), "WriteSample(audio)");
+            const DWORD bytes = w.audio->frameCount * w.audio->channels * sizeof(float);
+            auto sample = MakeSample(w.audio->samples, bytes, time,
+                static_cast<LONGLONG>(w.audio->frameCount) * 10000000LL / w.audio->sampleRate);
+            Check(writer->WriteSample(w.stream, sample.Get()), "WriteSample(audio)");
         }
     }
     Check(writer->Finalize(), "IMFSinkWriter::Finalize");

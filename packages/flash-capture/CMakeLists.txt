@@ -22,6 +22,7 @@ if(WIN32)
     ole32
     uuid
     winmm
+    mmdevapi
   )
 endif()
 
@@ -91,4 +92,8 @@ add_executable(flash_quality_test EXCLUDE_FROM_ALL test/quality_test.cpp)
 if(MSVC)
   target_compile_options(flash_quality_test PRIVATE /EHsc)
   target_compile_definitions(flash_quality_test PRIVATE NOMINMAX)
+endif()
+add_executable(flash_audio_track_test EXCLUDE_FROM_ALL test/audio_track_test.cpp)
+if(MSVC)
+  target_compile_options(flash_audio_track_test PRIVATE /EHsc)
 endif()

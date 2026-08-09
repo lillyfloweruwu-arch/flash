@@ -60,8 +60,10 @@ std::vector<EncodedPacket> RingBuffer::Flush() {
 
 float RingBuffer::GetDurationSeconds() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (count_ == 0 || fps_ == 0) return 0.0f;
-    return static_cast<float>(count_) / static_cast<float>(fps_);
+    if (count_ < 2 || capacity_ == 0) return 0.0f;
+    const size_t oldest = count_ < capacity_ ? 0 : writePos_;
+    const size_t newest = (writePos_ + capacity_ - 1) % capacity_;
+    return static_cast<float>((std::max<int64_t>)(0, packets_[newest].timestamp_us - packets_[oldest].timestamp_us)) / 1000000.0f;
 }
 
 size_t RingBuffer::GetPacketCount() const {

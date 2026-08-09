@@ -19,10 +19,11 @@ struct MfHardwareEncoder::Impl {
 #ifdef _WIN32
     ComPtr<IMFTransform> transform; ComPtr<IMFMediaEventGenerator> events;
     ComPtr<IMFDXGIDeviceManager> manager; UINT resetToken = 0; MFT_OUTPUT_STREAM_INFO outputInfo{};
+    ComPtr<ID3D11DeviceContext> context;
     bool mfStarted = false; uint64_t frameIndex = 0;
     void Reset() {
         if (transform) { transform->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0); transform->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0); }
-        events.Reset(); transform.Reset(); manager.Reset(); initialized = false;
+        events.Reset(); transform.Reset(); manager.Reset(); context.Reset(); initialized = false;
         if (mfStarted) MFShutdown(); mfStarted = false;
     }
 #endif
@@ -98,6 +99,7 @@ bool MfHardwareEncoder::Initialize(const EncoderConfig& config) {
     if (!impl_->transform || FAILED(MFCreateDXGIDeviceManager(&impl_->resetToken, &impl_->manager)) ||
         FAILED(impl_->manager->ResetDevice(config.device, impl_->resetToken)) ||
         FAILED(impl_->transform->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, reinterpret_cast<ULONG_PTR>(impl_->manager.Get())))) { impl_->Reset(); return false; }
+    config.device->GetImmediateContext(&impl_->context);
     ComPtr<IMFMediaType> outType, inType; MFCreateMediaType(&outType); MFCreateMediaType(&inType);
     ConfigureType(outType.Get(), MFVideoFormat_H264, config); outType->SetUINT32(MF_MT_AVG_BITRATE, config.bitrate); outType->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Main);
     ConfigureType(inType.Get(), MFVideoFormat_NV12, config);
@@ -126,8 +128,11 @@ bool MfHardwareEncoder::EncodeFrame(const FrameData& frame, std::vector<EncodedP
         MediaEventType type = MEUnknown; event->GetType(&type);
         if (type == METransformHaveOutput) { if (!AppendOutput(impl_->transform.Get(), impl_->outputInfo, output)) return false; }
         else if (type == METransformNeedInput && !submitted) {
-            ComPtr<IMFMediaBuffer> buffer; ComPtr<IMFSample> sample;
-            if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), frame.texture, 0, FALSE, &buffer)) ||
+            D3D11_TEXTURE2D_DESC desc{}; frame.texture->GetDesc(&desc);
+            ComPtr<ID3D11Texture2D> inputTexture; ComPtr<IMFMediaBuffer> buffer; ComPtr<IMFSample> sample;
+            if (!impl_->context || FAILED(impl_->config.device->CreateTexture2D(&desc, nullptr, &inputTexture))) return false;
+            impl_->context->CopyResource(inputTexture.Get(), frame.texture);
+            if (FAILED(MFCreateDXGISurfaceBuffer(__uuidof(ID3D11Texture2D), inputTexture.Get(), 0, FALSE, &buffer)) ||
                 FAILED(MFCreateSample(&sample)) || FAILED(sample->AddBuffer(buffer.Get()))) return false;
             const LONGLONG duration = 10000000LL / impl_->config.fps, timestamp = frame.timestamp_us * 10;
             sample->SetSampleTime(timestamp); sample->SetSampleDuration(duration);

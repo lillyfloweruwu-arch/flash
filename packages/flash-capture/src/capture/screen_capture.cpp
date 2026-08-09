@@ -1,4 +1,5 @@
 #include "screen_capture.h"
+#include "capture_clock.h"
 #include <chrono>
 
 #ifdef _WIN32
@@ -139,6 +140,7 @@ bool ScreenCapture::Initialize(uint32_t targetFps, uint32_t outputWidth, uint32_
 bool ScreenCapture::Start(FrameCallback callback) {
     std::lock_guard lock(stopMutex_);
     if (capturing_.exchange(true)) return false;
+    if (captureThread_.joinable()) captureThread_.join();
     callback_ = std::move(callback); captureThread_ = std::thread(&ScreenCapture::CaptureLoop, this); return true;
 }
 
@@ -183,14 +185,13 @@ void ScreenCapture::DeliverFrame(ID3D11Texture2D* texture, int64_t timestampUs) 
 
 void ScreenCapture::CaptureLoop() {
     using clock = std::chrono::steady_clock;
-    const auto start = clock::now();
     const auto duration = std::chrono::microseconds(1000000 / targetFps_);
 #ifdef _WIN32
     while (capturing_.load()) {
         const auto frameStart = clock::now();
         ComPtr<IDXGIResource> resource; DXGI_OUTDUPL_FRAME_INFO info{};
         HRESULT hr = duplication_ ? duplication_->AcquireNextFrame(static_cast<UINT>(1000 / targetFps_), &info, &resource) : DXGI_ERROR_ACCESS_LOST;
-        const int64_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - start).count();
+        const int64_t timestamp = CaptureClockUs();
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             DeliverFrame(previousDesktopTexture_.Get(), timestamp);
         } else if (hr == DXGI_ERROR_ACCESS_LOST) {
