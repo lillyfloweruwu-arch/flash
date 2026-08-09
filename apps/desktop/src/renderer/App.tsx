@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 
@@ -15,10 +15,19 @@ interface Clip {
   createdAt: number
 }
 
+interface Display {
+  id: number
+  name: string
+  width: number
+  height: number
+  isPrimary: boolean
+}
+
 interface Settings {
   clipsFolder: string
   theme: string
   hotkey: string
+  displayId: number
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -257,7 +266,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
 
 // ── TopBar ─────────────────────────────────────────────────────────────────────
 
-function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGame, captureAvailable, hotkey }: {
+function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGame, captureAvailable, hotkey, saveState }: {
   active: string
   setActive: (c: string) => void
   isRecording: boolean
@@ -265,6 +274,7 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
   detectedGame: string | null
   captureAvailable: boolean
   hotkey: string
+  saveState: { saving: boolean; error?: string }
 }) {
   return (
     <header className="flex items-center shrink-0 px-4 titlebar-drag" style={{ height: 48, background: 'var(--panel)', borderBottom: '1px solid var(--edge-soft)' }}>
@@ -286,6 +296,22 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
       </nav>
 
       <div className="ml-auto flex items-center gap-3 titlebar-no-drag">
+        {saveState.saving && (
+          <div className="flex items-center gap-1.5 px-2 py-1 rounded-md"
+            style={{ background: 'var(--accent-wash)', border: '1px solid var(--accent-line)' }}>
+            <div className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--accent)', animation: 'pulse-red 0.8s ease-in-out infinite' }} />
+            <span style={{ fontSize: 11, color: 'var(--accent)' }}>Saving clip…</span>
+          </div>
+        )}
+        {saveState.error && !saveState.saving && (
+          <div className="px-2 py-1 rounded-md" title={saveState.error}
+            style={{ background: 'transparent', border: '1px solid var(--alert)', maxWidth: 280 }}>
+            <span style={{ fontSize: 11, color: 'var(--alert)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' }}>
+              {saveState.error}
+            </span>
+          </div>
+        )}
+
         {detectedGame && (
           <div className="flex items-center gap-1.5 px-2 py-1 rounded-md" style={{ background: 'var(--edge-soft)', border: '1px solid var(--edge-soft)' }}>
             <div className="w-1.5 h-1.5 rounded-full" style={{ background: 'var(--ok)' }} />
@@ -369,19 +395,37 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
 
 function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void; onDelete: () => void }) {
   const [hov, setHov] = useState(false)
+  const [visible, setVisible] = useState(false)
+  const cardRef = useRef<HTMLDivElement>(null)
+
+  // Each thumbnail is a real <video> decoding a frame off disk. Mounting one per
+  // clip means a library of 200 spins up 200 decoders at once, so hold the src
+  // back until the card is actually near the viewport.
+  useEffect(() => {
+    const node = cardRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect() } },
+      { rootMargin: '300px' },
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
 
   return (
-    <div className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
+    <div ref={cardRef} className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
       style={{ background: 'var(--panel)', border: `1px solid ${hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>
-        <video
-          src={`file://${clip.filePath.replace(/\\/g, '/')}#t=0.5`}
-          preload="metadata"
-          muted
-          className="w-full h-full object-cover"
-          style={{ pointerEvents: 'none' }}
-        />
+        {visible && (
+          <video
+            src={`file://${clip.filePath.replace(/\\/g, '/')}#t=0.5`}
+            preload="metadata"
+            muted
+            className="w-full h-full object-cover"
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
         <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)' }}>
           <span style={{ fontSize: 10, color: 'var(--muted)' }}>{clip.duration}</span>
         </div>
@@ -525,12 +569,13 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 // ── SettingsPanel ──────────────────────────────────────────────────────────────
 
-function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
   hotkeyRegistered: boolean
+  displays: Display[]
   onOpenFolder: () => void
   onPickFolder: () => void
 }) {
@@ -586,6 +631,18 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
             <HotkeyInput value={settings.hotkey} registered={hotkeyRegistered}
               onChange={hotkey => onChange({ hotkey })} />
           </Row>
+          {displays.length > 1 && (
+            <Row label="Capture display">
+              <select value={settings.displayId} onChange={e => onChange({ displayId: +e.target.value })}
+                style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '4px 8px' }}>
+                {displays.map(d => (
+                  <option key={d.id} value={d.id}>
+                    {`Display ${d.id + 1} — ${d.width}x${d.height}${d.isPrimary ? ' (primary)' : ''}`}
+                  </option>
+                ))}
+              </select>
+            </Row>
+          )}
           <Row label="Quality">
             <select value={settings.quality} onChange={e => onChange({ quality: e.target.value })}
               style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge-soft)', borderRadius: 6, padding: '4px 8px' }}>
@@ -661,18 +718,28 @@ export default function App() {
   const [clips, setClips] = useState<Clip[]>([])
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', quality: '1080p 60fps', bufferLength: 30,
+    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', displayId: 0,
+    quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
   const [encoder, setEncoder] = useState('none')
   const [captureAvailable, setCaptureAvailable] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
+  const [displays, setDisplays] = useState<Display[]>([])
+  const [saveState, setSaveState] = useState<{ saving: boolean; error?: string }>({ saving: false })
 
   // The theme is a data attribute on <html>; index.css keys every palette off it.
   useEffect(() => {
     document.documentElement.dataset.theme = settings.theme
   }, [settings.theme])
+
+  // Save errors are transient — clear them rather than leaving a stale banner.
+  useEffect(() => {
+    if (!saveState.error) return
+    const timer = setTimeout(() => setSaveState(s => ({ ...s, error: undefined })), 6000)
+    return () => clearTimeout(timer)
+  }, [saveState.error])
 
   const refreshClips = useCallback(async () => {
     if (!window.flash) return
@@ -738,6 +805,8 @@ export default function App() {
     window.flash.getRecordingState().then(setIsRecording)
     window.flash.getSettings().then(setSettings)
     window.flash.getHotkeyStatus().then(s => setHotkeyRegistered(s.registered))
+    window.flash.capture.listDisplays().then(setDisplays)
+    window.flash.capture.onSaveState(setSaveState)
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
     window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
     window.flash.onGameDetected(setDetectedGame)
@@ -759,7 +828,7 @@ export default function App() {
         active={active} setActive={setActive}
         isRecording={isRecording} onToggleRecording={toggleRecording}
         detectedGame={detectedGame} captureAvailable={captureAvailable}
-        hotkey={settings.hotkey}
+        hotkey={settings.hotkey} saveState={saveState}
       />
       <div className="flex flex-1 overflow-hidden">
         {active !== 'Settings' && (
@@ -772,7 +841,7 @@ export default function App() {
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
-              hotkeyRegistered={hotkeyRegistered}
+              hotkeyRegistered={hotkeyRegistered} displays={displays}
               onOpenFolder={() => window.flash?.openClipsFolder()}
               onPickFolder={async () => {
                 const folder = await window.flash?.pickClipsFolder()

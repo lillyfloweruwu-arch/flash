@@ -15,6 +15,7 @@ export interface Settings {
   clipsFolder: string
   theme: string
   hotkey: string
+  displayId: number
   quality: string
   bufferLength: number
   audioCapture: boolean
@@ -80,6 +81,10 @@ contextBridge.exposeInMainWorld('flash', {
     saveClip: () => ipcRenderer.invoke('capture-save-clip'),
     getStatus: () => ipcRenderer.invoke('capture-status'),
     setBufferLength: (seconds: number) => ipcRenderer.invoke('capture-set-buffer-length', seconds),
+    listDisplays: () => ipcRenderer.invoke('list-displays'),
+    onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => {
+      ipcRenderer.on('clip-save-state', (_event, state) => callback(state))
+    },
   },
 })
 
@@ -113,5 +118,15 @@ export type FlashAPI = {
     saveClip: () => Promise<{ path?: string; duration?: number; error?: string }>
     getStatus: () => Promise<{ recording: boolean; bufferSeconds: number; encoder: string; available: boolean }>
     setBufferLength: (seconds: number) => Promise<void>
+    listDisplays: () => Promise<Display[]>
+    onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => void
   }
+}
+
+export interface Display {
+  id: number
+  name: string
+  width: number
+  height: number
+  isPrimary: boolean
 }

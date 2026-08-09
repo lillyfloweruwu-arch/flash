@@ -2,6 +2,7 @@ import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, s
 import { join, basename, dirname } from 'path'
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
@@ -10,6 +11,7 @@ const DEFAULTS = {
   clipsFolder: join(app.getPath('videos'), 'Flash'),
   theme: 'blood',
   hotkey: 'F8',
+  displayId: 0,
   quality: '1080p 60fps',
   bufferLength: 30,
   audioCapture: true,
@@ -93,7 +95,7 @@ function ensureClipsFolder() {
 // ── Capture Addon ────────────────────────────────────────────────────────────
 
 type CaptureAddon = {
-  initialize(clipsDir: string): { error?: string }
+  initialize(clipsDir: string, displayId?: number): { error?: string }
   startReplayBuffer(): boolean
   stopReplayBuffer(): void
   saveClip(): Promise<{ path: string; duration: number }>
@@ -101,6 +103,16 @@ type CaptureAddon = {
   setCurrentGame(game: string): void
   setBufferLength(seconds: number): void
   setQuality?(options: { height: number; fps: number; bitrateKbps: number }): void
+  listDisplays?(): Display[]
+  setDisplay?(id: number): void
+}
+
+export interface Display {
+  id: number
+  name: string
+  width: number
+  height: number
+  isPrimary: boolean
 }
 
 let captureAddon: CaptureAddon | null = null
@@ -201,7 +213,22 @@ function pruneOldClips() {
   for (const clip of scanClips()) if (clip.createdAt < cutoff) deleteClip(clip.filePath)
 }
 
-// Both the F8 hotkey and the renderer's save button land here.
+// A 30s 1080p60 clip at 20 Mbps is ~75 MB. Refuse below a floor rather than
+// letting the buffer quietly fill the drive and corrupt the write mid-mux.
+const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+
+async function checkDiskSpace(): Promise<string | null> {
+  try {
+    const fs = await statfs(settings.clipsFolder)
+    const free = fs.bavail * fs.bsize
+    if (free < MIN_FREE_BYTES) {
+      return `Only ${(free / 1e9).toFixed(1)} GB free on the clips drive — need at least 2 GB`
+    }
+  } catch { /* unsupported filesystem: let the save attempt decide */ }
+  return null
+}
+
+// Both the hotkey and the renderer's save button land here.
 function onClipSaved(clip: { path: string; duration: number }) {
   try {
     writeFileSync(sidecarPath(clip.path),
@@ -210,6 +237,33 @@ function onClipSaved(clip: { path: string; duration: number }) {
   showClipNotification(clip.duration)
   playClipSound()
   mainWindow?.webContents.send('clip-saved-refresh')
+}
+
+// Single save path for the hotkey, the tray and the renderer, so the disk check
+// and the in-progress signal cannot be skipped by one caller.
+async function saveClipNow(): Promise<{ path?: string; duration?: number; error?: string }> {
+  if (!captureAddon) return { error: 'Capture engine not available' }
+  if (!isRecording) return { error: 'Replay buffer is not running' }
+
+  const diskError = await checkDiskSpace()
+  if (diskError) {
+    mainWindow?.webContents.send('clip-save-state', { saving: false, error: diskError })
+    return { error: diskError }
+  }
+
+  // Muxing a long clip takes real time; without this the hotkey feels dead.
+  mainWindow?.webContents.send('clip-save-state', { saving: true })
+  try {
+    const clip = await captureAddon.saveClip()
+    onClipSaved(clip)
+    mainWindow?.webContents.send('clip-save-state', { saving: false })
+    return { path: clip.path, duration: clip.duration }
+  } catch (error: any) {
+    const message = error?.message || 'Failed to save clip'
+    console.error('Failed to save clip', error)
+    mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
+    return { error: message }
+  }
 }
 
 function getStorageUsage(): { used: number; clips: number } {
@@ -437,17 +491,10 @@ function setupIPC() {
     mainWindow?.webContents.send('recording-state', isRecording)
   })
 
-  ipcMain.handle('capture-save-clip', async () => {
-    if (!captureAddon) return { error: 'Capture engine not available' }
-    if (!isRecording) return { error: 'Replay buffer not running — start recording first' }
-    try {
-      const clip = await captureAddon.saveClip()
-      onClipSaved(clip)
-      return { path: clip.path, duration: clip.duration }
-    } catch (error: any) {
-      console.error('Failed to save clip', error)
-      return { error: error.message || 'Failed to save clip' }
-    }
+  ipcMain.handle('capture-save-clip', () => saveClipNow())
+
+  ipcMain.handle('list-displays', () => {
+    try { return captureAddon?.listDisplays?.() ?? [] } catch { return [] }
   })
 
   ipcMain.handle('capture-status', () => {
@@ -492,6 +539,9 @@ function setupIPC() {
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
     if (partial.theme !== undefined) applyThemeIcons()
     if (partial.hotkey !== undefined) registerHotkeys()
+    if (partial.displayId !== undefined) {
+      try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
+    }
     return { ...settings }
   })
   ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, registered: hotkeyRegistered }))
@@ -544,13 +594,7 @@ function registerHotkeys(): boolean {
   try {
     hotkeyRegistered = globalShortcut.register(settings.hotkey, () => {
       mainWindow?.webContents.send('hotkey-clip')
-      if (!captureAddon || !isRecording) {
-        console.log(`${settings.hotkey} pressed but replay buffer not active`)
-        return
-      }
-      captureAddon.saveClip()
-        .then(onClipSaved)
-        .catch((error) => console.error('Failed to save clip via hotkey', error))
+      void saveClipNow()
     })
   } catch {
     hotkeyRegistered = false  // malformed accelerator
@@ -570,7 +614,7 @@ app.on('ready', () => {
 
   captureAddon = loadCaptureAddon()
   if (captureAddon) {
-    const status = captureAddon.initialize(settings.clipsFolder)
+    const status = captureAddon.initialize(settings.clipsFolder, settings.displayId)
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
     captureAddon.setBufferLength(settings.bufferLength)
