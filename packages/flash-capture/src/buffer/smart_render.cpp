@@ -206,6 +206,73 @@ void SeekReader(IMFSourceReader* reader, LONGLONG ticks) {
 
 } // namespace
 
+// One pass over every video sample. Throws nothing: a stream that stops early
+// yields whatever it managed to read, which is still a usable keyframe list.
+VideoScan ScanVideoStream(IMFSourceReader* reader, DWORD videoStream) {
+    VideoScan scan;
+    if (!reader) return scan;
+    for (;;) {
+        DWORD actual = 0, flags = 0;
+        LONGLONG time = 0;
+        ComPtr<IMFSample> sample;
+        if (FAILED(reader->ReadSample(videoStream, 0, &actual, &flags, &time, &sample))) break;
+        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
+        if (flags & (MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED |
+                     MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED)) break;
+        if (!sample) continue;
+        DWORD sampleBytes = 0;
+        if (SUCCEEDED(sample->GetTotalLength(&sampleBytes))) scan.bytes += sampleBytes;
+        scan.lastTimeUs = time / 10;
+        UINT32 cleanPoint = FALSE;
+        if (SUCCEEDED(sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) && cleanPoint)
+            scan.keyframesUs.push_back(time / 10);
+    }
+    return scan;
+}
+
+VideoScan ScanClipVideo(const std::string& path) {
+    VideoScan scan;
+    if (path.empty()) return scan;
+
+    // This is the one entry point here that opens its own reader rather than
+    // borrowing the trimmer's, so it has to start Media Foundation itself.
+    // Without this the reader never opens and the scan comes back empty.
+    struct MfScope {
+        MfScope() {
+            apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            started = SUCCEEDED(MFStartup(MF_VERSION, MFSTARTUP_FULL));
+        }
+        ~MfScope() {
+            if (started) MFShutdown();
+            if (SUCCEEDED(apartment)) CoUninitialize();
+        }
+        HRESULT apartment = E_FAIL;
+        bool started = false;
+    } mf;
+    if (!mf.started) return scan;
+    const int wideLength = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.data(),
+        static_cast<int>(path.size()), nullptr, 0);
+    if (wideLength <= 0) return scan;
+    std::wstring wide(static_cast<size_t>(wideLength), L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, path.data(),
+        static_cast<int>(path.size()), wide.data(), wideLength);
+
+    // Converters off: this only reads sample metadata, so decoding would be
+    // pure waste on what is already a full pass over the file.
+    ComPtr<IMFAttributes> attributes;
+    if (FAILED(MFCreateAttributes(&attributes, 2))) return scan;
+    attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, FALSE);
+    attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE);
+
+    ComPtr<IMFSourceReader> reader;
+    if (FAILED(MFCreateSourceReaderFromURL(wide.c_str(), attributes.Get(), &reader))) return scan;
+    reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE);
+    if (FAILED(reader->SetStreamSelection(
+            static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM), TRUE))) return scan;
+    return ScanVideoStream(reader.Get(),
+        static_cast<DWORD>(MF_SOURCE_READER_FIRST_VIDEO_STREAM));
+}
+
 bool RenderHeadFragment(IMFSourceReader* reader, IMFSinkWriter* writer,
                         DWORD videoStream, DWORD writerStream,
                         const SmartRenderPlan& plan, IMFMediaType* sourceType,

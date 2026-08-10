@@ -113,7 +113,15 @@ type CaptureAddon = {
     Promise<{ path: string; duration: number; actualStartSeconds?: number }>
   exportClip?(input: string, output: string, options: {
     maxBytes: number; maxHeight?: number; startSeconds?: number; endSeconds?: number
+    // Gains are keyed by track name so a caller cannot silence the wrong lane
+    // by miscounting. Omitting either leaves the export unchanged.
+    gains?: { game?: number; mic?: number; other?: number }
+    saturation?: number
   }): Promise<{ path: string; duration: number; width: number; height: number; bytes: number; bitrateKbps: number }>
+  decodeClipAudio?(input: string):
+    Promise<{ sampleRate: number; tracks: { id: string; samples: Float32Array }[] }>
+  getClipKeyframes?(input: string):
+    Promise<{ keyframesSec: number[]; durationSeconds: number; bitrateKbps: number }>
   getStatus(): {
     recording: boolean
     bufferSeconds: number
@@ -783,6 +791,28 @@ function setupIPC() {
       return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
     } catch (error: any) {
       return { error: error?.message || 'Trim failed' }
+    }
+  })
+
+  // Read-only, but both walk or decode the whole file, so the addon runs them
+  // on a worker thread and these just await.
+  ipcMain.handle('decode-clip-audio', async (_event, filePath: string) => {
+    if (!captureAddon?.decodeClipAudio) return { error: 'This build cannot decode clip audio' }
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    try {
+      return await captureAddon.decodeClipAudio(filePath)
+    } catch (error: any) {
+      return { error: error?.message || 'Could not read the clip audio' }
+    }
+  })
+
+  ipcMain.handle('get-clip-keyframes', async (_event, filePath: string) => {
+    if (!captureAddon?.getClipKeyframes) return { error: 'This build cannot read keyframes' }
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    try {
+      return await captureAddon.getClipKeyframes(filePath)
+    } catch (error: any) {
+      return { error: error?.message || 'Could not read the clip keyframes' }
     }
   })
 

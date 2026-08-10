@@ -55,6 +55,11 @@ contextBridge.exposeInMainWorld('flash', {
     ipcRenderer.invoke('trim-clip', filePath, start, end),
   exportClip: (filePath: string, maxBytes: number) =>
     ipcRenderer.invoke('export-clip', filePath, maxBytes),
+  // The editor needs every audio track separately, because a video element
+  // decodes only the first one, and the keyframe list to know where a cut can
+  // stay lossless.
+  decodeClipAudio: (filePath: string) => ipcRenderer.invoke('decode-clip-audio', filePath),
+  getClipKeyframes: (filePath: string) => ipcRenderer.invoke('get-clip-keyframes', filePath),
   onHotkeyClip: (callback: () => void) => {
     ipcRenderer.on('hotkey-clip', () => callback())
   },
@@ -124,6 +129,10 @@ export type FlashAPI = {
     Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
   exportClip: (filePath: string, maxBytes: number) =>
     Promise<{ path?: string; bytes?: number; width?: number; height?: number; bitrateKbps?: number; error?: string }>
+  decodeClipAudio: (filePath: string) =>
+    Promise<{ sampleRate: number; tracks: { id: string; samples: Float32Array }[]; error?: string }>
+  getClipKeyframes: (filePath: string) =>
+    Promise<{ keyframesSec: number[]; durationSeconds: number; bitrateKbps: number; error?: string }>
   onHotkeyClip: (callback: () => void) => void
   onClipSavedRefresh: (callback: () => void) => void
   getSettings: () => Promise<Settings>

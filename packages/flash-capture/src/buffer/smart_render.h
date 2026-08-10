@@ -2,9 +2,34 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
+#include <string>
 #include <vector>
 
 namespace flash {
+
+// One walk of the video stream yields everything the trimmer and the editor
+// both need: where the keyframes are, how many bytes the stream actually uses,
+// and where it ends. Kept together because it is one pass over every sample and
+// doing it twice is the expensive part.
+struct VideoScan {
+    std::vector<int64_t> keyframesUs;
+    uint64_t bytes = 0;
+    int64_t lastTimeUs = 0;
+};
+
+// Opens the clip itself. The trimmer uses the reader-taking overload instead,
+// since it already has one open.
+VideoScan ScanClipVideo(const std::string& path);
+
+// Bits per second the source video really uses, or 0 when it cannot be told.
+inline uint32_t VideoBitrate(const VideoScan& scan) {
+    const double seconds = scan.lastTimeUs / 1000000.0;
+    if (seconds <= 0.0) return 0;
+    return static_cast<uint32_t>((std::min)(
+        static_cast<double>((std::numeric_limits<uint32_t>::max)()),
+        static_cast<double>(scan.bytes) * 8.0 / seconds));
+}
 
 struct SmartRenderPlan {
     bool needsHeadEncode = false;

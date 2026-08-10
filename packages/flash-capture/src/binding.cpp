@@ -6,11 +6,14 @@
 #include "buffer/clip_writer.h"
 #include "buffer/clip_exporter.h"
 #include "buffer/clip_trimmer.h"
+#include "buffer/audio_decode.h"
+#include "buffer/smart_render.h"
 #include "quality.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <filesystem>
 #include <limits>
@@ -281,6 +284,72 @@ Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !
 } // namespace
 
 
+// Both of these walk or decode an entire file, so they belong off the UI thread
+// even though neither writes anything.
+class DecodeAudioWorker final : public Napi::AsyncWorker {
+public:
+    DecodeAudioWorker(Napi::Env env, std::string path, uint32_t rate)
+        : AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+          path_(std::move(path)), rate_(rate) {}
+    Napi::Promise Promise() const { return deferred_.Promise(); }
+    void Execute() override {
+        try { tracks_ = DecodeClipAudio(path_, rate_); }
+        catch (const std::exception& e) { SetError(e.what()); }
+    }
+    void OnOK() override {
+        auto list = Napi::Array::New(Env(), tracks_.size());
+        for (size_t i = 0; i < tracks_.size(); ++i) {
+            auto entry = Napi::Object::New(Env());
+            entry.Set("id", tracks_[i].id);
+            // A typed array so the renderer gets the samples without boxing
+            // every one into a JS number: a five minute track is 6.6 million.
+            auto samples = Napi::Float32Array::New(Env(), tracks_[i].samples.size());
+            if (!tracks_[i].samples.empty())
+                std::memcpy(samples.Data(), tracks_[i].samples.data(),
+                    tracks_[i].samples.size() * sizeof(float));
+            entry.Set("samples", samples);
+            list.Set(static_cast<uint32_t>(i), entry);
+        }
+        auto value = Napi::Object::New(Env());
+        value.Set("sampleRate", rate_);
+        value.Set("tracks", list);
+        deferred_.Resolve(value);
+    }
+    void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
+private:
+    Napi::Promise::Deferred deferred_;
+    std::string path_;
+    uint32_t rate_ = 0;
+    std::vector<DecodedTrack> tracks_;
+};
+
+class ScanVideoWorker final : public Napi::AsyncWorker {
+public:
+    ScanVideoWorker(Napi::Env env, std::string path)
+        : AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)), path_(std::move(path)) {}
+    Napi::Promise Promise() const { return deferred_.Promise(); }
+    void Execute() override {
+        try { scan_ = ScanClipVideo(path_); }
+        catch (const std::exception& e) { SetError(e.what()); }
+    }
+    void OnOK() override {
+        auto keyframes = Napi::Array::New(Env(), scan_.keyframesUs.size());
+        for (size_t i = 0; i < scan_.keyframesUs.size(); ++i)
+            keyframes.Set(static_cast<uint32_t>(i),
+                Napi::Number::New(Env(), scan_.keyframesUs[i] / 1000000.0));
+        auto value = Napi::Object::New(Env());
+        value.Set("keyframesSec", keyframes);
+        value.Set("durationSeconds", scan_.lastTimeUs / 1000000.0);
+        value.Set("bitrateKbps", VideoBitrate(scan_) / 1000);
+        deferred_.Resolve(value);
+    }
+    void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
+private:
+    Napi::Promise::Deferred deferred_;
+    std::string path_;
+    VideoScan scan_;
+};
+
 class ExportClipWorker final : public Napi::AsyncWorker {
 public:
     ExportClipWorker(Napi::Env env, std::string input, std::string output, ExportOptions options)
@@ -308,6 +377,35 @@ private:
     ExportOptions options_;
     ExportResult result_{};
 };
+
+// Preview audio is mono at 22050: enough to judge a mix and draw waveforms, and
+// it keeps a five minute clip near 26MB across three tracks rather than 345MB.
+constexpr uint32_t kPreviewSampleRate = 22050;
+
+Napi::Value DecodeClipAudioBinding(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!info.Length() || !info[0].IsString()) {
+        Napi::TypeError::New(env, "decodeClipAudio requires a clip path").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    auto* worker = new DecodeAudioWorker(env, info[0].As<Napi::String>().Utf8Value(),
+        kPreviewSampleRate);
+    auto promise = worker->Promise();
+    worker->Queue();
+    return promise;
+}
+
+Napi::Value GetClipKeyframesBinding(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!info.Length() || !info[0].IsString()) {
+        Napi::TypeError::New(env, "getClipKeyframes requires a clip path").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    auto* worker = new ScanVideoWorker(env, info[0].As<Napi::String>().Utf8Value());
+    auto promise = worker->Promise();
+    worker->Queue();
+    return promise;
+}
 
 Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -374,6 +472,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
     exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("exportClip", Napi::Function::New(env, ExportClipBinding)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
-    exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks)); return exports;
+    exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks));
+    exports.Set("decodeClipAudio", Napi::Function::New(env, DecodeClipAudioBinding));
+    exports.Set("getClipKeyframes", Napi::Function::New(env, GetClipKeyframesBinding));
+    return exports;
 }
 NODE_API_MODULE(flash_capture, Init)

@@ -25,6 +25,7 @@ namespace flash {
 bool RenderHeadFragment(IMFSourceReader* reader, IMFSinkWriter* writer,
     DWORD videoStream, DWORD writerStream, const SmartRenderPlan& plan,
     IMFMediaType* sourceType, uint32_t targetBitrate);
+VideoScan ScanVideoStream(IMFSourceReader* reader, DWORD videoStream);
 
 namespace {
 
@@ -185,43 +186,18 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         }
         if (video == (std::numeric_limits<size_t>::max)()) throw std::runtime_error("input clip has no H.264 video stream");
 
-        std::vector<int64_t> keyframesUs;
-        // The same pass measures the source's real video bitrate. An MP4's
-        // native H.264 media type carries no MF_MT_AVG_BITRATE, so without this
-        // the head encoder picks its own default and the re-encoded fragment
-        // came out at roughly twice the source rate - a bigger file and a
-        // visible change in character where it meets the copied body.
-        uint64_t videoBytes = 0;
-        LONGLONG lastVideoTime = 0;
-        for (;;) {
-            DWORD actual = 0, flags = 0;
-            LONGLONG time = 0;
-            ComPtr<IMFSample> sample;
-            Check(reader->ReadSample(streams[video].reader, 0, &actual, &flags, &time, &sample),
-                "collect video keyframes");
-            if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
-            if (flags & (MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED |
-                MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED))
-                throw std::runtime_error("input media type changed while collecting keyframes");
-            if (!sample) continue;
-            DWORD sampleBytes = 0;
-            if (SUCCEEDED(sample->GetTotalLength(&sampleBytes))) videoBytes += sampleBytes;
-            lastVideoTime = time;
-            UINT32 cleanPoint = FALSE;
-            if (SUCCEEDED(sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) && cleanPoint)
-                keyframesUs.push_back(time / 10);
-        }
-        const double videoSeconds = lastVideoTime / 10000000.0;
-        const uint32_t sourceBitrate = videoSeconds > 0.0
-            ? static_cast<uint32_t>((std::min)(static_cast<double>((std::numeric_limits<uint32_t>::max)()),
-                  static_cast<double>(videoBytes) * 8.0 / videoSeconds))
-            : 0u;
+        // One pass over every video sample gives the keyframe list and, from the
+        // same samples, the source's real bitrate. An MP4's native H.264 media
+        // type carries no MF_MT_AVG_BITRATE, so without measuring it the head
+        // encoder falls back to its own default.
+        const VideoScan scan = ScanVideoStream(reader.Get(), streams[video].reader);
+        const uint32_t sourceBitrate = VideoBitrate(scan);
         SeekReader(reader.Get(), 0);
         // Half a frame. Below anything a viewer can see, and wide enough that a
         // request landing a few microseconds off a keyframe still takes the
         // instant remux path instead of re-encoding the whole GOP.
         const int64_t snapToleranceUs = fps ? 500000 / fps : 0;
-        const SmartRenderPlan renderPlan = PlanSmartRender(keyframesUs, startUs, endUs, snapToleranceUs);
+        const SmartRenderPlan renderPlan = PlanSmartRender(scan.keyframesUs, startUs, endUs, snapToleranceUs);
         Check(writer->BeginWriting(), "IMFSinkWriter::BeginWriting");
 
         bool renderedHead = false;
