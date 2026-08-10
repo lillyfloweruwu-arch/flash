@@ -36,6 +36,7 @@ set(CAPTURE_SOURCES
   src/encoding/software_encoder.cpp
   src/buffer/ring_buffer.cpp
   src/buffer/clip_writer.cpp
+  src/buffer/clip_trimmer.cpp
 )
 
 # Build as Node.js native addon
@@ -96,4 +97,9 @@ endif()
 add_executable(flash_audio_track_test EXCLUDE_FROM_ALL test/audio_track_test.cpp)
 if(MSVC)
   target_compile_options(flash_audio_track_test PRIVATE /EHsc)
+endif()
+add_executable(flash_clip_trimmer_test EXCLUDE_FROM_ALL test/clip_trimmer_test.cpp)
+if(MSVC)
+  target_compile_options(flash_clip_trimmer_test PRIVATE /EHsc)
+  target_compile_definitions(flash_clip_trimmer_test PRIVATE NOMINMAX)
 endif()

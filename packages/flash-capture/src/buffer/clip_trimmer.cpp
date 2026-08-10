@@ -1,0 +1,233 @@
+#include "clip_trimmer.h"
+#include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <limits>
+#include <stdexcept>
+#include <vector>
+
+#ifdef _WIN32
+#include <Windows.h>
+#include <mfapi.h>
+#include <mferror.h>
+#include <mfidl.h>
+#include <mfreadwrite.h>
+#include <propvarutil.h>
+#include <wrl/client.h>
+using Microsoft::WRL::ComPtr;
+#endif
+
+namespace flash {
+
+#ifdef _WIN32
+namespace {
+
+std::wstring ToWide(const std::string& value) {
+    if (value.empty()) return {};
+    const int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), nullptr, 0);
+    if (!count) throw std::runtime_error("clip path is not valid UTF-8");
+    std::wstring result(count, L'\0');
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
+        static_cast<int>(value.size()), result.data(), count);
+    return result;
+}
+
+void Check(HRESULT hr, const char* operation) {
+    if (FAILED(hr)) throw std::runtime_error(std::string(operation) + " failed (HRESULT " +
+        std::to_string(static_cast<unsigned long>(hr)) + ")");
+}
+
+bool SamePath(const std::filesystem::path& left, const std::filesystem::path& right) {
+    const auto a = std::filesystem::absolute(left).lexically_normal().wstring();
+    const auto b = std::filesystem::absolute(right).lexically_normal().wstring();
+    return CompareStringOrdinal(a.c_str(), static_cast<int>(a.size()), b.c_str(),
+        static_cast<int>(b.size()), TRUE) == CSTR_EQUAL;
+}
+
+struct MfScope {
+    MfScope() {
+        apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(apartment) && apartment != RPC_E_CHANGED_MODE) Check(apartment, "CoInitializeEx");
+        Check(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MFStartup");
+        started = true;
+    }
+    ~MfScope() {
+        if (started) MFShutdown();
+        if (SUCCEEDED(apartment)) CoUninitialize();
+    }
+    HRESULT apartment = E_FAIL;
+    bool started = false;
+};
+
+struct Stream {
+    DWORD reader = 0;
+    DWORD writer = 0;
+    GUID major{};
+    ComPtr<IMFSample> sample;
+    LONGLONG time = 0;
+    bool ended = false;
+};
+
+void ReadNext(IMFSourceReader* reader, Stream& stream) {
+    stream.sample.Reset();
+    while (!stream.ended) {
+        DWORD actual = 0, flags = 0;
+        LONGLONG time = 0;
+        ComPtr<IMFSample> sample;
+        Check(reader->ReadSample(stream.reader, 0, &actual, &flags, &time, &sample),
+            "IMFSourceReader::ReadSample");
+        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) { stream.ended = true; return; }
+        if (flags & (MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED |
+            MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED))
+            throw std::runtime_error("input media type changed while trimming");
+        if (!sample) continue;
+        stream.sample = std::move(sample);
+        stream.time = time;
+        return;
+    }
+}
+
+} // namespace
+#endif
+
+ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPath,
+    int64_t startUs, int64_t endUs) {
+    if (inputPath.empty() || outputPath.empty()) throw std::invalid_argument("clip paths must not be empty");
+    if (startUs < 0 || endUs <= startUs) throw std::invalid_argument("trim range must have a non-negative start and end after start");
+    if (startUs > (std::numeric_limits<int64_t>::max)() / 10 ||
+        endUs > (std::numeric_limits<int64_t>::max)() / 10)
+        throw std::invalid_argument("trim range is too large");
+
+#ifdef _WIN32
+    const auto input = std::filesystem::u8path(inputPath);
+    const auto output = std::filesystem::u8path(outputPath);
+    if (!std::filesystem::is_regular_file(input)) throw std::invalid_argument("input clip does not exist");
+    if (SamePath(input, output)) throw std::invalid_argument("input and output clips must be different files");
+    if (!output.parent_path().empty()) std::filesystem::create_directories(output.parent_path());
+
+    MfScope mf;
+    ComPtr<IMFSourceReader> reader;
+    ComPtr<IMFSinkWriter> writer;
+    bool outputOpened = false;
+    try {
+        ComPtr<IMFAttributes> attributes;
+        Check(MFCreateAttributes(&attributes, 2), "MFCreateAttributes");
+        Check(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, FALSE),
+            "disable source reader video processing");
+        Check(attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, TRUE),
+            "disable source reader converters");
+        const auto wideInput = ToWide(inputPath);
+        Check(MFCreateSourceReaderFromURL(wideInput.c_str(), attributes.Get(), &reader),
+            "MFCreateSourceReaderFromURL");
+        Check(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE),
+            "deselect source streams");
+
+        std::error_code ignored;
+        std::filesystem::remove(output, ignored);
+        const auto wideOutput = ToWide(outputPath);
+        Check(MFCreateSinkWriterFromURL(wideOutput.c_str(), nullptr, nullptr, &writer),
+            "MFCreateSinkWriterFromURL");
+        outputOpened = true;
+
+        std::vector<Stream> streams;
+        size_t video = (std::numeric_limits<size_t>::max)();
+        uint32_t width = 0, height = 0, fps = 0;
+        for (DWORD index = 0;; ++index) {
+            ComPtr<IMFMediaType> type;
+            const HRESULT result = reader->GetNativeMediaType(index, 0, &type);
+            if (result == MF_E_INVALIDSTREAMNUMBER) break;
+            Check(result, "IMFSourceReader::GetNativeMediaType");
+            GUID major{};
+            Check(type->GetGUID(MF_MT_MAJOR_TYPE, &major), "get native major type");
+            if (major != MFMediaType_Video && major != MFMediaType_Audio) continue;
+            GUID subtype{};
+            Check(type->GetGUID(MF_MT_SUBTYPE, &subtype), "get native subtype");
+            if (major == MFMediaType_Video && subtype != MFVideoFormat_H264)
+                throw std::runtime_error("input video is not H.264");
+            if (major == MFMediaType_Audio && subtype != MFAudioFormat_AAC)
+                throw std::runtime_error("input audio is not AAC");
+            Check(reader->SetStreamSelection(index, TRUE), "select source stream");
+            DWORD writerIndex = 0;
+            Check(writer->AddStream(type.Get(), &writerIndex), "IMFSinkWriter::AddStream");
+            Check(writer->SetInputMediaType(writerIndex, type.Get(), nullptr),
+                "IMFSinkWriter::SetInputMediaType");
+            streams.push_back({index, writerIndex, major});
+            if (major == MFMediaType_Video) {
+                if (video != (std::numeric_limits<size_t>::max)())
+                    throw std::runtime_error("multiple video streams are not supported");
+                video = streams.size() - 1;
+                Check(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width, &height),
+                    "get video frame size");
+                UINT32 numerator = 0, denominator = 0;
+                if (SUCCEEDED(MFGetAttributeRatio(type.Get(), MF_MT_FRAME_RATE, &numerator, &denominator)) && denominator)
+                    fps = (numerator + denominator / 2) / denominator;
+            }
+        }
+        if (video == (std::numeric_limits<size_t>::max)()) throw std::runtime_error("input clip has no H.264 video stream");
+        Check(writer->BeginWriting(), "IMFSinkWriter::BeginWriting");
+
+        PROPVARIANT position;
+        PropVariantInit(&position);
+        position.vt = VT_I8;
+        position.hVal.QuadPart = startUs * 10;
+        const HRESULT seekResult = reader->SetCurrentPosition(GUID_NULL, position);
+        PropVariantClear(&position);
+        Check(seekResult, "IMFSourceReader::SetCurrentPosition");
+
+        ReadNext(reader.Get(), streams[video]);
+        if (!streams[video].sample) throw std::runtime_error("trim start is past the end of the input clip");
+        UINT32 cleanPoint = FALSE;
+        if (FAILED(streams[video].sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) || !cleanPoint)
+            throw std::runtime_error("source reader did not seek to an H.264 keyframe");
+        const LONGLONG actualStart = streams[video].time;
+        const LONGLONG requestedEnd = endUs * 10;
+        if (actualStart >= requestedEnd) throw std::runtime_error("trim range contains no decodable video");
+        for (size_t i = 0; i < streams.size(); ++i) if (i != video) ReadNext(reader.Get(), streams[i]);
+
+        LONGLONG outputEnd = 0;
+        bool wroteVideo = false;
+        for (;;) {
+            size_t next = streams.size();
+            for (size_t i = 0; i < streams.size(); ++i) {
+                if (!streams[i].sample || streams[i].time >= requestedEnd) continue;
+                if (next == streams.size() || streams[i].time < streams[next].time) next = i;
+            }
+            if (next == streams.size()) break;
+            auto& stream = streams[next];
+            if (stream.time >= actualStart) {
+                const LONGLONG rebased = RebaseTrimTimestamp(stream.time, actualStart);
+                Check(stream.sample->SetSampleTime(rebased), "IMFSample::SetSampleTime");
+                Check(writer->WriteSample(stream.writer, stream.sample.Get()), "IMFSinkWriter::WriteSample");
+                LONGLONG duration = 0;
+                if (FAILED(stream.sample->GetSampleDuration(&duration))) duration = 0;
+                outputEnd = (std::max)(outputEnd, rebased + duration);
+                wroteVideo = wroteVideo || stream.major == MFMediaType_Video;
+            }
+            ReadNext(reader.Get(), stream);
+        }
+        if (!wroteVideo) throw std::runtime_error("trim range contains no video samples");
+        Check(writer->Finalize(), "IMFSinkWriter::Finalize");
+        writer.Reset();
+
+        ClipMetadata metadata{outputPath, "", TrimTimestampSeconds(outputEnd), width, height, fps,
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count()};
+        metadata.actualStartSeconds = TrimTimestampSeconds(actualStart);
+        return metadata;
+    } catch (...) {
+        writer.Reset();
+        reader.Reset();
+        if (outputOpened) {
+            std::error_code ignored;
+            std::filesystem::remove(output, ignored);
+        }
+        throw;
+    }
+#else
+    (void)inputPath; (void)outputPath; (void)startUs; (void)endUs;
+    throw std::runtime_error("clip trimming is only available on Windows");
+#endif
+}
+
+} // namespace flash

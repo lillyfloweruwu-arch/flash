@@ -10,11 +10,12 @@ namespace flash {
 struct ClipMetadata {
     std::string filePath;
     std::string game;
-    uint32_t durationSeconds;
+    double durationSeconds;
     uint32_t width;
     uint32_t height;
     uint32_t fps;
     int64_t timestamp; // Unix timestamp of clip creation
+    double actualStartSeconds = 0.0;
 };
 
 // Writes encoded video and audio packets to an MP4 file

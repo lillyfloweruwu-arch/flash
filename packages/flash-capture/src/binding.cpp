@@ -4,6 +4,7 @@
 #include "encoding/encoder.h"
 #include "buffer/ring_buffer.h"
 #include "buffer/clip_writer.h"
+#include "buffer/clip_trimmer.h"
 #include "quality.h"
 #include <algorithm>
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <deque>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -188,6 +190,38 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
     auto* worker = new SaveClipWorker(info.Env(), std::move(path), std::move(game), std::move(video), std::move(audio), width, height, fps); auto promise = worker->Promise(); worker->Queue(); return promise;
 }
 
+class TrimClipWorker final : public Napi::AsyncWorker {
+public:
+    TrimClipWorker(Napi::Env env, std::string input, std::string output, int64_t startUs, int64_t endUs)
+        : AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)), input_(std::move(input)),
+          output_(std::move(output)), startUs_(startUs), endUs_(endUs) {}
+    Napi::Promise Promise() const { return deferred_.Promise(); }
+    void Execute() override { try { metadata_ = TrimClip(input_, output_, startUs_, endUs_); } catch (const std::exception& e) { SetError(e.what()); } }
+    void OnOK() override { auto value = Napi::Object::New(Env()); value.Set("path", metadata_.filePath); value.Set("duration", metadata_.durationSeconds); value.Set("width", metadata_.width); value.Set("height", metadata_.height); value.Set("actualStartSeconds", metadata_.actualStartSeconds); deferred_.Resolve(value); }
+    void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
+private:
+    Napi::Promise::Deferred deferred_; std::string input_, output_; int64_t startUs_, endUs_; ClipMetadata metadata_{};
+};
+
+Napi::Value TrimClipAsync(const Napi::CallbackInfo& info) {
+    if (info.Length() != 4 || !info[0].IsString() || !info[1].IsString() ||
+        !info[2].IsNumber() || !info[3].IsNumber()) {
+        Napi::TypeError::New(info.Env(), "trimClip requires input, output, startSeconds, and endSeconds").ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    const std::string input = info[0].As<Napi::String>().Utf8Value();
+    const std::string output = info[1].As<Napi::String>().Utf8Value();
+    const double start = info[2].As<Napi::Number>().DoubleValue();
+    const double end = info[3].As<Napi::Number>().DoubleValue();
+    constexpr double maxSeconds = static_cast<double>((std::numeric_limits<int64_t>::max)()) / 1000000.0;
+    if (input.empty() || output.empty()) { Napi::TypeError::New(info.Env(), "clip paths must not be empty").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    if (!std::isfinite(start) || !std::isfinite(end) || start < 0.0 || end <= start || end > maxSeconds) { Napi::RangeError::New(info.Env(), "trim range must have a finite non-negative start and end after start").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    auto* worker = new TrimClipWorker(info.Env(), input, output,
+        static_cast<int64_t>(std::llround(start * 1000000.0)),
+        static_cast<int64_t>(std::llround(end * 1000000.0)));
+    auto promise = worker->Promise(); worker->Queue(); return promise;
+}
+
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", g_screenCapture && g_screenCapture->IsCapturing());
     result.Set("captureHealthy", g_screenCapture && g_screenCapture->IsHealthy()); result.Set("captureError", g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError);
@@ -245,7 +279,7 @@ Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
-    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
+    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
     exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks)); return exports;
 }
 NODE_API_MODULE(flash_capture, Init)
