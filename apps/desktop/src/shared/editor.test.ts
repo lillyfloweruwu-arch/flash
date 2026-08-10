@@ -1,7 +1,7 @@
 // Self-check for the clip editor maths. Run with:
 //   node --experimental-strip-types src/shared/editor.test.ts
 import { strict as assert } from 'node:assert'
-import { formatTimecode, clampRange } from './editor.ts'
+import { formatTimecode, clampRange, nearestKeyframe } from './editor.ts'
 
 assert.equal(formatTimecode(0), '0:00.0')
 assert.equal(formatTimecode(4.24), '0:04.2')
@@ -31,5 +31,18 @@ assert.ok(atEnd.outSec <= 30)
 const empty = clampRange(0, 0, 0)
 assert.ok(Number.isFinite(empty.inSec) && Number.isFinite(empty.outSec))
 assert.ok(empty.outSec >= empty.inSec)
+
+// Keyframe snapping. Real keyframes land on values like 3.72865, so the match
+// has to carry a tolerance; an exact one never fires.
+const keys = [0, 3.72865, 7.45205, 11.1854]
+assert.equal(nearestKeyframe(keys, 3.75, 0.15), 3.72865)
+assert.equal(nearestKeyframe(keys, 3.7, 0.15), 3.72865)
+assert.equal(nearestKeyframe(keys, 5.5, 0.15), null)      // genuinely mid-GOP
+assert.equal(nearestKeyframe(keys, 11.2, 0.15), 11.1854)
+assert.equal(nearestKeyframe([], 4, 0.15), null)
+assert.equal(nearestKeyframe(keys, 0, 0), 0)              // exact hit needs no tolerance
+
+// With two keyframes inside the window it takes the closer one, not the first.
+assert.equal(nearestKeyframe([3.6, 3.9], 3.85, 0.5), 3.9)
 
 console.log('clip editor self-check passed')

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ClipActionBar } from './ClipActionBar'
-import { formatTimecode } from '../shared/editor'
+import { Filmstrip } from './editor/Filmstrip'
+import { clampRange, formatTimecode, nearestKeyframe } from '../shared/editor'
 import type { ClipInfo } from '../preload/preload'
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const
@@ -14,6 +15,30 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [current, setCurrent] = useState(0)
   const [duration, setDuration] = useState(clip.durationSec || 0)
   const [speed, setSpeed] = useState<number>(1)
+  const [range, setRange] = useState({ inSec: 0, outSec: clip.durationSec || 0 })
+  const [keyframes, setKeyframes] = useState<number[]>([])
+
+  // Keyframes come from a full pass over the file, so they arrive a moment
+  // after the screen does. Until then the strip simply has no ticks and no
+  // snapping, which degrades quietly rather than blocking the editor.
+  useEffect(() => {
+    let cancelled = false
+    window.flash?.getClipKeyframes(clip.filePath).then(result => {
+      if (cancelled || !result || result.error) return
+      setKeyframes(result.keyframesSec ?? [])
+      if (result.durationSeconds > 0) {
+        setDuration(current => current > 0 ? current : result.durationSeconds)
+        setRange(current => current.outSec > 0 ? current : { inSec: 0, outSec: result.durationSeconds })
+      }
+    })
+    return () => { cancelled = true }
+  }, [clip.filePath])
+
+  const seekTo = useCallback((seconds: number) => {
+    const video = videoRef.current
+    if (video) video.currentTime = seconds
+    setCurrent(seconds)
+  }, [])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -57,11 +82,26 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           src={source}
           className="rounded-xl"
           style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 290px)', background: '#000' }}
-          onLoadedMetadata={event => setDuration(event.currentTarget.duration || clip.durationSec || 0)}
+          onLoadedMetadata={event => {
+            const length = event.currentTarget.duration || clip.durationSec || 0
+            setDuration(length)
+            setRange(current => current.outSec > 0 ? current : { inSec: 0, outSec: length })
+          }}
           onTimeUpdate={event => setCurrent(event.currentTarget.currentTime)}
           onPlay={() => setPlaying(true)}
           onPause={() => setPlaying(false)}
           onClick={togglePlay}
+        />
+
+        <Filmstrip
+          filePath={clip.filePath}
+          durationSec={duration}
+          inSec={range.inSec}
+          outSec={range.outSec}
+          currentSec={current}
+          keyframesSec={keyframes}
+          onChange={next => setRange(clampRange(next.inSec, next.outSec, duration))}
+          onScrub={seekTo}
         />
 
         <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
@@ -99,9 +139,16 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
 
       <div className="flex items-center gap-3 px-6 py-3 shrink-0" style={{ borderTop: '1px solid var(--edge-soft)' }}>
         <span style={{ fontSize: 12, color: 'var(--muted-2)', fontVariantNumeric: 'tabular-nums' }}>
-          {formatTimecode(0)} → {formatTimecode(duration)}
+          {formatTimecode(range.inSec)} → {formatTimecode(range.outSec)}
         </span>
-        <span style={{ fontSize: 12, color: 'var(--muted-3)' }}>{duration.toFixed(1)}s</span>
+        <span style={{ fontSize: 12, color: 'var(--muted-3)' }}>{(range.outSec - range.inSec).toFixed(1)}s</span>
+        {/* Honest about what the save will cost. An in-point on a keyframe is a
+            pure remux; anywhere else re-encodes the first GOP. */}
+        {keyframes.length > 0 && (
+          nearestKeyframe(keyframes, range.inSec, 0.001) !== null
+            ? <span style={{ fontSize: 11, color: 'var(--accent)' }}>lossless</span>
+            : <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>re-encodes the first second</span>
+        )}
         <span className="ml-auto">
           <button disabled title="Trimming and the audio mixer land in the next step"
             className="px-4 py-1.5 rounded-md text-xs"

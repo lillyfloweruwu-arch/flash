@@ -8,6 +8,22 @@ export function formatTimecode(seconds: number): string {
   return `${minutes}:${Math.floor(rest).toString().padStart(2, '0')}.${Math.floor((rest % 1) * 10)}`
 }
 
+// Returns the keyframe within tolerance of `seconds`, or null. Drives both the
+// snap while dragging and the lossless badge: a save stays a pure remux only
+// when the in-point lands on one of these.
+export function nearestKeyframe(keyframesSec: number[], seconds: number, toleranceSec: number): number | null {
+  let best: number | null = null
+  let bestDistance = Infinity
+  for (const key of keyframesSec) {
+    const distance = Math.abs(key - seconds)
+    if (distance <= toleranceSec && distance < bestDistance) {
+      best = key
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 // Keeps the pair ordered and inside the clip. Dragging one handle past the
 // other pushes the other along instead of inverting the range, which is what
 // every editor does and what stops the strip rendering backwards.
