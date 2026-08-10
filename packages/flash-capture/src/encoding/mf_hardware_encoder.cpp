@@ -1,4 +1,5 @@
 #include "mf_hardware_encoder.h"
+#include "../color_space.h"
 #ifdef _WIN32
 #include <Windows.h>
 #include <codecapi.h>
@@ -51,6 +52,7 @@ std::string MfHardwareEncoder::GetName() const { return impl_->name; }
 
 #ifdef _WIN32
 static bool ConfigureType(IMFMediaType* type, const GUID& subtype, const EncoderConfig& c) {
+    TagBt709Limited(type);
     return SUCCEEDED(type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)) && SUCCEEDED(type->SetGUID(MF_MT_SUBTYPE, subtype)) &&
         SUCCEEDED(MFSetAttributeSize(type, MF_MT_FRAME_SIZE, c.width, c.height)) &&
         SUCCEEDED(MFSetAttributeRatio(type, MF_MT_FRAME_RATE, c.fps, 1)) &&

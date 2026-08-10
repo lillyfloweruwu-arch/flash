@@ -1,5 +1,6 @@
 #include "screen_capture.h"
 #include "capture_clock.h"
+#include "../color_space.h"
 #include <algorithm>
 #include <chrono>
 
@@ -101,6 +102,12 @@ bool ScreenCapture::CreateFrameResources() {
     content.InputFrameRate = {targetFps_, 1}; content.OutputFrameRate = {targetFps_, 1};
     if (FAILED(videoDevice_->CreateVideoProcessorEnumerator(&content, &videoEnumerator_)) ||
         FAILED(videoDevice_->CreateVideoProcessor(videoEnumerator_.Get(), 0, &videoProcessor_))) return true;
+    // Say what goes in and what must come out. The default is BT.601, which the
+    // decoder then undoes as BT.709 and oversaturates the clip.
+    const auto inputSpace = FullRangeRgbColorSpace();
+    const auto outputSpace = Bt709LimitedColorSpace();
+    videoContext_->VideoProcessorSetStreamColorSpace(videoProcessor_.Get(), 0, &inputSpace);
+    videoContext_->VideoProcessorSetOutputColorSpace(videoProcessor_.Get(), &outputSpace);
     D3D11_TEXTURE2D_DESC nv12{};
     nv12.Width = outputWidth_; nv12.Height = outputHeight_; nv12.MipLevels = 1; nv12.ArraySize = 1;
     nv12.Format = DXGI_FORMAT_NV12; nv12.SampleDesc.Count = 1; nv12.Usage = D3D11_USAGE_DEFAULT;

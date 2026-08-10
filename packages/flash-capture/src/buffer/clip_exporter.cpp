@@ -1,5 +1,6 @@
 #include "clip_exporter.h"
 #include "export_budget.h"
+#include "../color_space.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -72,6 +73,7 @@ ComPtr<IMFMediaType> MakeType(const GUID& major, const GUID& subtype) {
     Check(MFCreateMediaType(&type), "MFCreateMediaType");
     Check(type->SetGUID(MF_MT_MAJOR_TYPE, major), "set major type");
     Check(type->SetGUID(MF_MT_SUBTYPE, subtype), "set subtype");
+    if (major == MFMediaType_Video) TagBt709Limited(type.Get());
     return type;
 }
 
@@ -161,6 +163,7 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         Check(reader->SetCurrentMediaType(videoStream, nullptr, videoInput.Get()), "set decoded video type");
         ComPtr<IMFMediaType> actualVideo;
         Check(reader->GetCurrentMediaType(videoStream, &actualVideo), "get decoded video type");
+        TagBt709Limited(actualVideo.Get());   // the reader hands back an untagged type
         uint32_t outWidth = plan.width, outHeight = plan.height;
         MFGetAttributeSize(actualVideo.Get(), MF_MT_FRAME_SIZE, &outWidth, &outHeight);
 

@@ -1,5 +1,7 @@
 #include "software_encoder.h"
 
+#include "../color_space.h"
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <strmif.h>
@@ -47,6 +49,7 @@ SoftwareEncoder::~SoftwareEncoder() {
 
 #ifdef _WIN32
 static bool SetSizeAndRate(IMFMediaType* type, const EncoderConfig& c) {
+    TagBt709Limited(type);
     return SUCCEEDED(MFSetAttributeSize(type, MF_MT_FRAME_SIZE, c.width, c.height)) &&
            SUCCEEDED(MFSetAttributeRatio(type, MF_MT_FRAME_RATE, c.fps, 1)) &&
            SUCCEEDED(MFSetAttributeRatio(type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1)) &&
@@ -63,7 +66,7 @@ static void BgraToNv12(const FrameData& frame, uint8_t* dst, uint32_t width, uin
         for (uint32_t x = 0; x < width; ++x) {
             const uint32_t sx = static_cast<uint32_t>(static_cast<uint64_t>(x) * frame.width / width);
             const int b = row[sx * 4], g = row[sx * 4 + 1], r = row[sx * 4 + 2];
-            yPlane[static_cast<size_t>(y) * width + x] = clamp(((66 * r + 129 * g + 25 * b + 128) >> 8) + 16);
+            yPlane[static_cast<size_t>(y) * width + x] = clamp(Bt709Y(r, g, b));
         }
     }
     for (uint32_t y = 0; y < height; y += 2) {
@@ -78,8 +81,8 @@ static void BgraToNv12(const FrameData& frame, uint8_t* dst, uint32_t width, uin
                 const uint32_t sx = static_cast<uint32_t>(static_cast<uint64_t>(ox) * frame.width / width);
                 const uint8_t* p = (dy ? row1 : row0) + sx * 4;
                 const int b = p[0], g = p[1], r = p[2];
-                sumU += ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-                sumV += ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+                sumU += Bt709U(r, g, b);
+                sumV += Bt709V(r, g, b);
             }
             const size_t uv = static_cast<size_t>(y / 2) * width + x;
             uvPlane[uv] = clamp(sumU / 4);
