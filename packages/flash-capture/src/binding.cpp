@@ -166,7 +166,10 @@ private:
 
 Napi::Value SaveClip(const Napi::CallbackInfo& info) {
     double windowSeconds = 0.0;
-    if (info.Length()) {
+    // Treat an explicit undefined/null as "not supplied". saveClip(x) where x is
+    // undefined still reports Length() == 1, so requiring a number here rejects
+    // the ordinary JS way of forwarding an optional argument.
+    if (info.Length() && !info[0].IsUndefined() && !info[0].IsNull()) {
         if (!info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "clip length must be a positive number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
         windowSeconds = info[0].As<Napi::Number>().DoubleValue();
         if (!std::isfinite(windowSeconds) || windowSeconds <= 0.0) { Napi::TypeError::New(info.Env(), "clip length must be a positive number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }

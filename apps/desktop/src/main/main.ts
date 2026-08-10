@@ -303,9 +303,12 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
   mainWindow?.webContents.send('clip-save-state', { saving: true })
   updateOverlay(true)
   try {
-    // Older engines ignore the argument and return the whole buffer, which is
-    // the same behaviour as before rather than a failure.
-    const clip = await captureAddon.saveClip(seconds)
+    // Call with no argument at all for a full-buffer save. Passing undefined is
+    // not the same thing to N-API: the argument still counts, and the engine
+    // rejects it as a non-numeric clip length.
+    const clip = typeof seconds === 'number' && seconds > 0
+      ? await captureAddon.saveClip(seconds)
+      : await captureAddon.saveClip()
     onClipSaved(clip)
     mainWindow?.webContents.send('clip-save-state', { saving: false })
     updateOverlay()
