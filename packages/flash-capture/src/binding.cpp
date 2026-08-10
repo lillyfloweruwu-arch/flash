@@ -4,6 +4,7 @@
 #include "encoding/encoder.h"
 #include "buffer/ring_buffer.h"
 #include "buffer/clip_writer.h"
+#include "buffer/clip_exporter.h"
 #include "buffer/clip_trimmer.h"
 #include "quality.h"
 #include <algorithm>
@@ -276,10 +277,72 @@ Napi::Value ListDisplays(const Napi::CallbackInfo& info) { auto result = Napi::A
 Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "display id must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t id = info[0].As<Napi::Number>().Uint32Value(); if (id >= ScreenCapture::ListDisplays().size()) { Napi::RangeError::New(info.Env(), "display id does not exist").ThrowAsJavaScriptException(); return info.Env().Undefined(); } bool running; { std::lock_guard lock(g_stateMutex); running = g_screenCapture && g_screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(g_stateMutex); g_previousVideo = g_ringBuffer ? g_ringBuffer->Flush() : std::vector<EncodedPacket>{}; g_previousAudio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); g_previousWidth = g_encodeWidth; g_previousHeight = g_encodeHeight; g_previousFps = g_quality.fps; g_awaitingFirstKeyframe = running && !g_previousVideo.empty(); } uint32_t previous = g_displayId; g_displayId = id; if (!BuildPipeline(false)) { g_displayId = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to switch display").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (running && !StartCaptureThreads()) Napi::Error::New(info.Env(), "display switched but capture restart failed").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
 } // namespace
 
+
+class ExportClipWorker final : public Napi::AsyncWorker {
+public:
+    ExportClipWorker(Napi::Env env, std::string input, std::string output, ExportOptions options)
+        : AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+          input_(std::move(input)), output_(std::move(output)), options_(options) {}
+    Napi::Promise Promise() const { return deferred_.Promise(); }
+    void Execute() override {
+        try { result_ = ExportClip(input_, output_, options_); }
+        catch (const std::exception& e) { SetError(e.what()); }
+    }
+    void OnOK() override {
+        auto value = Napi::Object::New(Env());
+        value.Set("path", result_.filePath);
+        value.Set("duration", result_.durationSeconds);
+        value.Set("width", result_.width);
+        value.Set("height", result_.height);
+        value.Set("bytes", static_cast<double>(result_.bytes));
+        value.Set("bitrateKbps", result_.bitrateKbps);
+        deferred_.Resolve(value);
+    }
+    void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
+private:
+    Napi::Promise::Deferred deferred_;
+    std::string input_, output_;
+    ExportOptions options_;
+    ExportResult result_{};
+};
+
+Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 3 || !info[0].IsString() || !info[1].IsString() || !info[2].IsObject()) {
+        Napi::TypeError::New(env, "expected (input, output, { maxBytes, maxHeight?, startSeconds?, endSeconds? })")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    auto options = info[2].As<Napi::Object>();
+    if (!options.Get("maxBytes").IsNumber()) {
+        Napi::TypeError::New(env, "maxBytes must be a number").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    ExportOptions parsed;
+    const double maxBytes = options.Get("maxBytes").As<Napi::Number>().DoubleValue();
+    if (!(maxBytes > 0)) {
+        Napi::RangeError::New(env, "maxBytes must be greater than zero").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    parsed.maxBytes = static_cast<uint64_t>(maxBytes);
+    if (options.Get("maxHeight").IsNumber())
+        parsed.maxHeight = options.Get("maxHeight").As<Napi::Number>().Uint32Value();
+    if (options.Get("startSeconds").IsNumber())
+        parsed.startUs = static_cast<int64_t>(options.Get("startSeconds").As<Napi::Number>().DoubleValue() * 1000000.0);
+    if (options.Get("endSeconds").IsNumber())
+        parsed.endUs = static_cast<int64_t>(options.Get("endSeconds").As<Napi::Number>().DoubleValue() * 1000000.0);
+
+    auto* worker = new ExportClipWorker(env, info[0].As<Napi::String>().Utf8Value(),
+        info[1].As<Napi::String>().Utf8Value(), parsed);
+    auto promise = worker->Promise();
+    worker->Queue();
+    return promise;
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
-    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
+    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("exportClip", Napi::Function::New(env, ExportClipBinding)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
     exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks)); return exports;
 }
 NODE_API_MODULE(flash_capture, Init)

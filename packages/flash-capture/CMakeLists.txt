@@ -36,6 +36,7 @@ set(CAPTURE_SOURCES
   src/encoding/software_encoder.cpp
   src/buffer/ring_buffer.cpp
   src/buffer/clip_writer.cpp
+  src/buffer/clip_exporter.cpp
   src/buffer/clip_trimmer.cpp
 )
 
@@ -102,4 +103,10 @@ add_executable(flash_clip_trimmer_test EXCLUDE_FROM_ALL test/clip_trimmer_test.c
 if(MSVC)
   target_compile_options(flash_clip_trimmer_test PRIVATE /EHsc)
   target_compile_definitions(flash_clip_trimmer_test PRIVATE NOMINMAX)
+endif()
+
+add_executable(flash_export_budget_test EXCLUDE_FROM_ALL test/export_budget_test.cpp)
+if(MSVC)
+  target_compile_options(flash_export_budget_test PRIVATE /EHsc)
+  target_compile_definitions(flash_export_budget_test PRIVATE NOMINMAX)
 endif()
