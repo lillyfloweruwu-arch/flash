@@ -38,6 +38,7 @@ set(CAPTURE_SOURCES
   src/buffer/clip_writer.cpp
   src/buffer/clip_exporter.cpp
   src/buffer/clip_trimmer.cpp
+  src/buffer/audio_decode.cpp
 )
 
 # Build as Node.js native addon
@@ -80,33 +81,25 @@ endif()
 # NAPI version
 target_compile_definitions(flash_capture PRIVATE NAPI_VERSION=8)
 
-# Replay buffer self-check. Not built by default — cmake-js only builds the addon.
-add_executable(flash_ring_buffer_test EXCLUDE_FROM_ALL
-  test/ring_buffer_test.cpp
-  src/buffer/ring_buffer.cpp
-)
-target_link_libraries(flash_ring_buffer_test ${PLATFORM_LIBS})
-if(MSVC)
-  target_compile_options(flash_ring_buffer_test PRIVATE /EHsc)
-  target_compile_definitions(flash_ring_buffer_test PRIVATE NOMINMAX)
-endif()
-add_executable(flash_quality_test EXCLUDE_FROM_ALL test/quality_test.cpp)
-if(MSVC)
-  target_compile_options(flash_quality_test PRIVATE /EHsc)
-  target_compile_definitions(flash_quality_test PRIVATE NOMINMAX)
-endif()
-add_executable(flash_audio_track_test EXCLUDE_FROM_ALL test/audio_track_test.cpp)
-if(MSVC)
-  target_compile_options(flash_audio_track_test PRIVATE /EHsc)
-endif()
-add_executable(flash_clip_trimmer_test EXCLUDE_FROM_ALL test/clip_trimmer_test.cpp)
-if(MSVC)
-  target_compile_options(flash_clip_trimmer_test PRIVATE /EHsc)
-  target_compile_definitions(flash_clip_trimmer_test PRIVATE NOMINMAX)
-endif()
+# Self-checks. Not built by default — cmake-js only builds the addon.
+#
+# /UNDEBUG is the point of this helper. CMake's Release config passes /DNDEBUG,
+# which compiles every assert() to nothing, so a Release test exits 0 whether or
+# not its assertions hold. Undefining it keeps the asserts live in every config.
+function(flash_add_test name)
+  add_executable(${name} EXCLUDE_FROM_ALL ${ARGN})
+  target_link_libraries(${name} ${PLATFORM_LIBS})
+  if(MSVC)
+    target_compile_options(${name} PRIVATE /W4 /EHsc /UNDEBUG)
+    target_compile_definitions(${name} PRIVATE NOMINMAX)
+  endif()
+endfunction()
 
-add_executable(flash_export_budget_test EXCLUDE_FROM_ALL test/export_budget_test.cpp)
-if(MSVC)
-  target_compile_options(flash_export_budget_test PRIVATE /EHsc)
-  target_compile_definitions(flash_export_budget_test PRIVATE NOMINMAX)
-endif()
+flash_add_test(flash_ring_buffer_test test/ring_buffer_test.cpp src/buffer/ring_buffer.cpp)
+flash_add_test(flash_quality_test test/quality_test.cpp)
+flash_add_test(flash_audio_track_test test/audio_track_test.cpp)
+flash_add_test(flash_clip_trimmer_test test/clip_trimmer_test.cpp)
+flash_add_test(flash_export_budget_test test/export_budget_test.cpp)
+flash_add_test(flash_color_space_test test/color_space_test.cpp)
+flash_add_test(flash_audio_decode_test test/audio_decode_test.cpp)
+flash_add_test(flash_smart_render_test test/smart_render_test.cpp)
