@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
+import { ClipActionBar } from './ClipActionBar'
+import Editor from './Editor'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -221,29 +223,22 @@ function WindowControls() {
 
 // ── Clip Player Modal ─────────────────────────────────────────────────────────
 
-function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
+function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
   clips: Clip[]
   startIndex: number
   onClose: () => void
   onDelete: (clip: Clip) => void
+  onEdit: (clip: Clip) => void
 }) {
   const [index, setIndex] = useState(startIndex)
-  const [copied, setCopied] = useState<string | null>(null)
-  const [trimming, setTrimming] = useState(false)
-  const [trimStart, setTrimStart] = useState(0)
-  const [trimEnd, setTrimEnd] = useState(10)
-  const [trimBusy, setTrimBusy] = useState(false)
   const [trimNote, setTrimNote] = useState<string | null>(null)
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
 
-  // Reset the trim panel when moving between clips so bounds from the previous
-  // clip cannot be applied to this one.
-  useEffect(() => {
-    setTrimming(false); setTrimNote(null); setTrimStart(0)
-    setTrimEnd(Math.max(1, clips[index]?.durationSec ?? 10))
-  }, [index, clips])
+  // Clear the last export note when moving between clips, so it cannot read as
+  // if it described the clip now on screen.
+  useEffect(() => { setTrimNote(null) }, [index, clips])
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
   const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
@@ -262,42 +257,11 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'color-mix(in srgb, var(--bg) 97%, transparent)' }}>
-      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
-        <div className="flex items-center gap-3">
-          <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: 'var(--muted-2)' }}>
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-            Back
-          </button>
-          <div style={{ width: 1, height: 14, background: 'var(--edge-soft)' }} />
-          <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-            {index + 1} <span style={{ color: 'var(--muted-3)' }}>/ {clips.length}</span>
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            draggable
-            onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(clip.filePath) }}
-            onClick={async () => {
-              const ok = await window.flash?.copyClipFile(clip.filePath)
-              setCopied(ok ? 'Copied' : 'Copy failed')
-              setTimeout(() => setCopied(null), 1600)
-            }}
-            title="Click to copy the file, or drag this straight into Discord"
-            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-            style={{ color: copied ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${copied ? 'var(--accent-line)' : 'var(--edge-soft)'}`, cursor: 'grab' }}>
-            {copied ?? 'Copy / Drag'}
-          </button>
-          <button onClick={() => window.flash?.showClipInFolder(clip.filePath)}
-            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-            style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>Show in Folder</button>
-          <button onClick={() => { onDelete(clip); onClose() }}
-            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-red-500/10"
-            style={{ color: 'var(--alert)', border: '1px solid var(--accent-line)' }}>Delete</button>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-md transition-all hover:bg-white/5" style={{ color: 'var(--muted-2)' }}>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-          </button>
-        </div>
-      </div>
+      <ClipActionBar filePath={clip.filePath} onClose={onClose} onDelete={() => { onDelete(clip); onClose() }} middle={
+        <span style={{ fontSize: 13, color: 'var(--muted)' }}>
+          {index + 1} <span style={{ color: 'var(--muted-3)' }}>/ {clips.length}</span>
+        </span>
+      } />
 
       <div className="flex flex-1 overflow-hidden">
         <div className="flex items-center px-3 shrink-0">
@@ -317,14 +281,13 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
             className="rounded-xl"
             style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 220px)', background: '#000' }}
           />
-          {/* Trim is a remux, not a re-encode — it returns in well under a second.
-              The cut snaps back to the nearest keyframe (2s GOP), so the result
-              reports where it actually started rather than pretending otherwise. */}
           <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
-            <button onClick={() => setTrimming(t => !t)}
+            {/* Trimming moved to its own screen. Two number boxes were never a
+                way to pick a moment. */}
+            <button onClick={() => onEdit(clip)}
               className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
-              style={{ color: trimming ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${trimming ? 'var(--accent-line)' : 'var(--edge-soft)'}` }}>
-              Trim
+              style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>
+              Editor
             </button>
 
             {/* Capture stays archival-quality; this makes a small sibling that
@@ -350,34 +313,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
               <option value={50 * 1048576}>50MB · Nitro Basic</option>
               <option value={500 * 1048576}>500MB · Nitro</option>
             </select>
-            {trimming && (
-              <>
-                <label style={{ fontSize: 11, color: 'var(--muted-2)' }}>Start</label>
-                <input type="number" min={0} step={0.5} value={trimStart}
-                  onChange={e => setTrimStart(Math.max(0, +e.target.value))}
-                  style={{ width: 70, fontSize: 12, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }} />
-                <label style={{ fontSize: 11, color: 'var(--muted-2)' }}>End</label>
-                <input type="number" min={0} step={0.5} value={trimEnd}
-                  onChange={e => setTrimEnd(Math.max(0, +e.target.value))}
-                  style={{ width: 70, fontSize: 12, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }} />
-                <button disabled={trimBusy || !(trimEnd > trimStart)}
-                  onClick={async () => {
-                    setTrimBusy(true); setTrimNote(null)
-                    const r = await window.flash?.trimClip(clip.filePath, trimStart, trimEnd)
-                    setTrimBusy(false)
-                    if (!r || r.error) { setTrimNote(r?.error ?? 'Trim failed'); return }
-                    const snapped = r.actualStartSeconds !== undefined && Math.abs(r.actualStartSeconds - trimStart) > 0.2
-                    setTrimNote(snapped
-                      ? `Saved ${r.duration}s — started at ${r.actualStartSeconds!.toFixed(1)}s (nearest keyframe)`
-                      : `Saved ${r.duration}s`)
-                  }}
-                  className="px-3 py-1.5 rounded-md text-xs transition-all hover:brightness-110"
-                  style={{ fontWeight: 600, color: 'var(--on-accent)', background: 'var(--accent)', opacity: trimBusy || !(trimEnd > trimStart) ? 0.5 : 1 }}>
-                  {trimBusy ? 'Trimming…' : 'Save trim'}
-                </button>
-                {trimNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{trimNote}</span>}
-              </>
-            )}
+            {trimNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{trimNote}</span>}
           </div>
 
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
@@ -938,6 +874,7 @@ export default function App() {
   const [active, setActive] = useState('My Clips')
   const [gameFilter, setGameFilter] = useState('All')
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  const [editingClip, setEditingClip] = useState<Clip | null>(null)
   const [isRecording, setIsRecording] = useState(false)
   const [detectedGame, setDetectedGame] = useState<string | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
@@ -1117,7 +1054,10 @@ export default function App() {
         </main>
       </div>
       {previewIndex !== null && filteredClips.length > 0 && (
-        <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} />
+        <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} onEdit={setEditingClip} />
+      )}
+      {editingClip && (
+        <Editor clip={editingClip} onClose={() => setEditingClip(null)} />
       )}
       {confirmRequest && (
         <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
