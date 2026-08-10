@@ -335,6 +335,34 @@ Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
     if (options.Get("endSeconds").IsNumber())
         parsed.endUs = static_cast<int64_t>(options.Get("endSeconds").As<Napi::Number>().DoubleValue() * 1000000.0);
 
+    // Both default to no-ops, so callers written before the editor keep working.
+    // Gains are keyed by name rather than position, matching setAudioTracks and
+    // making it impossible to silence the wrong lane by miscounting.
+    if (options.Get("gains").IsObject()) {
+        auto gains = options.Get("gains").As<Napi::Object>();
+        // Indices follow kAudioTrackOrder: game, mic, other.
+        const Napi::Value byTrack[] = {gains.Get("game"), gains.Get("mic"), gains.Get("other")};
+        for (size_t i = 0; i < parsed.gains.size(); ++i) {
+            if (!byTrack[i].IsNumber()) continue;
+            const double gain = byTrack[i].As<Napi::Number>().DoubleValue();
+            if (!std::isfinite(gain) || gain < 0.0) {
+                Napi::RangeError::New(env, "each gain must be a finite number of at least zero")
+                    .ThrowAsJavaScriptException();
+                return env.Undefined();
+            }
+            parsed.gains[i] = static_cast<float>(gain);
+        }
+    }
+    if (options.Get("saturation").IsNumber()) {
+        const double saturation = options.Get("saturation").As<Napi::Number>().DoubleValue();
+        if (!std::isfinite(saturation) || saturation < 0.0 || saturation > 400.0) {
+            Napi::RangeError::New(env, "saturation must be a percentage between 0 and 400")
+                .ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        parsed.saturation = static_cast<uint32_t>(saturation);
+    }
+
     auto* worker = new ExportClipWorker(env, info[0].As<Napi::String>().Utf8Value(),
         info[1].As<Napi::String>().Utf8Value(), parsed);
     auto promise = worker->Promise();

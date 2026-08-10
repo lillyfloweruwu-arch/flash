@@ -187,7 +187,14 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         const size_t mixFrames = static_cast<size_t>(span * kMixRate) + kMixRate;
         std::vector<float> mix(mixFrames * kMixChannels, 0.0f);
         bool haveAudio = false;
-        for (DWORD stream : audioStreams) {
+        // audioStreams is in file order, which clip_writer guarantees matches
+        // kAudioTrackOrder because every clip now carries all three tracks.
+        // A gain of exactly zero is skipped rather than multiplied, so a muted
+        // track contributes nothing at all instead of a very quiet copy.
+        for (size_t track = 0; track < audioStreams.size(); ++track) {
+            const DWORD stream = audioStreams[track];
+            const float gain = track < options.gains.size() ? options.gains[track] : 1.0f;
+            if (gain == 0.0f) continue;
             PROPVARIANT seek;
             PropVariantInit(&seek);
             seek.vt = VT_I8;
@@ -214,7 +221,7 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
                 const float* source = reinterpret_cast<const float*>(data);
                 for (size_t f = 0; f < frames && at + f < mixFrames; ++f)
                     for (uint32_t c = 0; c < kMixChannels; ++c)
-                        mix[(at + f) * kMixChannels + c] += source[f * kMixChannels + c];
+                        mix[(at + f) * kMixChannels + c] += source[f * kMixChannels + c] * gain;
                 buffer->Unlock();
                 haveAudio = true;
             }
@@ -309,6 +316,23 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
                 lastSlot = slot;
             }
             Check(sample->SetSampleTime(rebased), "set video time");
+            // Saturation is a scale of each chroma sample about neutral, applied
+            // in place on the NV12 UV plane. Luma is untouched. At 100 the pass
+            // is skipped entirely so an unmodified export stays on the fast path.
+            if (options.saturation != 100) {
+                ComPtr<IMFMediaBuffer> frame;
+                if (SUCCEEDED(sample->ConvertToContiguousBuffer(&frame))) {
+                    BYTE* pixels = nullptr;
+                    DWORD length = 0;
+                    if (SUCCEEDED(frame->Lock(&pixels, nullptr, &length))) {
+                        const size_t luma = static_cast<size_t>(outWidth) * outHeight;
+                        if (length >= luma + luma / 2)
+                            for (size_t i = luma; i < luma + luma / 2; ++i)
+                                pixels[i] = ApplySaturation(pixels[i], options.saturation);
+                        frame->Unlock();
+                    }
+                }
+            }
             Check(writer->WriteSample(videoOut, sample.Get()), "WriteSample(video)");
             LONGLONG duration = 0;
             if (FAILED(sample->GetSampleDuration(&duration))) duration = 0;

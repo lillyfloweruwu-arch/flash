@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #ifdef _WIN32
@@ -34,6 +35,20 @@ inline int Bt709U(int r, int g, int b) {
 }
 inline int Bt709V(int r, int g, int b) {
     return ((kBt709V[0] * r + kBt709V[1] * g + kBt709V[2] * b + 128) >> 8) + 128;
+}
+
+// Saturation is a scale of each chroma sample about neutral, so it needs no
+// colour-space round trip and 100 percent is exactly the identity. Luma is
+// untouched: this changes how vivid the picture is and nothing else.
+inline uint8_t ApplySaturation(uint8_t chroma, uint32_t percent) {
+    if (percent == 100) return chroma;
+    const int delta = static_cast<int>(chroma) - 128;
+    // Round half away from zero. A plain "+ 50" rounds correctly only above
+    // neutral; below it, integer division truncates toward zero and every
+    // sample lands one step high, biasing the whole chroma plane.
+    const int bias = delta >= 0 ? 50 : -50;
+    const int scaled = 128 + (delta * static_cast<int>(percent) + bias) / 100;
+    return static_cast<uint8_t>(std::clamp(scaled, 0, 255));
 }
 
 #ifdef _WIN32
