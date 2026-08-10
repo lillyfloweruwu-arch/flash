@@ -1,5 +1,6 @@
 #include "clip_writer.h"
 #include "audio_tracks.h"
+#include "../color_space.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -85,16 +86,28 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     Check(MFSetAttributeRatio(videoType.Get(), MF_MT_FRAME_RATE, fps, 1), "video frame rate");
     Check(MFSetAttributeRatio(videoType.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "video pixel aspect");
     Check(videoType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive), "video interlace mode");
+    TagBt709Limited(videoType.Get());   // so the MP4 carries a colour box
     Check(writer->AddStream(videoType.Get(), &videoStream), "AddStream(video)");
     Check(writer->SetInputMediaType(videoStream, videoType.Get(), nullptr), "SetInputMediaType(video)");
 
     struct AudioStream { std::string_view id; DWORD index = 0; uint32_t sampleRate = 0, channels = 0; bool present = false; };
     std::array<AudioStream, 3> audioStreams{};
-    for (size_t i = 0; i < kAudioTrackOrder.size(); ++i) {
+    // Every clip carries all three tracks from kAudioTrackOrder, even a silent
+    // one. The editor maps tracks to mixer lanes by position, so dropping an
+    // empty stream would put Discord's audio on the mic lane. A track with no
+    // packets still gets its stream and is then never written to — a few hundred
+    // bytes of header and no sample data. A clip with no audio at all still gets
+    // no audio streams, since there is nothing to keep aligned.
+    uint32_t fallbackRate = 0, fallbackChannels = 0;
+    for (const auto& p : audioPackets)
+        if (p.samples && p.sampleRate && p.channels) { fallbackRate = p.sampleRate; fallbackChannels = p.channels; break; }
+    for (size_t i = 0; fallbackRate && i < kAudioTrackOrder.size(); ++i) {
         audioStreams[i].id = kAudioTrackOrder[i];
         auto first = std::find_if(audioPackets.begin(), audioPackets.end(), [&](const AudioData& p) { return p.sourceId == kAudioTrackOrder[i]; });
-        if (first == audioPackets.end()) continue;
-        auto& stream = audioStreams[i]; stream.present = true; stream.sampleRate = first->sampleRate; stream.channels = first->channels;
+        auto& stream = audioStreams[i];
+        stream.present = first != audioPackets.end();
+        stream.sampleRate = stream.present ? first->sampleRate : fallbackRate;
+        stream.channels = stream.present ? first->channels : fallbackChannels;
         ComPtr<IMFMediaType> aacType, pcmType;
         Check(MFCreateMediaType(&aacType), "MFCreateMediaType(AAC)");
         aacType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
@@ -124,6 +137,32 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     struct Write { int64_t timeUs; DWORD stream; const EncodedPacket* video; const AudioData* audio; };
     std::vector<Write> schedule;
     schedule.reserve(videoPackets.size() + audioPackets.size());
+    // A stream that never receives a sample is dropped from the file by
+    // IMFSinkWriter::Finalize, which would renumber the remaining tracks and put
+    // Discord's audio on the mic lane in the editor. Give every silent track the
+    // reference track's packet timing, filled with zeroes.
+    std::vector<float> silence;
+    std::vector<AudioData> silentPackets;
+    {
+        std::string_view referenceId;
+        for (const auto& s : audioStreams) if (s.present) { referenceId = s.id; break; }
+        size_t widest = 0;
+        for (const auto& s : audioStreams) {
+            if (s.present || !s.channels) continue;
+            for (const auto& p : audioPackets)
+                if (p.sourceId == referenceId)
+                    widest = (std::max)(widest, static_cast<size_t>(p.frameCount) * s.channels);
+        }
+        silence.assign(widest, 0.0f);
+        for (const auto& s : audioStreams) {
+            if (s.present || !s.channels) continue;
+            for (const auto& p : audioPackets)
+                if (p.sourceId == referenceId)
+                    silentPackets.push_back({silence.data(), p.frameCount, s.channels,
+                                             s.sampleRate, p.timestamp_us, std::string(s.id)});
+        }
+    }
+
     for (const auto& p : videoPackets) schedule.push_back({p.timestamp_us, videoStream, &p, nullptr});
     for (const auto& stream : audioStreams) if (stream.present) {
         for (const auto& p : audioPackets) {
@@ -131,6 +170,10 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
             schedule.push_back({p.timestamp_us, stream.index, nullptr, &p});
         }
     }
+    for (const auto& p : silentPackets)
+        for (const auto& stream : audioStreams)
+            if (!stream.present && p.sourceId == stream.id)
+                schedule.push_back({p.timestamp_us, stream.index, nullptr, &p});
     // Stable so that samples sharing a timestamp keep video-before-audio order.
     std::stable_sort(schedule.begin(), schedule.end(),
         [](const Write& a, const Write& b) { return a.timeUs < b.timeUs; });
