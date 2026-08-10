@@ -300,10 +300,13 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <button onClick={goPrev} disabled={index === 0} className="flex items-center justify-center px-4 shrink-0"
-          style={{ color: index === 0 ? 'var(--faint)' : 'var(--muted-2)', cursor: index === 0 ? 'default' : 'pointer' }}>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M13 4L7 10l6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        </button>
+        <div className="flex items-center px-3 shrink-0">
+          <button onClick={goPrev} disabled={index === 0} className="nav-arrow" aria-label="Previous clip" title="Previous clip">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M11.25 3.75L6 9l5.25 5.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
 
         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-4">
           <video
@@ -392,10 +395,13 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
           </div>
         </div>
 
-        <button onClick={goNext} disabled={index === clips.length - 1} className="flex items-center justify-center px-4 shrink-0"
-          style={{ color: index === clips.length - 1 ? 'var(--faint)' : 'var(--muted-2)', cursor: index === clips.length - 1 ? 'default' : 'pointer' }}>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M7 4l6 6-6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
-        </button>
+        <div className="flex items-center px-3 shrink-0">
+          <button onClick={goNext} disabled={index === clips.length - 1} className="nav-arrow" aria-label="Next clip" title="Next clip">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M6.75 3.75L12 9l-5.25 5.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   )

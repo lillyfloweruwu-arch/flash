@@ -100,6 +100,7 @@
   --muted-3: color-mix(in srgb, var(--muted) 48%, transparent);
   --faint: color-mix(in srgb, var(--muted) 30%, transparent);
   --edge-soft: color-mix(in srgb, var(--edge) 55%, transparent);
+  --arrow-face: color-mix(in srgb, var(--panel) 82%, transparent);
   --accent-wash: color-mix(in srgb, var(--accent) 14%, transparent);
   --accent-line: color-mix(in srgb, var(--accent) 32%, transparent);
   /* "Live" green stays green on every theme — it is a status, not decoration. */
@@ -143,6 +144,47 @@ body {
 @keyframes overlay-in {
   from { opacity: 0; }
   to   { opacity: 1; }
+}
+
+/* Clip player previous/next. Nearly invisible at rest so the clip stays the
+   subject, and a real 44px target that resolves into a button under the
+   cursor rather than a bare glyph floating in the margin. */
+.nav-arrow {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: var(--muted-3);
+  background: transparent;
+  border: 1px solid transparent;
+  transition: color 140ms ease, background 140ms ease,
+              border-color 140ms ease, transform 120ms ease;
+}
+.nav-arrow:not(:disabled):hover {
+  color: var(--fg);
+  background: var(--arrow-face);
+  border-color: var(--edge-soft);
+}
+.nav-arrow:not(:disabled):active {
+  transform: scale(0.92);
+}
+.nav-arrow:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+/* Keyboard users get the same affordance; left and right arrow keys move
+   between clips, so these need to be visibly reachable. */
+.nav-arrow:focus-visible {
+  outline: none;
+  color: var(--fg);
+  background: var(--arrow-face);
+  border-color: var(--accent-line);
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-arrow { transition: none; }
+  .nav-arrow:not(:disabled):active { transform: none; }
 }
 
 /* Electron title bar drag region */
