@@ -719,7 +719,7 @@ interface CaptureHealth {
   error?: string
 }
 
-function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, health, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
@@ -727,6 +727,8 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
   hotkeyRegistered: boolean
   displays: Display[]
   health: CaptureHealth | null
+  learnedGames: Record<string, string>
+  onForgetGame: (exe: string) => void
   onOpenFolder: () => void
   onPickFolder: () => void
 }) {
@@ -833,6 +835,35 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
           )}
         </Card>
 
+        <Card title="Games">
+          <p style={{ fontSize: 11, color: 'var(--muted-3)', paddingTop: 10, lineHeight: 1.5 }}>
+            Names you have taught Flash. These are used alongside the built-in list to
+            decide which game a clip belongs to.
+          </p>
+          {Object.keys(learnedGames).length === 0 ? (
+            <p style={{ fontSize: 12, color: 'var(--muted-3)', paddingTop: 10 }}>
+              Nothing taught yet — Flash recognises {52} games on its own.
+            </p>
+          ) : (
+            <div className="pt-2">
+              {Object.entries(learnedGames).map(([exe, name]) => (
+                <div key={exe} className="flex items-center justify-between py-2"
+                  style={{ borderBottom: '1px solid var(--edge-soft)' }}>
+                  <span style={{ fontSize: 12, color: 'var(--fg)' }}>
+                    {name} <span style={{ color: 'var(--muted-3)' }}>· {exe}</span>
+                  </span>
+                  <button onClick={() => onForgetGame(exe)}
+                    title="Forget this name"
+                    className="px-2 py-1 rounded transition-all hover:bg-white/5"
+                    style={{ fontSize: 11, color: 'var(--muted-2)', border: '1px solid var(--edge)' }}>
+                    Forget
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
         <Card title="Notifications">
           <Row label="Clip saved notification">
             <Toggle on={settings.notifications} onChange={() => onChange({ notifications: !settings.notifications })} />
@@ -917,6 +948,7 @@ export default function App() {
   const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
   const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
   const [health, setHealth] = useState<CaptureHealth | null>(null)
+  const [learnedGames, setLearnedGames] = useState<Record<string, string>>({})
 
   // Poll only while Settings is open — a background timer for a panel nobody is
   // looking at is exactly the kind of idle cost this app exists to avoid.
@@ -1021,6 +1053,7 @@ export default function App() {
     window.flash.capture.listDisplays().then(setDisplays)
     window.flash.capture.onSaveState(setSaveState)
     window.flash.onIdentifyGame(setIdentifyRequest)
+    window.flash.getLearnedGames().then(setLearnedGames)
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
     window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
     window.flash.onGameDetected(setDetectedGame)
@@ -1056,6 +1089,8 @@ export default function App() {
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
               hotkeyRegistered={hotkeyRegistered} displays={displays} health={health}
+              learnedGames={learnedGames}
+              onForgetGame={async exe => setLearnedGames(await window.flash!.forgetGame(exe))}
               onOpenFolder={() => window.flash?.openClipsFolder()}
               onPickFolder={async () => {
                 const folder = await window.flash?.pickClipsFolder()

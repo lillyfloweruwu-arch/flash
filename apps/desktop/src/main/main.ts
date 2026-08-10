@@ -351,23 +351,69 @@ const learnedGames = (): Record<string, string> => settings.learnedGames ?? {}
 
 type DetectedGame = { name: string; pid: number; exe: string; unknown?: boolean }
 
+// Focused window's PID, plus when each candidate started. One PowerShell call,
+// and only when it actually matters — spawning it is far dearer than tasklist.
+function disambiguate(pids: number[]): Promise<{ focused: number; started: Record<number, number> }> {
+  const script = `Add-Type @"
+using System;using System.Runtime.InteropServices;
+public class FG {
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int p);
+}
+"@
+$h=[FG]::GetForegroundWindow(); $p=0; [void][FG]::GetWindowThreadProcessId($h,[ref]$p)
+$times=@{}
+foreach ($id in @(${pids.join(',')})) {
+  try { $times["$id"] = [int64](Get-Process -Id $id -ErrorAction Stop).StartTime.Ticks } catch {}
+}
+@{ focused = $p; started = $times } | ConvertTo-Json -Compress`
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 4000 }, (error, stdout) => {
+        if (error) { resolve({ focused: 0, started: {} }); return }
+        try {
+          const parsed = JSON.parse(stdout)
+          const started: Record<number, number> = {}
+          for (const [pid, ticks] of Object.entries(parsed.started ?? {})) started[Number(pid)] = Number(ticks)
+          resolve({ focused: Number(parsed.focused) || 0, started })
+        } catch { resolve({ focused: 0, started: {} }) }
+      })
+  })
+}
+
 // Tier 1 + 2: the bundled database and anything the user has already named.
 // Plain tasklist, no /V — this runs every few seconds so it stays cheap.
-function detectKnownGame(): Promise<DetectedGame | null> {
-  return new Promise((resolve) => {
+async function detectKnownGame(): Promise<DetectedGame | null> {
+  const matches = await new Promise<DetectedGame[]>((resolve) => {
     execFile('tasklist', ['/FO', 'CSV', '/NH'], (error, stdout) => {
-      if (error) { resolve(null); return }
+      if (error) { resolve([]); return }
       const learned = learnedGames()
+      const found: DetectedGame[] = []
       for (const line of stdout.split('\n')) {
         // tasklist CSV: "image.exe","1234","Console","1","12,345 K"
         const fields = line.match(/^"([^"]*)","([^"]*)"/)
         if (!fields) continue
-        const name = GAME_DB[fields[1].toLowerCase()] ?? learned[fields[1].toLowerCase()]
-        if (name) { resolve({ name, pid: Number(fields[2]), exe: fields[1] }); return }
+        const key = fields[1].toLowerCase()
+        const name = GAME_DB[key] ?? learned[key]
+        if (name) found.push({ name, pid: Number(fields[2]), exe: fields[1] })
       }
-      resolve(null)
+      resolve(found)
     })
   })
+
+  if (!matches.length) return null
+  if (matches.length === 1) return matches[0]
+
+  // More than one known game is running — a launcher left open, or another game
+  // idling in the background. Taking the first match means tasklist ordering (so
+  // roughly PID order) decides, which files clips under whichever game happened
+  // to start first. Ask which window is actually focused instead.
+  const { focused, started } = await disambiguate(matches.map(m => m.pid))
+  return matches.find(m => m.pid === focused)                 // the window you are looking at
+    ?? matches.find(m => m.pid === currentGamePid)            // alt-tabbed away, keep what we had
+    // Neither: prefer the most recently launched. If two games are open you are
+    // almost always playing the one you started last, not the one left running.
+    ?? [...matches].sort((a, b) => (started[b.pid] ?? 0) - (started[a.pid] ?? 0))[0]
 }
 
 // Tier 3: nothing recognised, so guess. tasklist's window-title column is a poor
@@ -808,6 +854,15 @@ function setupIPC() {
     return { ...settings }
   })
   ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, registered: hotkeyRegistered }))
+  ipcMain.handle('get-learned-games', () => ({ ...learnedGames() }))
+  ipcMain.handle('forget-game', (_event, exe: string) => {
+    const learned = { ...learnedGames() }
+    delete learned[exe.toLowerCase()]
+    settings.learnedGames = learned
+    askedAbout.delete(exe)
+    saveSettings()
+    return { ...learned }
+  })
 
   // The user naming an unrecognised process. A null name means "not a game",
   // recorded so Flash stops asking about it.

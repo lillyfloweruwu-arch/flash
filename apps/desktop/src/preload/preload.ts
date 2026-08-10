@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld('flash', {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getHotkeyStatus: () => ipcRenderer.invoke('hotkey-status'),
+  getLearnedGames: () => ipcRenderer.invoke('get-learned-games'),
+  forgetGame: (exe: string) => ipcRenderer.invoke('forget-game', exe),
   identifyGame: (exe: string, name: string | null) => ipcRenderer.invoke('identify-game', exe, name),
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => {
     ipcRenderer.on('identify-game', (_event, request) => callback(request))
@@ -126,6 +128,8 @@ export type FlashAPI = {
   onClipSavedRefresh: (callback: () => void) => void
   getSettings: () => Promise<Settings>
   getHotkeyStatus: () => Promise<{ hotkey: string; registered: boolean }>
+  getLearnedGames: () => Promise<Record<string, string>>
+  forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => void
   setSettings: (partial: Partial<Settings>) => Promise<Settings>
