@@ -38,6 +38,7 @@ set(CAPTURE_SOURCES
   src/buffer/clip_writer.cpp
   src/buffer/clip_exporter.cpp
   src/buffer/clip_trimmer.cpp
+  src/buffer/smart_render.cpp
   src/buffer/audio_decode.cpp
 )
 

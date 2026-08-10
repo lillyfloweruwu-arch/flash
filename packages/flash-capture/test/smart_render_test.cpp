@@ -44,4 +44,30 @@ int main() {
     auto inverted = flash::PlanSmartRender(keys, 5000000, 4000000);
     assert(!inverted.needsHeadEncode);
     assert(inverted.headStartUs == inverted.headEndUs);
+
+    // Real keyframes never land on round microseconds. Measured on a real
+    // clip: asking for 3728650 took 93ms as a pure remux, asking for 3728700
+    // took 24 seconds because the exact match failed and the whole GOP was
+    // re-encoded. A tolerance below one frame closes that cliff.
+    const std::vector<int64_t> real{0, 3728650, 7452050, 11185400};
+    const int64_t halfFrame = 8000;   // half a frame at 60fps
+
+    auto exact = flash::PlanSmartRender(real, 3728650, 9000000, halfFrame);
+    assert(!exact.needsHeadEncode);
+
+    auto justPast = flash::PlanSmartRender(real, 3728700, 9000000, halfFrame);
+    assert(!justPast.needsHeadEncode);
+
+    auto justBefore = flash::PlanSmartRender(real, 3728600, 9000000, halfFrame);
+    assert(!justBefore.needsHeadEncode);
+
+    // Beyond tolerance is a genuine mid-GOP cut and must still re-encode.
+    auto beyond = flash::PlanSmartRender(real, 3740000, 9000000, halfFrame);
+    assert(beyond.needsHeadEncode);
+    assert(beyond.headStartUs == 3740000);
+    assert(beyond.headEndUs == 7452050);
+
+    // Zero tolerance keeps the strict behaviour, so the default is safe.
+    auto strict = flash::PlanSmartRender(real, 3728700, 9000000);
+    assert(strict.needsHeadEncode);
 }

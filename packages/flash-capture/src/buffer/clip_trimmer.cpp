@@ -1,4 +1,6 @@
 #include "clip_trimmer.h"
+#include "smart_render.h"
+#include "../color_space.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -20,6 +22,10 @@ using Microsoft::WRL::ComPtr;
 namespace flash {
 
 #ifdef _WIN32
+bool RenderHeadFragment(IMFSourceReader* reader, IMFSinkWriter* writer,
+    DWORD videoStream, DWORD writerStream, const SmartRenderPlan& plan,
+    IMFMediaType* sourceType, uint32_t targetBitrate);
+
 namespace {
 
 std::wstring ToWide(const std::string& value) {
@@ -88,6 +94,16 @@ void ReadNext(IMFSourceReader* reader, Stream& stream) {
     }
 }
 
+void SeekReader(IMFSourceReader* reader, LONGLONG ticks) {
+    PROPVARIANT position;
+    PropVariantInit(&position);
+    position.vt = VT_I8;
+    position.hVal.QuadPart = ticks;
+    const HRESULT result = reader->SetCurrentPosition(GUID_NULL, position);
+    PropVariantClear(&position);
+    Check(result, "IMFSourceReader::SetCurrentPosition");
+}
+
 } // namespace
 #endif
 
@@ -120,7 +136,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         const auto wideInput = ToWide(inputPath);
         Check(MFCreateSourceReaderFromURL(wideInput.c_str(), attributes.Get(), &reader),
             "MFCreateSourceReaderFromURL");
-        Check(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE),
+        Check(reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE),
             "deselect source streams");
 
         std::error_code ignored;
@@ -132,6 +148,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
 
         std::vector<Stream> streams;
         size_t video = (std::numeric_limits<size_t>::max)();
+        ComPtr<IMFMediaType> sourceVideoType;
         uint32_t width = 0, height = 0, fps = 0;
         for (DWORD index = 0;; ++index) {
             ComPtr<IMFMediaType> type;
@@ -147,6 +164,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
                 throw std::runtime_error("input video is not H.264");
             if (major == MFMediaType_Audio && subtype != MFAudioFormat_AAC)
                 throw std::runtime_error("input audio is not AAC");
+            if (major == MFMediaType_Video) TagBt709Limited(type.Get());
             Check(reader->SetStreamSelection(index, TRUE), "select source stream");
             DWORD writerIndex = 0;
             Check(writer->AddStream(type.Get(), &writerIndex), "IMFSinkWriter::AddStream");
@@ -157,6 +175,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
                 if (video != (std::numeric_limits<size_t>::max)())
                     throw std::runtime_error("multiple video streams are not supported");
                 video = streams.size() - 1;
+                sourceVideoType = type;
                 Check(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width, &height),
                     "get video frame size");
                 UINT32 numerator = 0, denominator = 0;
@@ -165,28 +184,76 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
             }
         }
         if (video == (std::numeric_limits<size_t>::max)()) throw std::runtime_error("input clip has no H.264 video stream");
+
+        std::vector<int64_t> keyframesUs;
+        // The same pass measures the source's real video bitrate. An MP4's
+        // native H.264 media type carries no MF_MT_AVG_BITRATE, so without this
+        // the head encoder picks its own default and the re-encoded fragment
+        // came out at roughly twice the source rate - a bigger file and a
+        // visible change in character where it meets the copied body.
+        uint64_t videoBytes = 0;
+        LONGLONG lastVideoTime = 0;
+        for (;;) {
+            DWORD actual = 0, flags = 0;
+            LONGLONG time = 0;
+            ComPtr<IMFSample> sample;
+            Check(reader->ReadSample(streams[video].reader, 0, &actual, &flags, &time, &sample),
+                "collect video keyframes");
+            if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
+            if (flags & (MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED |
+                MF_SOURCE_READERF_NATIVEMEDIATYPECHANGED))
+                throw std::runtime_error("input media type changed while collecting keyframes");
+            if (!sample) continue;
+            DWORD sampleBytes = 0;
+            if (SUCCEEDED(sample->GetTotalLength(&sampleBytes))) videoBytes += sampleBytes;
+            lastVideoTime = time;
+            UINT32 cleanPoint = FALSE;
+            if (SUCCEEDED(sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) && cleanPoint)
+                keyframesUs.push_back(time / 10);
+        }
+        const double videoSeconds = lastVideoTime / 10000000.0;
+        const uint32_t sourceBitrate = videoSeconds > 0.0
+            ? static_cast<uint32_t>((std::min)(static_cast<double>((std::numeric_limits<uint32_t>::max)()),
+                  static_cast<double>(videoBytes) * 8.0 / videoSeconds))
+            : 0u;
+        SeekReader(reader.Get(), 0);
+        // Half a frame. Below anything a viewer can see, and wide enough that a
+        // request landing a few microseconds off a keyframe still takes the
+        // instant remux path instead of re-encoding the whole GOP.
+        const int64_t snapToleranceUs = fps ? 500000 / fps : 0;
+        const SmartRenderPlan renderPlan = PlanSmartRender(keyframesUs, startUs, endUs, snapToleranceUs);
         Check(writer->BeginWriting(), "IMFSinkWriter::BeginWriting");
 
-        PROPVARIANT position;
-        PropVariantInit(&position);
-        position.vt = VT_I8;
-        position.hVal.QuadPart = startUs * 10;
-        const HRESULT seekResult = reader->SetCurrentPosition(GUID_NULL, position);
-        PropVariantClear(&position);
-        Check(seekResult, "IMFSourceReader::SetCurrentPosition");
+        bool renderedHead = false;
+        if (renderPlan.needsHeadEncode) {
+            ComPtr<IMFSourceReader> decodeReader;
+            Check(MFCreateSourceReaderFromURL(wideInput.c_str(), nullptr, &decodeReader),
+                "create head decoder");
+            renderedHead = RenderHeadFragment(decodeReader.Get(), writer.Get(),
+                streams[video].reader, streams[video].writer, renderPlan,
+                sourceVideoType.Get(), sourceBitrate);
+        }
+
+        SeekReader(reader.Get(), startUs * 10);
 
         ReadNext(reader.Get(), streams[video]);
         if (!streams[video].sample) throw std::runtime_error("trim start is past the end of the input clip");
-        UINT32 cleanPoint = FALSE;
-        if (FAILED(streams[video].sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) || !cleanPoint)
-            throw std::runtime_error("source reader did not seek to an H.264 keyframe");
-        const LONGLONG actualStart = streams[video].time;
+        LONGLONG actualStart = streams[video].time;
+        LONGLONG copyVideoStart = actualStart;
+        if (renderedHead) {
+            actualStart = renderPlan.headStartUs * 10;
+            copyVideoStart = renderPlan.copyStartUs * 10;
+        } else {
+            UINT32 cleanPoint = FALSE;
+            if (FAILED(streams[video].sample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint)) || !cleanPoint)
+                throw std::runtime_error("source reader did not seek to an H.264 keyframe");
+        }
         const LONGLONG requestedEnd = endUs * 10;
         if (actualStart >= requestedEnd) throw std::runtime_error("trim range contains no decodable video");
         for (size_t i = 0; i < streams.size(); ++i) if (i != video) ReadNext(reader.Get(), streams[i]);
 
-        LONGLONG outputEnd = 0;
-        bool wroteVideo = false;
+        LONGLONG outputEnd = renderedHead ? (renderPlan.headEndUs - renderPlan.headStartUs) * 10 : 0;
+        bool wroteVideo = renderedHead;
         for (;;) {
             size_t next = streams.size();
             for (size_t i = 0; i < streams.size(); ++i) {
@@ -195,7 +262,8 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
             }
             if (next == streams.size()) break;
             auto& stream = streams[next];
-            if (stream.time >= actualStart) {
+            if (stream.time >= actualStart &&
+                (stream.major != MFMediaType_Video || stream.time >= copyVideoStart)) {
                 const LONGLONG rebased = RebaseTrimTimestamp(stream.time, actualStart);
                 Check(stream.sample->SetSampleTime(rebased), "IMFSample::SetSampleTime");
                 Check(writer->WriteSample(stream.writer, stream.sample.Get()), "IMFSinkWriter::WriteSample");
