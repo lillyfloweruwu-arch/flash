@@ -234,6 +234,8 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
   const [trimEnd, setTrimEnd] = useState(10)
   const [trimBusy, setTrimBusy] = useState(false)
   const [trimNote, setTrimNote] = useState<string | null>(null)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
 
   // Reset the trim panel when moving between clips so bounds from the previous
@@ -321,6 +323,30 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
               style={{ color: trimming ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${trimming ? 'var(--accent-line)' : 'var(--edge-soft)'}` }}>
               Trim
             </button>
+
+            {/* Capture stays archival-quality; this makes a small sibling that
+                actually fits an upload limit. Unlike Trim this re-encodes, so it
+                takes seconds rather than milliseconds. */}
+            <button disabled={exportBusy}
+              title={`Make a copy under ${Math.round(exportBytes / 1048576)}MB so it can be sent in Discord`}
+              onClick={async () => {
+                setExportBusy(true); setTrimNote(null)
+                const r = await window.flash?.exportClip(clip.filePath, exportBytes)
+                setExportBusy(false)
+                if (!r || r.error) { setTrimNote(r?.error ?? 'Export failed'); return }
+                setTrimNote(`Shareable copy: ${formatBytes(r.bytes ?? 0)} at ${r.height}p — in the same folder`)
+              }}
+              className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
+              style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: exportBusy ? 0.5 : 1 }}>
+              {exportBusy ? 'Compressing…' : 'Export for sharing'}
+            </button>
+            <select value={exportBytes} onChange={e => setExportBytes(+e.target.value)}
+              title="Upload limit to fit under"
+              style={{ fontSize: 11, color: 'var(--muted-2)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }}>
+              <option value={10 * 1048576}>10MB · Discord free</option>
+              <option value={50 * 1048576}>50MB · Nitro Basic</option>
+              <option value={500 * 1048576}>500MB · Nitro</option>
+            </select>
             {trimming && (
               <>
                 <label style={{ fontSize: 11, color: 'var(--muted-2)' }}>Start</label>

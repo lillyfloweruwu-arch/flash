@@ -111,6 +111,9 @@ type CaptureAddon = {
   setClipsDir?(path: string): void
   trimClip?(input: string, output: string, startSeconds: number, endSeconds: number):
     Promise<{ path: string; duration: number; actualStartSeconds?: number }>
+  exportClip?(input: string, output: string, options: {
+    maxBytes: number; maxHeight?: number; startSeconds?: number; endSeconds?: number
+  }): Promise<{ path: string; duration: number; width: number; height: number; bytes: number; bitrateKbps: number }>
   getStatus(): {
     recording: boolean
     bufferSeconds: number
@@ -731,6 +734,27 @@ function setupIPC() {
       return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
     } catch (error: any) {
       return { error: error?.message || 'Trim failed' }
+    }
+  })
+
+  // A share copy, not a replacement. Capture bitrate stays archival-high on
+  // purpose; this produces a small sibling that actually fits an upload limit.
+  ipcMain.handle('export-clip', async (_event, filePath: string, maxBytes: number) => {
+    if (!captureAddon?.exportClip) return { error: 'This build cannot export clips' }
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    const mb = Math.round(maxBytes / (1024 * 1024))
+    const output = filePath.replace(/\.mp4$/i, ` - ${mb}MB.mp4`)
+    try {
+      const result = await captureAddon.exportClip(filePath, output, { maxBytes })
+      try {
+        writeFileSync(sidecarPath(result.path), JSON.stringify({
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
+        }))
+      } catch { /* sidecar is an optimisation */ }
+      mainWindow?.webContents.send('clip-saved-refresh')
+      return result
+    } catch (error: any) {
+      return { error: error?.message || 'Export failed' }
     }
   })
 

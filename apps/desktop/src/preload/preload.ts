@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld('flash', {
   copyClipFile: (filePath: string) => ipcRenderer.invoke('copy-clip-file', filePath),
   trimClip: (filePath: string, start: number, end: number) =>
     ipcRenderer.invoke('trim-clip', filePath, start, end),
+  exportClip: (filePath: string, maxBytes: number) =>
+    ipcRenderer.invoke('export-clip', filePath, maxBytes),
   onHotkeyClip: (callback: () => void) => {
     ipcRenderer.on('hotkey-clip', () => callback())
   },
@@ -118,6 +120,8 @@ export type FlashAPI = {
   copyClipFile: (filePath: string) => Promise<boolean>
   trimClip: (filePath: string, start: number, end: number) =>
     Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
+  exportClip: (filePath: string, maxBytes: number) =>
+    Promise<{ path?: string; bytes?: number; width?: number; height?: number; bitrateKbps?: number; error?: string }>
   onHotkeyClip: (callback: () => void) => void
   onClipSavedRefresh: (callback: () => void) => void
   getSettings: () => Promise<Settings>
