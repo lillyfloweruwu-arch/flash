@@ -109,6 +109,8 @@ type CaptureAddon = {
   // seconds omitted = the whole buffer, exactly as before.
   saveClip(seconds?: number): Promise<{ path: string; duration: number }>
   setClipsDir?(path: string): void
+  trimClip?(input: string, output: string, startSeconds: number, endSeconds: number):
+    Promise<{ path: string; duration: number; actualStartSeconds?: number }>
   getStatus(): {
     recording: boolean
     bufferSeconds: number
@@ -709,6 +711,29 @@ function setupIPC() {
   ipcMain.handle('open-clip', (_event, filePath: string) => {
     shell.openPath(filePath)
   })
+  // Trim is lossless: a remux, not a re-encode, so this returns in well under a
+  // second even for a long clip. Writes beside the original with a " - trim"
+  // suffix rather than overwriting, since the cut snaps to a keyframe and the
+  // user may want to retry with different bounds.
+  ipcMain.handle('trim-clip', async (_event, filePath: string, start: number, end: number) => {
+    if (!captureAddon?.trimClip) return { error: 'This build cannot trim clips' }
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!(end > start)) return { error: 'End must be after start' }
+    const output = filePath.replace(/\.mp4$/i, ` - trim ${Date.now()}.mp4`)
+    try {
+      const result = await captureAddon.trimClip(filePath, output, start, end)
+      try {
+        writeFileSync(sidecarPath(result.path), JSON.stringify({
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
+        }))
+      } catch { /* sidecar is an optimisation */ }
+      mainWindow?.webContents.send('clip-saved-refresh')
+      return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
+    } catch (error: any) {
+      return { error: error?.message || 'Trim failed' }
+    }
+  })
+
   ipcMain.handle('open-clips-folder', () => {
     shell.openPath(settings.clipsFolder)
   })

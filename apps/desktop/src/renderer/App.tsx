@@ -229,7 +229,19 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
 }) {
   const [index, setIndex] = useState(startIndex)
   const [copied, setCopied] = useState<string | null>(null)
+  const [trimming, setTrimming] = useState(false)
+  const [trimStart, setTrimStart] = useState(0)
+  const [trimEnd, setTrimEnd] = useState(10)
+  const [trimBusy, setTrimBusy] = useState(false)
+  const [trimNote, setTrimNote] = useState<string | null>(null)
   const clip = clips[index]
+
+  // Reset the trim panel when moving between clips so bounds from the previous
+  // clip cannot be applied to this one.
+  useEffect(() => {
+    setTrimming(false); setTrimNote(null); setTrimStart(0)
+    setTrimEnd(Math.max(1, clips[index]?.durationSec ?? 10))
+  }, [index, clips])
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
   const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
@@ -300,6 +312,45 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete }: {
             className="rounded-xl"
             style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 220px)', background: '#000' }}
           />
+          {/* Trim is a remux, not a re-encode — it returns in well under a second.
+              The cut snaps back to the nearest keyframe (2s GOP), so the result
+              reports where it actually started rather than pretending otherwise. */}
+          <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
+            <button onClick={() => setTrimming(t => !t)}
+              className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
+              style={{ color: trimming ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${trimming ? 'var(--accent-line)' : 'var(--edge-soft)'}` }}>
+              Trim
+            </button>
+            {trimming && (
+              <>
+                <label style={{ fontSize: 11, color: 'var(--muted-2)' }}>Start</label>
+                <input type="number" min={0} step={0.5} value={trimStart}
+                  onChange={e => setTrimStart(Math.max(0, +e.target.value))}
+                  style={{ width: 70, fontSize: 12, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }} />
+                <label style={{ fontSize: 11, color: 'var(--muted-2)' }}>End</label>
+                <input type="number" min={0} step={0.5} value={trimEnd}
+                  onChange={e => setTrimEnd(Math.max(0, +e.target.value))}
+                  style={{ width: 70, fontSize: 12, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }} />
+                <button disabled={trimBusy || !(trimEnd > trimStart)}
+                  onClick={async () => {
+                    setTrimBusy(true); setTrimNote(null)
+                    const r = await window.flash?.trimClip(clip.filePath, trimStart, trimEnd)
+                    setTrimBusy(false)
+                    if (!r || r.error) { setTrimNote(r?.error ?? 'Trim failed'); return }
+                    const snapped = r.actualStartSeconds !== undefined && Math.abs(r.actualStartSeconds - trimStart) > 0.2
+                    setTrimNote(snapped
+                      ? `Saved ${r.duration}s — started at ${r.actualStartSeconds!.toFixed(1)}s (nearest keyframe)`
+                      : `Saved ${r.duration}s`)
+                  }}
+                  className="px-3 py-1.5 rounded-md text-xs transition-all hover:brightness-110"
+                  style={{ fontWeight: 600, color: 'var(--on-accent)', background: 'var(--accent)', opacity: trimBusy || !(trimEnd > trimStart) ? 0.5 : 1 }}>
+                  {trimBusy ? 'Trimming…' : 'Save trim'}
+                </button>
+                {trimNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{trimNote}</span>}
+              </>
+            )}
+          </div>
+
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
               <h2 style={{ fontWeight: 600, fontSize: 16, color: 'var(--fg)', marginBottom: 4 }}>{clip.title}</h2>
