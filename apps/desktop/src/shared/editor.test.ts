@@ -2,6 +2,7 @@
 //   node --experimental-strip-types src/shared/editor.test.ts
 import { strict as assert } from 'node:assert'
 import { formatTimecode, clampRange, nearestKeyframe } from './editor.ts'
+import { reducePeaks } from './editor.ts'
 
 assert.equal(formatTimecode(0), '0:00.0')
 assert.equal(formatTimecode(4.24), '0:04.2')
@@ -44,5 +45,25 @@ assert.equal(nearestKeyframe(keys, 0, 0), 0)              // exact hit needs no 
 
 // With two keyframes inside the window it takes the closer one, not the first.
 assert.equal(nearestKeyframe([3.6, 3.9], 3.85, 0.5), 3.9)
+
+// One bucket per sample is the identity on magnitude.
+const four = reducePeaks(new Float32Array([0, 0.5, -1, 0.25]), 4)
+assert.equal(four.length, 4)
+assert.equal(four[2], 1)                       // magnitude, not signed value
+
+// Fewer buckets than samples keeps the peak of each span, not the mean —
+// a single loud frame must stay visible after reduction.
+const two = reducePeaks(new Float32Array([0, 0.1, 0.9, 0.2]), 2)
+assert.equal(two.length, 2)
+assert.equal(two[1], Math.fround(0.9))
+
+// More buckets than samples must not produce NaN or read off the end.
+const wide = reducePeaks(new Float32Array([1]), 4)
+assert.equal(wide.length, 4)
+assert.ok(wide.every(Number.isFinite))
+
+// Degenerate inputs return an empty result rather than throwing.
+assert.equal(reducePeaks(new Float32Array([]), 8).length, 8)
+assert.equal(reducePeaks(new Float32Array([1, 2]), 0).length, 0)
 
 console.log('clip editor self-check passed')

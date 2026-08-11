@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipActionBar } from './ClipActionBar'
+import { AudioLanes } from './editor/AudioLanes'
 import { Filmstrip } from './editor/Filmstrip'
+import { useLiveMix } from './editor/useLiveMix'
+import type { LiveMixTrack } from './editor/useLiveMix'
 import { clampRange, formatTimecode, nearestKeyframe } from '../shared/editor'
 import type { ClipInfo } from '../preload/preload'
 
@@ -17,6 +20,9 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [speed, setSpeed] = useState<number>(1)
   const [range, setRange] = useState({ inSec: 0, outSec: clip.durationSec || 0 })
   const [keyframes, setKeyframes] = useState<number[]>([])
+  const [audioTracks, setAudioTracks] = useState<LiveMixTrack[]>([])
+  const [gains, setGains] = useState<Record<string, number>>({})
+  const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
 
   // Keyframes come from a full pass over the file, so they arrive a moment
   // after the screen does. Until then the strip simply has no ticks and no
@@ -33,6 +39,37 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     })
     return () => { cancelled = true }
   }, [clip.filePath])
+
+  useEffect(() => {
+    let cancelled = false
+    setAudioTracks([])
+    setGains({})
+    setMutedTracks(new Set())
+
+    window.flash?.decodeClipAudio(clip.filePath).then(result => {
+      if (cancelled) return
+      if (result.error) {
+        console.error(`Could not decode audio for ${clip.filePath}: ${result.error}`)
+        return
+      }
+
+      const decoded = result.tracks.map(track => ({
+        ...track,
+        sampleRate: result.sampleRate,
+      }))
+      setAudioTracks(decoded)
+      setGains(Object.fromEntries(decoded.map(track => [track.id, 1])))
+    }).catch(error => {
+      if (!cancelled) console.error(`Could not decode audio for ${clip.filePath}`, error)
+    })
+
+    return () => { cancelled = true }
+  }, [clip.filePath])
+
+  const liveGains = useMemo(() => Object.fromEntries(
+    audioTracks.map(track => [track.id, mutedTracks.has(track.id) ? 0 : (gains[track.id] ?? 1)]),
+  ), [audioTracks, gains, mutedTracks])
+  const { ready: mixReady } = useLiveMix(videoRef, audioTracks, liveGains)
 
   const seekTo = useCallback((seconds: number) => {
     const video = videoRef.current
@@ -75,11 +112,12 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>{clip.title}</span>
       } />
 
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 py-4 overflow-hidden">
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 py-4 overflow-hidden" aria-busy={audioTracks.length > 0 && !mixReady}>
         <video
           ref={videoRef}
           key={clip.filePath}
           src={source}
+          muted
           className="rounded-xl"
           style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 290px)', background: '#000' }}
           onLoadedMetadata={event => {
@@ -102,6 +140,19 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           keyframesSec={keyframes}
           onChange={next => setRange(clampRange(next.inSec, next.outSec, duration))}
           onScrub={seekTo}
+        />
+
+        <AudioLanes
+          tracks={audioTracks}
+          gains={gains}
+          muted={mutedTracks}
+          onGainChange={(id, gain) => setGains(current => ({ ...current, [id]: gain }))}
+          onMuteToggle={id => setMutedTracks(current => {
+            const next = new Set(current)
+            if (next.has(id)) next.delete(id)
+            else next.add(id)
+            return next
+          })}
         />
 
         <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>

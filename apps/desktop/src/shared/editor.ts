@@ -1,4 +1,4 @@
-// Pure maths for the clip editor. No DOM and no Electron, so it can be checked
+﻿// Pure maths for the clip editor. No DOM and no Electron, so it can be checked
 // with `node --experimental-strip-types src/shared/editor.test.ts`.
 
 export function formatTimecode(seconds: number): string {
@@ -22,6 +22,25 @@ export function nearestKeyframe(keyframesSec: number[], seconds: number, toleran
     }
   }
   return best
+}
+
+// Peak per bucket, not mean. A mean waveform flattens exactly the thing the
+// user is looking for â€” the one loud frame where something happened.
+export function reducePeaks(samples: Float32Array, buckets: number): Float32Array {
+  const out = new Float32Array(Math.max(0, buckets))
+  if (!out.length || !samples.length) return out
+  const span = samples.length / out.length
+  for (let i = 0; i < out.length; i++) {
+    const start = Math.floor(i * span)
+    const end = Math.min(samples.length, Math.max(start + 1, Math.floor((i + 1) * span)))
+    let peak = 0
+    for (let j = start; j < end; j++) {
+      const magnitude = Math.abs(samples[j])
+      if (magnitude > peak) peak = magnitude
+    }
+    out[i] = peak
+  }
+  return out
 }
 
 // Keeps the pair ordered and inside the clip. Dragging one handle past the
