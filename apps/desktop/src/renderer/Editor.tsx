@@ -20,6 +20,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [speed, setSpeed] = useState<number>(1)
   const [range, setRange] = useState({ inSec: 0, outSec: clip.durationSec || 0 })
   const [keyframes, setKeyframes] = useState<number[]>([])
+  const [saturation, setSaturation] = useState(100)
   const [audioTracks, setAudioTracks] = useState<LiveMixTrack[]>([])
   const [gains, setGains] = useState<Record<string, number>>({})
   const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
@@ -119,7 +120,12 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           src={source}
           muted
           className="rounded-xl"
-          style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 290px)', background: '#000' }}
+          style={{
+            maxWidth: '100%', maxHeight: 'calc(100vh - 290px)', background: '#000',
+            // Omitted entirely at 100 rather than set to saturate(100%), so the
+            // ordinary case costs the compositor nothing.
+            filter: saturation === 100 ? undefined : `saturate(${saturation}%)`,
+          }}
           onLoadedMetadata={event => {
             const length = event.currentTarget.duration || clip.durationSec || 0
             setDuration(length)
@@ -141,6 +147,41 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           onChange={next => setRange(clampRange(next.inSec, next.outSec, duration))}
           onScrub={seekTo}
         />
+
+        {/* A picture control, so it sits above the sound controls rather than
+            among them - but on the same grid, so the stack reads as one. */}
+        <div className="w-full overflow-hidden rounded-lg" style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+          <div className="grid items-center gap-3 px-3" style={{ gridTemplateColumns: '32px 54px minmax(80px, 1fr) 112px 42px', minHeight: 48 }}>
+            <span className="flex h-8 w-8 items-center justify-center rounded-md"
+              style={{ color: 'var(--spark)', background: 'var(--field)', border: '1px solid var(--edge-soft)' }}>
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M8 1.8s4.2 4 4.2 6.7A4.2 4.2 0 018 12.7 4.2 4.2 0 013.8 8.5C3.8 5.8 8 1.8 8 1.8z" />
+                <path d="M8 1.8v10.9" />
+              </svg>
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              colour
+            </span>
+            <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>
+              {saturation === 100 ? 'unchanged' : 'saved copy re-encodes every frame'}
+            </span>
+            <input
+              className="audio-gain-range"
+              type="range"
+              min={0}
+              max={200}
+              step={1}
+              value={saturation}
+              aria-label="Saturation"
+              title="Double-click to reset"
+              onDoubleClick={() => setSaturation(100)}
+              onChange={event => setSaturation(event.currentTarget.valueAsNumber)}
+            />
+            <span style={{ fontSize: 11, color: 'var(--muted-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              {saturation}%
+            </span>
+          </div>
+        </div>
 
         <AudioLanes
           tracks={audioTracks}
