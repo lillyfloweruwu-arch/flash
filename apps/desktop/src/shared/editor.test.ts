@@ -1,7 +1,7 @@
 // Self-check for the clip editor maths. Run with:
 //   node --experimental-strip-types src/shared/editor.test.ts
 import { strict as assert } from 'node:assert'
-import { formatTimecode, clampRange, nearestKeyframe } from './editor.ts'
+import { formatTimecode, clampRange, nearestKeyframe, deriveSaveMode } from './editor.ts'
 import { reducePeaks } from './editor.ts'
 
 assert.equal(formatTimecode(0), '0:00.0')
@@ -65,5 +65,22 @@ assert.ok(wide.every(Number.isFinite))
 // Degenerate inputs return an empty result rather than throwing.
 assert.equal(reducePeaks(new Float32Array([]), 8).length, 8)
 assert.equal(reducePeaks(new Float32Array([1, 2]), 0).length, 0)
+
+// Nothing changed but the cut, and the cut is on a keyframe: pure remux.
+assert.deepEqual(deriveSaveMode(true, [1, 1, 1], 100), { lossless: true, reason: 'none' })
+
+// An off-keyframe in-point costs a head re-encode only.
+assert.deepEqual(deriveSaveMode(false, [1, 1, 1], 100), { lossless: false, reason: 'trim' })
+
+// A gain change re-encodes audio - cheap, seconds.
+assert.deepEqual(deriveSaveMode(true, [1, 0, 1], 100), { lossless: false, reason: 'audio' })
+
+// Saturation re-encodes every frame, and must win the reported reason so the
+// user is told the worse cost rather than the milder one.
+assert.deepEqual(deriveSaveMode(true, [1, 1, 1], 120), { lossless: false, reason: 'video' })
+assert.deepEqual(deriveSaveMode(false, [1, 0, 1], 80), { lossless: false, reason: 'video' })
+
+// No tracks at all is still lossless when nothing else changed.
+assert.deepEqual(deriveSaveMode(true, [], 100), { lossless: true, reason: 'none' })
 
 console.log('clip editor self-check passed')

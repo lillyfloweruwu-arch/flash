@@ -794,6 +794,50 @@ function setupIPC() {
     }
   })
 
+  // The editor's Save. Which native path it takes depends entirely on what was
+  // changed: an untouched mix and unchanged colour can be remuxed, and anything
+  // else has to be re-encoded. The renderer decides and says so in its badge;
+  // this routes accordingly rather than deciding a second time.
+  ipcMain.handle('save-clip-edit', async (_event, filePath: string, options: {
+    startSeconds: number
+    endSeconds: number
+    gains?: { game?: number; mic?: number; other?: number }
+    saturation?: number
+    reEncode: boolean
+  }) => {
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!(options.endSeconds > options.startSeconds)) return { error: 'End must be after start' }
+
+    const output = filePath.replace(/\.mp4$/i, ` - edit ${Date.now()}.mp4`)
+    try {
+      let result: { path: string; duration: number; actualStartSeconds?: number }
+      if (options.reEncode) {
+        if (!captureAddon?.exportClip) return { error: 'This build cannot re-encode clips' }
+        // A ceiling high enough that the size budget never downscales. This is
+        // a full-quality edit, not a share copy.
+        result = await captureAddon.exportClip(filePath, output, {
+          maxBytes: Number.MAX_SAFE_INTEGER,
+          startSeconds: options.startSeconds,
+          endSeconds: options.endSeconds,
+          gains: options.gains,
+          saturation: options.saturation,
+        })
+      } else {
+        if (!captureAddon?.trimClip) return { error: 'This build cannot trim clips' }
+        result = await captureAddon.trimClip(filePath, output, options.startSeconds, options.endSeconds)
+      }
+      try {
+        writeFileSync(sidecarPath(result.path), JSON.stringify({
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
+        }))
+      } catch { /* sidecar is an optimisation */ }
+      mainWindow?.webContents.send('clip-saved-refresh')
+      return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
+    } catch (error: any) {
+      return { error: error?.message || 'Save failed' }
+    }
+  })
+
   // Read-only, but both walk or decode the whole file, so the addon runs them
   // on a worker thread and these just await.
   ipcMain.handle('decode-clip-audio', async (_event, filePath: string) => {

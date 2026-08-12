@@ -24,6 +24,20 @@ export function nearestKeyframe(keyframesSec: number[], seconds: number, toleran
   return best
 }
 
+export type SaveReason = 'none' | 'trim' | 'audio' | 'video'
+
+// Reports the most expensive thing the save will do, not the first one found.
+// Re-encoding video dominates re-encoding audio, which dominates re-encoding a
+// single GOP at the head, and the user should be told the worst of it rather
+// than the mildest.
+export function deriveSaveMode(inOnKeyframe: boolean, gains: number[], saturation: number):
+  { lossless: boolean; reason: SaveReason } {
+  if (saturation !== 100) return { lossless: false, reason: 'video' }
+  if (gains.some(gain => gain !== 1)) return { lossless: false, reason: 'audio' }
+  if (!inOnKeyframe) return { lossless: false, reason: 'trim' }
+  return { lossless: true, reason: 'none' }
+}
+
 // Peak per bucket, not mean. A mean waveform flattens exactly the thing the
 // user is looking for â€” the one loud frame where something happened.
 export function reducePeaks(samples: Float32Array, buckets: number): Float32Array {

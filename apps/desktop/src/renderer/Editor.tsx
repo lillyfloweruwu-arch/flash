@@ -4,10 +4,18 @@ import { AudioLanes } from './editor/AudioLanes'
 import { Filmstrip } from './editor/Filmstrip'
 import { useLiveMix } from './editor/useLiveMix'
 import type { LiveMixTrack } from './editor/useLiveMix'
-import { clampRange, formatTimecode, nearestKeyframe } from '../shared/editor'
+import { clampRange, deriveSaveMode, formatTimecode, nearestKeyframe } from '../shared/editor'
+import type { SaveReason } from '../shared/editor'
 import type { ClipInfo } from '../preload/preload'
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const
+
+const SAVE_NOTES: Record<SaveReason, string> = {
+  none: 'lossless',
+  trim: 're-encodes the first second',
+  audio: 're-encodes audio',
+  video: 're-encodes video — colour changed',
+}
 
 // A finisher, not an editor: one clip in, one clip out. No browser chrome on
 // this screen - no <video controls>, no <select>, no number spinners - because
@@ -21,6 +29,8 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [range, setRange] = useState({ inSec: 0, outSec: clip.durationSec || 0 })
   const [keyframes, setKeyframes] = useState<number[]>([])
   const [saturation, setSaturation] = useState(100)
+  const [saving, setSaving] = useState(false)
+  const [saveNote, setSaveNote] = useState<string | null>(null)
   const [audioTracks, setAudioTracks] = useState<LiveMixTrack[]>([])
   const [gains, setGains] = useState<Record<string, number>>({})
   const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
@@ -77,6 +87,43 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     if (video) video.currentTime = seconds
     setCurrent(seconds)
   }, [])
+
+  // The in-point counts as on a keyframe only when it lands exactly on one.
+  // The native planner carries a half-frame tolerance of its own; this is
+  // deliberately stricter so the badge never promises lossless and then costs
+  // a re-encode.
+  const saveMode = useMemo(
+    () => deriveSaveMode(
+      keyframes.length === 0 || nearestKeyframe(keyframes, range.inSec, 0.001) !== null,
+      Object.values(liveGains),
+      saturation,
+    ),
+    [keyframes, range.inSec, liveGains, saturation])
+
+  const save = useCallback(async () => {
+    setSaving(true)
+    setSaveNote(null)
+    const gains = Object.fromEntries(
+      audioTracks.map(track => [track.id, liveGains[track.id] ?? 1]),
+    ) as { game?: number; mic?: number; other?: number }
+    const result = await window.flash?.saveClipEdit(clip.filePath, {
+      startSeconds: range.inSec,
+      endSeconds: range.outSec,
+      gains,
+      saturation,
+      reEncode: saveMode.reason === 'audio' || saveMode.reason === 'video',
+    })
+    setSaving(false)
+    if (!result || result.error) { setSaveNote(result?.error ?? 'Save failed'); return }
+    // If smart render could not run, the native side falls back to a
+    // keyframe-snapped cut. Say so rather than delivering a different clip than
+    // the one on screen.
+    const drift = result.actualStartSeconds !== undefined
+      ? Math.abs(result.actualStartSeconds - range.inSec) : 0
+    setSaveNote(drift > 0.05
+      ? `Saved from ${formatTimecode(result.actualStartSeconds!)} — ${drift.toFixed(1)}s earlier than asked`
+      : 'Saved alongside the original')
+  }, [audioTracks, liveGains, saturation, saveMode, clip.filePath, range])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -234,18 +281,25 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           {formatTimecode(range.inSec)} → {formatTimecode(range.outSec)}
         </span>
         <span style={{ fontSize: 12, color: 'var(--muted-3)' }}>{(range.outSec - range.inSec).toFixed(1)}s</span>
-        {/* Honest about what the save will cost. An in-point on a keyframe is a
-            pure remux; anywhere else re-encodes the first GOP. */}
-        {keyframes.length > 0 && (
-          nearestKeyframe(keyframes, range.inSec, 0.001) !== null
-            ? <span style={{ fontSize: 11, color: 'var(--accent)' }}>lossless</span>
-            : <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>re-encodes the first second</span>
-        )}
+        {/* Honest about what the save will cost, and specific about which
+            change caused it, rather than just going dark. */}
+        <span style={{ fontSize: 11, color: saveMode.lossless ? 'var(--accent)' : 'var(--muted-3)' }}>
+          {SAVE_NOTES[saveMode.reason]}
+        </span>
+        {saveNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{saveNote}</span>}
         <span className="ml-auto">
-          <button disabled title="Trimming and the audio mixer land in the next step"
-            className="px-4 py-1.5 rounded-md text-xs"
-            style={{ color: 'var(--muted-3)', border: '1px solid var(--edge-soft)', cursor: 'default' }}>
-            Save
+          <button
+            disabled={saving || !(range.outSec > range.inSec)}
+            onClick={save}
+            className="px-4 py-1.5 rounded-md text-xs transition-all hover:brightness-110"
+            style={{
+              fontWeight: 600,
+              color: 'var(--on-accent)',
+              background: 'var(--accent)',
+              opacity: saving || !(range.outSec > range.inSec) ? 0.5 : 1,
+              cursor: saving ? 'default' : 'pointer',
+            }}>
+            {saving ? 'Saving…' : 'Save a copy'}
           </button>
         </span>
       </div>

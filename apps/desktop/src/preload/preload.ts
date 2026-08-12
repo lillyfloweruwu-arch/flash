@@ -58,6 +58,13 @@ contextBridge.exposeInMainWorld('flash', {
   // The editor needs every audio track separately, because a video element
   // decodes only the first one, and the keyframe list to know where a cut can
   // stay lossless.
+  saveClipEdit: (filePath: string, options: {
+    startSeconds: number
+    endSeconds: number
+    gains?: { game?: number; mic?: number; other?: number }
+    saturation?: number
+    reEncode: boolean
+  }) => ipcRenderer.invoke('save-clip-edit', filePath, options),
   decodeClipAudio: (filePath: string) => ipcRenderer.invoke('decode-clip-audio', filePath),
   getClipKeyframes: (filePath: string) => ipcRenderer.invoke('get-clip-keyframes', filePath),
   onHotkeyClip: (callback: () => void) => {
@@ -129,6 +136,13 @@ export type FlashAPI = {
     Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
   exportClip: (filePath: string, maxBytes: number) =>
     Promise<{ path?: string; bytes?: number; width?: number; height?: number; bitrateKbps?: number; error?: string }>
+  saveClipEdit: (filePath: string, options: {
+    startSeconds: number
+    endSeconds: number
+    gains?: { game?: number; mic?: number; other?: number }
+    saturation?: number
+    reEncode: boolean
+  }) => Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
   decodeClipAudio: (filePath: string) =>
     Promise<{ sampleRate: number; tracks: { id: string; samples: Float32Array }[]; error?: string }>
   getClipKeyframes: (filePath: string) =>
