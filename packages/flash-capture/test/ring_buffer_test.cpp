@@ -71,15 +71,17 @@ int main() {
         assert(buffer.Flush().empty());
     }
 
-    // A requested save window returns only the trailing span and still walks
-    // back to a decodable keyframe.
+    // A requested save window retains the whole trailing span and starts at the
+    // preceding keyframe so the result is decodable. The real guarantee is not
+    // an exact duration: keyframe walk-back can add almost one GOP. Here the
+    // 4 s cutoff lands in the GOP starting near 4 s, producing a near-6 s clip.
     {
         RingBuffer buffer(10, kFps);
         PushFrames(buffer, 10 * kFps);
         const auto clip = buffer.Flush(4.0);
         const int64_t span = clip.back().timestamp_us - clip.front().timestamp_us;
         assert(clip.front().isKeyframe);
-        assert(span > 3900000 && span < 4100000);
+        assert(span > 5900000 && span < 6100000);
     }
 
     // Status duration follows timestamps, not the configured/previous frame rate.

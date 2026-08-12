@@ -15,7 +15,11 @@ int main() {
         assert(plan.width % 2 == 0 && plan.height % 2 == 0);
         const double budgetKbits = (10.0 * 1024 * 1024 * 8 * 0.95) / 1000.0 / 30.0;
         assert(plan.videoKbps + plan.audioKbps <= budgetKbits + 1.0);
-        assert(BitsPerPixelPerFrame(plan.width, plan.height, 60, plan.videoKbps) >= 0.05);
+        // The quality floor applies at the output rate chosen by the plan, which
+        // may be half the source rate. Only the documented smallest-rung fallback
+        // below is allowed to miss it when no resolution/rate pair can earn 0.05.
+        assert(plan.fps == 30);
+        assert(BitsPerPixelPerFrame(plan.width, plan.height, plan.fps, plan.videoKbps) >= 0.05);
     }
 
     // With 500MB to play with, the source resolution should survive untouched.
