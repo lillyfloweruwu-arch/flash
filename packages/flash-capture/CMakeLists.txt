@@ -30,6 +30,7 @@ endif()
 set(CAPTURE_SOURCES
   src/binding.cpp
   src/capture/screen_capture.cpp
+  src/capture/wgc_source.cpp
   src/capture/audio_capture.cpp
   src/encoding/encoder_factory.cpp
   src/encoding/mf_hardware_encoder.cpp
@@ -49,6 +50,23 @@ set_target_properties(flash_capture PROPERTIES
   SUFFIX ".node"
 )
 target_link_libraries(flash_capture ${CMAKE_JS_LIB} ${PLATFORM_LIBS})
+
+# Windows.Graphics.Capture, used to record fullscreen games that Desktop
+# Duplication cannot see. The C++/WinRT projection ships with the Windows SDK
+# but is not on the default include path, so point at the version CMake has
+# already selected rather than hardcoding one.
+if(WIN32)
+  target_link_libraries(flash_capture windowsapp)
+  if(CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION)
+    set(FLASH_CPPWINRT
+      "$ENV{ProgramFiles\(x86\)}/Windows Kits/10/Include/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/cppwinrt")
+    if(EXISTS "${FLASH_CPPWINRT}")
+      target_include_directories(flash_capture PRIVATE "${FLASH_CPPWINRT}")
+    else()
+      message(WARNING "C++/WinRT headers not found at ${FLASH_CPPWINRT}; fullscreen capture will not build")
+    endif()
+  endif()
+endif()
 
 # node-addon-api (N-API wrapper)
 execute_process(
