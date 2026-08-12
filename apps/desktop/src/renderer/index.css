@@ -187,6 +187,36 @@ body {
   .nav-arrow:not(:disabled):active { transform: none; }
 }
 
+/* Placeholder lanes while a clip's audio decodes. Decoding walks the whole
+   file - a few seconds for a long clip - and showing nothing at all in the
+   meantime reads as broken rather than busy. */
+@keyframes lane-shimmer {
+  0%   { opacity: 0.35; }
+  50%  { opacity: 0.75; }
+  100% { opacity: 0.35; }
+}
+.lane-skeleton {
+  animation: lane-shimmer 1.4s ease-in-out infinite;
+  background: var(--edge);
+  border-radius: 999px;
+}
+/* Announced to screen readers, invisible to everyone else. Tailwind v4 does
+   not ship this by default. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lane-skeleton { animation: none; opacity: 0.5; }
+}
+
 /* Editor audio-lane gain sliders. A real range input, restyled - it keeps the
    keyboard and screen-reader behaviour a div would throw away. */
 .audio-gain-range {

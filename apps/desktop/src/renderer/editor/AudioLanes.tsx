@@ -90,17 +90,47 @@ function Waveform({ track }: { track: LiveMixTrack }) {
   )
 }
 
-export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle }: {
+const LANE_SHELL = 'w-full overflow-hidden rounded-lg'
+const LANE_GRID = '32px 54px minmax(80px, 1fr) 112px 42px'
+// Every clip carries these three, so the placeholder can name them rather than
+// showing anonymous grey bars.
+const EXPECTED_TRACKS = ['game', 'mic', 'other'] as const
+
+export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, loading }: {
   tracks: LiveMixTrack[]
   gains: Record<string, number>
   onGainChange: (id: string, gain: number) => void
   muted: ReadonlySet<string>
   onMuteToggle: (id: string) => void
+  loading?: boolean
 }) {
+  if (tracks.length === 0 && loading) {
+    return (
+      <div className={LANE_SHELL} style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+        {EXPECTED_TRACKS.map((id, index) => (
+          <div key={id} className="grid items-center gap-3 px-3"
+            style={{ gridTemplateColumns: LANE_GRID, minHeight: 48, borderTop: index === 0 ? 'none' : '1px solid var(--edge-soft)' }}>
+            <span className="flex h-8 w-8 items-center justify-center rounded-md"
+              style={{ color: 'var(--muted-3)', background: 'var(--field)', border: '1px solid var(--edge-soft)' }}>
+              <TrackIcon id={id} />
+            </span>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-3)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              {id}
+            </span>
+            <span className="lane-skeleton" style={{ height: 6 }} aria-hidden="true" />
+            <span className="lane-skeleton" style={{ height: 3, width: 112 }} aria-hidden="true" />
+            <span style={{ fontSize: 11, color: 'var(--muted-3)', textAlign: 'right' }}>…</span>
+          </div>
+        ))}
+        <span className="sr-only" role="status">Reading the clip's audio tracks</span>
+      </div>
+    )
+  }
+
   if (tracks.length === 0) return null
 
   return (
-    <div className="w-full overflow-hidden rounded-lg" style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+    <div className={LANE_SHELL} style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
       {tracks.map((track, index) => {
         const disabled = track.samples.length === 0
         const isMuted = muted.has(track.id)
@@ -110,7 +140,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle }:
             key={track.id}
             className="grid items-center gap-3 px-3 transition-opacity"
             style={{
-              gridTemplateColumns: '32px 54px minmax(80px, 1fr) 112px 42px',
+              gridTemplateColumns: LANE_GRID,
               minHeight: 48,
               borderTop: index === 0 ? 'none' : '1px solid var(--edge-soft)',
               opacity: isMuted ? 0.35 : disabled ? 0.5 : 1,

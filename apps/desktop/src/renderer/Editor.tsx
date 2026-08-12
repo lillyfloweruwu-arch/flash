@@ -32,6 +32,10 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState<string | null>(null)
   const [audioTracks, setAudioTracks] = useState<LiveMixTrack[]>([])
+  // Decoding walks the whole file, so the lanes arrive seconds after the
+  // screen. Showing nothing while that happens reads as broken rather than
+  // busy, so the mixer renders placeholder rows until the tracks land.
+  const [audioLoading, setAudioLoading] = useState(true)
   const [gains, setGains] = useState<Record<string, number>>({})
   const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
 
@@ -56,9 +60,11 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     setAudioTracks([])
     setGains({})
     setMutedTracks(new Set())
+    setAudioLoading(true)
 
     window.flash?.decodeClipAudio(clip.filePath).then(result => {
       if (cancelled) return
+      setAudioLoading(false)
       if (result.error) {
         console.error(`Could not decode audio for ${clip.filePath}: ${result.error}`)
         return
@@ -71,7 +77,9 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
       setAudioTracks(decoded)
       setGains(Object.fromEntries(decoded.map(track => [track.id, 1])))
     }).catch(error => {
-      if (!cancelled) console.error(`Could not decode audio for ${clip.filePath}`, error)
+      if (cancelled) return
+      setAudioLoading(false)
+      console.error(`Could not decode audio for ${clip.filePath}`, error)
     })
 
     return () => { cancelled = true }
@@ -235,6 +243,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
         </div>
 
         <AudioLanes
+          loading={audioLoading}
           tracks={audioTracks}
           gains={gains}
           muted={mutedTracks}
