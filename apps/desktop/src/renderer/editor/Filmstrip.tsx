@@ -10,9 +10,57 @@ const SNAP_SEC = 0.15
 
 type Handle = 'in' | 'out'
 
-// The scrubber. Thumbnails are real <video> elements seeked to their own
-// offset, which is the same trick the library grid already uses - cheaper and
-// sharper than rendering frames to canvas ourselves.
+// Thumbnails are painted from ONE video element seeked across the clip, not one
+// element per thumbnail. Chromium caps how many videos can decode at once, and
+// the library grid behind this screen already holds one per clip; adding ten
+// more pushed past the limit and every video on screen - including the preview
+// - silently painted black.
+function useFilmstripThumbnails(source: string, durationSec: number, canvasRef: React.RefObject<HTMLCanvasElement | null>) {
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || durationSec <= 0) return
+
+    let cancelled = false
+    const video = document.createElement('video')
+    video.src = source
+    video.muted = true
+    video.preload = 'auto'
+
+    const paint = async () => {
+      const context = canvas.getContext('2d')
+      if (!context) return
+      const width = canvas.width / THUMBNAIL_COUNT
+      const height = canvas.height
+
+      for (let i = 0; i < THUMBNAIL_COUNT && !cancelled; i++) {
+        const at = durationSec * ((i + 0.5) / THUMBNAIL_COUNT)
+        const seeked = new Promise<void>(resolve => {
+          const done = () => { video.removeEventListener('seeked', done); resolve() }
+          video.addEventListener('seeked', done)
+          setTimeout(done, 2000)   // a seek that never lands must not stall the strip
+        })
+        video.currentTime = at
+        await seeked
+        if (cancelled) return
+        try {
+          context.drawImage(video, i * width, 0, width, height)
+        } catch { /* frame not decodable yet; leave that slice empty */ }
+      }
+    }
+
+    const start = () => { void paint() }
+    video.addEventListener('loadeddata', start)
+
+    return () => {
+      cancelled = true
+      video.removeEventListener('loadeddata', start)
+      video.removeAttribute('src')
+      video.load()   // releases the decoder rather than waiting for GC
+    }
+  }, [source, durationSec, canvasRef])
+}
+
+// The scrubber.
 export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, keyframesSec, onChange, onScrub }: {
   filePath: string
   durationSec: number
@@ -24,10 +72,13 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
   onScrub: (seconds: number) => void
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [dragging, setDragging] = useState<Handle | null>(null)
   const source = clipUrl(filePath)
   const safeDuration = durationSec > 0 ? durationSec : 0
   const percent = (seconds: number) => safeDuration > 0 ? (seconds / safeDuration) * 100 : 0
+
+  useFilmstripThumbnails(source, safeDuration, canvasRef)
 
   const secondsAt = useCallback((clientX: number) => {
     const track = trackRef.current
@@ -72,7 +123,7 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
     bottom: -3,
     left: `${percent(seconds)}%`,
     width: 10,
-    marginLeft: side === 'in' ? -5 : -5,
+    marginLeft: -5,
     borderRadius: 3,
     background: 'var(--accent)',
     border: '1px solid color-mix(in srgb, var(--accent) 60%, black)',
@@ -93,23 +144,14 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
           onScrub(secondsAt(event.clientX))
         }}>
 
-        <div className="absolute inset-0 flex" style={{ borderRadius: 6, overflow: 'hidden', background: '#000' }}>
-          {Array.from({ length: THUMBNAIL_COUNT }, (_, i) => {
-            const at = safeDuration * ((i + 0.5) / THUMBNAIL_COUNT)
-            return (
-              <video
-                key={i}
-                src={source}
-                muted
-                preload="metadata"
-                tabIndex={-1}
-                aria-hidden="true"
-                style={{ flex: 1, minWidth: 0, height: '100%', objectFit: 'cover', pointerEvents: 'none' }}
-                onLoadedMetadata={event => { event.currentTarget.currentTime = at }}
-              />
-            )
-          })}
-        </div>
+        <canvas
+          ref={canvasRef}
+          width={THUMBNAIL_COUNT * 96}
+          height={54}
+          aria-hidden="true"
+          className="absolute inset-0 w-full h-full"
+          style={{ borderRadius: 6, background: '#000' }}
+        />
 
         {/* Everything outside the selection is dimmed rather than hidden, so
             you can still see what you are cutting away. */}

@@ -479,7 +479,7 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
 
 // ── ClipCard ───────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void; onDelete: () => void }) {
+function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: () => void; onDelete: () => void; suspend: boolean }) {
   const [hov, setHov] = useState(false)
   const [visible, setVisible] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
@@ -508,7 +508,11 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
       style={{ background: 'var(--panel)', border: `1px solid ${hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>
-        {visible && (
+        {/* Cards behind an open player or editor stay in the viewport, so
+            without `suspend` their decoders stay alive underneath and the
+            screen on top runs out. Chromium caps concurrent video decode, and
+            past the cap elements simply paint black with no error. */}
+        {visible && !suspend && (
           <video
             src={`${clipUrl(clip.filePath)}#t=0.5`}
             preload="metadata"
@@ -552,7 +556,7 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength }: {
+function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
   clips: Clip[]
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
@@ -560,6 +564,7 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
   captureAvailable: boolean
   hotkey: string
   bufferLength: number
+  suspendThumbnails: boolean
 }) {
   const [sort, setSort] = useState<'Recent' | 'Longest' | 'Largest'>('Recent')
 
@@ -599,7 +604,7 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
           {sorted.map(clip => (
-            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} />
+            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} suspend={suspendThumbnails} />
           ))}
         </div>
       )}
@@ -1056,6 +1061,7 @@ export default function App() {
               onDeleteClip={deleteClip}
               isRecording={isRecording} captureAvailable={captureAvailable}
               hotkey={settings.hotkey} bufferLength={settings.bufferLength}
+              suspendThumbnails={previewIndex !== null || editingClip !== null}
             />
           )}
         </main>
