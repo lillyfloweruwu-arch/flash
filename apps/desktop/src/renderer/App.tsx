@@ -3,6 +3,7 @@ import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl } from '../shared/editor'
 import { ClipActionBar } from './ClipActionBar'
+import { PlayerControls } from './PlayerControls'
 import Editor from './Editor'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
@@ -236,6 +237,11 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
   const [index, setIndex] = useState(startIndex)
   const [trimNote, setTrimNote] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
+  const [playerPlaying, setPlayerPlaying] = useState(false)
+  const [playerTime, setPlayerTime] = useState(0)
+  const [playerDuration, setPlayerDuration] = useState(0)
+  const [playerVolume, setPlayerVolume] = useState(1)
+  const [playerMuted, setPlayerMuted] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
@@ -252,7 +258,14 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
   const unityGains = useMemo(
     () => Object.fromEntries(audioTracks.map(track => [track.id, 1])),
     [audioTracks])
-  useLiveMix(videoRef, audioTracks, unityGains)
+  useLiveMix(videoRef, audioTracks, unityGains, playerMuted ? 0 : playerVolume)
+
+  const togglePlayerPlay = useCallback(() => {
+    const video = videoRef.current
+    if (!video) return
+    if (video.paused) video.play().catch(() => { /* autoplay policy */ })
+    else video.pause()
+  }, [])
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
   const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
@@ -296,13 +309,33 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
               ref={videoRef}
               key={clip.filePath}
               src={clipUrl(clip.filePath)}
-              controls
               autoPlay
               muted
               className="rounded-xl"
               style={{ maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+              onLoadedMetadata={event => setPlayerDuration(event.currentTarget.duration || clip.durationSec || 0)}
+              onTimeUpdate={event => setPlayerTime(event.currentTarget.currentTime)}
+              onPlay={() => setPlayerPlaying(true)}
+              onPause={() => setPlayerPlaying(false)}
+              onClick={togglePlayerPlay}
             />
           </div>
+
+          <PlayerControls
+            playing={playerPlaying}
+            currentSec={playerTime}
+            durationSec={playerDuration}
+            volume={playerVolume}
+            muted={playerMuted}
+            onTogglePlay={togglePlayerPlay}
+            onSeek={seconds => {
+              const video = videoRef.current
+              if (video) video.currentTime = seconds
+              setPlayerTime(seconds)
+            }}
+            onVolume={next => { setPlayerVolume(next); setPlayerMuted(next === 0) }}
+            onToggleMute={() => setPlayerMuted(m => !m)}
+          />
           <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
             {/* Trimming moved to its own screen. Two number boxes were never a
                 way to pick a moment. */}

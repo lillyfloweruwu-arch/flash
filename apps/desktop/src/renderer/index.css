@@ -217,6 +217,38 @@ body {
   .lane-skeleton { animation: none; opacity: 0.5; }
 }
 
+/* Player scrubber. A real range input so keyboard seeking and screen-reader
+   values come free; --played is set inline so the filled portion tracks
+   playback without a second element. */
+.player-scrub {
+  height: 16px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+}
+.player-scrub::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(to right,
+    var(--accent) 0 var(--played, 0%),
+    var(--edge) var(--played, 0%) 100%);
+}
+.player-scrub::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 999px;
+  border: 2px solid var(--panel);
+  background: var(--accent);
+}
+.player-scrub:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--accent-line);
+}
+
 /* Editor audio-lane gain sliders. A real range input, restyled - it keeps the
    keyboard and screen-reader behaviour a div would throw away. */
 .audio-gain-range {

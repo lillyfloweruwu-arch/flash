@@ -14,10 +14,21 @@ export function useLiveMix(
   videoRef: RefObject<HTMLVideoElement | null>,
   tracks: LiveMixTrack[],
   gains: Record<string, number>,
+  // Output level for the whole mix. The video element is muted, so its own
+  // volume control does nothing and this is the only thing that can turn the
+  // sound down.
+  master = 1,
 ): { ready: boolean } {
   const [ready, setReady] = useState(false)
   const gainsRef = useRef(gains)
   const gainNodesRef = useRef(new Map<string, GainNode>())
+  const masterRef = useRef(master)
+  const masterNodeRef = useRef<GainNode | null>(null)
+
+  useEffect(() => {
+    masterRef.current = master
+    if (masterNodeRef.current) masterNodeRef.current.gain.value = master
+  }, [master])
 
   // Gain is the one part of the graph that changes in place. Keeping this in
   // its own effect prevents a slider move from rebuilding buffers or sources.
@@ -47,6 +58,13 @@ export function useLiveMix(
       return
     }
 
+    // Per-track gains feed a master, so the transport's volume can move the
+    // whole mix without disturbing the mixer's own per-lane levels.
+    const masterNode = context.createGain()
+    masterNode.gain.value = masterRef.current
+    masterNode.connect(context.destination)
+    masterNodeRef.current = masterNode
+
     const buffers = new Map<string, AudioBuffer>()
     const gainNodes = new Map<string, GainNode>()
     for (const track of audibleTracks) {
@@ -56,7 +74,7 @@ export function useLiveMix(
 
       const gainNode = context.createGain()
       gainNode.gain.value = gainsRef.current[track.id] ?? 1
-      gainNode.connect(context.destination)
+      gainNode.connect(masterNode)
       gainNodes.set(track.id, gainNode)
     }
     gainNodesRef.current = gainNodes
@@ -138,7 +156,9 @@ export function useLiveMix(
       video.removeEventListener('ended', onEnded)
       discardSources()
       gainNodesRef.current = new Map()
+      masterNodeRef.current = null
       for (const gainNode of gainNodes.values()) gainNode.disconnect()
+      masterNode.disconnect()
       void context.close().catch(error => {
         console.error('Could not close the clip editor audio context', error)
       })
