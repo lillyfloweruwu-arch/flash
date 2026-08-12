@@ -4,6 +4,7 @@ import { toAccelerator } from '../shared/accelerator'
 import { clipUrl } from '../shared/editor'
 import { ClipActionBar } from './ClipActionBar'
 import { PlayerControls } from './PlayerControls'
+import { Dropdown } from './Dropdown'
 import Editor from './Editor'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
@@ -49,6 +50,14 @@ interface Settings {
 const TABS = ['My Clips', 'Settings']
 
 const QUALITY_OPTIONS = ['720p 30fps', '720p 60fps', '1080p 30fps', '1080p 60fps', '1440p 60fps', '4K 30fps']
+
+// Discord's upload ceilings. The tier is the hint rather than part of the
+// label, so the size stays the thing you read first.
+const EXPORT_LIMITS = [
+  { value: 10 * 1048576, label: '10MB', hint: 'Discord free' },
+  { value: 50 * 1048576, label: '50MB', hint: 'Nitro Basic' },
+  { value: 500 * 1048576, label: '500MB', hint: 'Nitro' },
+]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -361,13 +370,12 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
               style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: exportBusy ? 0.5 : 1 }}>
               {exportBusy ? 'Compressing…' : 'Export for sharing'}
             </button>
-            <select value={exportBytes} onChange={e => setExportBytes(+e.target.value)}
+            <Dropdown
+              value={exportBytes}
+              onChange={setExportBytes}
               title="Upload limit to fit under"
-              style={{ fontSize: 11, color: 'var(--muted-2)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '3px 6px' }}>
-              <option value={10 * 1048576}>10MB · Discord free</option>
-              <option value={50 * 1048576}>50MB · Nitro Basic</option>
-              <option value={500 * 1048576}>500MB · Nitro</option>
-            </select>
+              options={EXPORT_LIMITS}
+            />
             {trimNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{trimNote}</span>}
           </div>
 
