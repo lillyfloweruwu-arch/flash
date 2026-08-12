@@ -150,8 +150,8 @@ body {
    subject, and a real 44px target that resolves into a button under the
    cursor rather than a bare glyph floating in the margin. */
 .nav-arrow {
-  width: 44px;
-  height: 44px;
+  width: 60px;
+  height: 60px;
   display: flex;
   align-items: center;
   justify-content: center;

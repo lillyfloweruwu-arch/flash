@@ -160,7 +160,10 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>{clip.title}</span>
       } />
 
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 py-4 overflow-hidden" aria-busy={audioTracks.length > 0 && !mixReady}>
+      <div className="flex-1 flex flex-col items-center gap-3 px-6 py-4 overflow-hidden min-h-0" aria-busy={audioTracks.length > 0 && !mixReady}>
+        {/* The preview takes whatever the strip, mixer and footer leave, so it
+            grows with the window instead of leaving a band of dead space. */}
+        <div className="flex-1 w-full flex items-center justify-center min-h-0">
         <video
           ref={videoRef}
           key={clip.filePath}
@@ -168,7 +171,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           muted
           className="rounded-xl"
           style={{
-            maxWidth: '100%', maxHeight: 'calc(100vh - 290px)', background: '#000',
+            maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000',
             // Omitted entirely at 100 rather than set to saturate(100%), so the
             // ordinary case costs the compositor nothing.
             filter: saturation === 100 ? undefined : `saturate(${saturation}%)`,
@@ -183,6 +186,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           onPause={() => setPlaying(false)}
           onClick={togglePlay}
         />
+        </div>
 
         <Filmstrip
           filePath={clip.filePath}

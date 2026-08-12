@@ -266,21 +266,27 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
       <div className="flex flex-1 overflow-hidden">
         <div className="flex items-center px-3 shrink-0">
           <button onClick={goPrev} disabled={index === 0} className="nav-arrow" aria-label="Previous clip" title="Previous clip">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <path d="M11.25 3.75L6 9l5.25 5.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+            <svg width="24" height="24" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M11.25 3.75L6 9l5.25 5.25" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         </div>
 
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-4">
-          <video
-            key={clip.filePath}
-            src={`file://${clip.filePath.replace(/\\/g, '/')}`}
-            controls
-            autoPlay
-            className="rounded-xl"
-            style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 220px)', background: '#000' }}
-          />
+        <div className="flex-1 flex flex-col items-center justify-stretch gap-4 px-4 py-4 min-h-0">
+          {/* The video takes the room rather than being given a fixed ceiling,
+              so the controls sit under it instead of floating in dead space.
+              A video with no loaded metadata falls back to 300x150, which is
+              why a clip that fails to load also looks tiny. */}
+          <div className="flex-1 w-full flex items-center justify-center min-h-0">
+            <video
+              key={clip.filePath}
+              src={`file://${clip.filePath.replace(/\\/g, '/')}`}
+              controls
+              autoPlay
+              className="rounded-xl"
+              style={{ maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+            />
+          </div>
           <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
             {/* Trimming moved to its own screen. Two number boxes were never a
                 way to pick a moment. */}
@@ -333,8 +339,8 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
 
         <div className="flex items-center px-3 shrink-0">
           <button onClick={goNext} disabled={index === clips.length - 1} className="nav-arrow" aria-label="Next clip" title="Next clip">
-            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-              <path d="M6.75 3.75L12 9l-5.25 5.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+            <svg width="24" height="24" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+              <path d="M6.75 3.75L12 9l-5.25 5.25" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         </div>
