@@ -1,5 +1,12 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, powerMonitor } from 'electron'
+import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, powerMonitor, protocol, net } from 'electron'
 import { join, basename, dirname } from 'path'
+
+// Must run before the app is ready, or the scheme is not treated as privileged
+// and range requests (video seeking) fail.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'flash-clip',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+}])
 import { execFile } from 'child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { statfs } from 'fs/promises'
@@ -1110,7 +1117,38 @@ if (!app.requestSingleInstanceLock()) {
   })
 }
 
+// Clips are served over their own scheme rather than file://.
+//
+// In development the renderer is a page on http://localhost:5173, and Chromium
+// refuses to load file:// media into an http origin - "Media load rejected by
+// URL safety check" - so every video was black, the play button did nothing,
+// and filmstrip thumbnails never rendered. Only the packaged build, whose
+// renderer is itself file://, ever worked.
+//
+// A privileged scheme fixes both builds with one code path and, unlike turning
+// webSecurity off, keeps the renderer unable to read arbitrary files: this
+// handler serves nothing outside the clips folder. `stream` is required or
+// seeking in a video breaks, since range requests would not be honoured.
+function registerClipProtocol() {
+  protocol.handle('flash-clip', async request => {
+    let target: string
+    try {
+      // The URL carries a "local" host purely so Chromium does not treat the
+      // drive letter as one. Everything after it is the path.
+      target = decodeURIComponent(new URL(request.url).pathname).replace(/^\//, '')
+    } catch {
+      return new Response('bad request', { status: 400 })
+    }
+    const normalised = target.replace(/\//g, '\\')
+    if (!normalised.startsWith(settings.clipsFolder) || normalised.includes('..')) {
+      return new Response('forbidden', { status: 403 })
+    }
+    return net.fetch('file:///' + target)
+  })
+}
+
 app.on('ready', () => {
+  registerClipProtocol()
   loadSettings()
   ensureClipsFolder()
 

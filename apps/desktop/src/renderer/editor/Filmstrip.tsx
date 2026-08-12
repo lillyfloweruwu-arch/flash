@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { clampRange, nearestKeyframe } from '../../shared/editor'
+import { clampRange, clipUrl, nearestKeyframe } from '../../shared/editor'
 
 const THUMBNAIL_COUNT = 10
 
@@ -25,7 +25,7 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
 }) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState<Handle | null>(null)
-  const source = `file://${filePath.replace(/\\/g, '/')}`
+  const source = clipUrl(filePath)
   const safeDuration = durationSec > 0 ? durationSec : 0
   const percent = (seconds: number) => safeDuration > 0 ? (seconds / safeDuration) * 100 : 0
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
+import { clipUrl } from '../shared/editor'
 import { ClipActionBar } from './ClipActionBar'
 import Editor from './Editor'
 
@@ -280,7 +281,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
           <div className="flex-1 w-full flex items-center justify-center min-h-0">
             <video
               key={clip.filePath}
-              src={`file://${clip.filePath.replace(/\\/g, '/')}`}
+              src={clipUrl(clip.filePath)}
               controls
               autoPlay
               className="rounded-xl"
@@ -509,7 +510,7 @@ function ClipCard({ clip, onClick, onDelete }: { clip: Clip; onClick: () => void
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>
         {visible && (
           <video
-            src={`file://${clip.filePath.replace(/\\/g, '/')}#t=0.5`}
+            src={`${clipUrl(clip.filePath)}#t=0.5`}
             preload="metadata"
             muted
             className="w-full h-full object-cover"

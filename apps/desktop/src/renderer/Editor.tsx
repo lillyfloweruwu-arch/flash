@@ -4,7 +4,7 @@ import { AudioLanes } from './editor/AudioLanes'
 import { Filmstrip } from './editor/Filmstrip'
 import { useLiveMix } from './editor/useLiveMix'
 import type { LiveMixTrack } from './editor/useLiveMix'
-import { clampRange, deriveSaveMode, formatTimecode, nearestKeyframe } from '../shared/editor'
+import { clampRange, clipUrl, deriveSaveMode, formatTimecode, nearestKeyframe } from '../shared/editor'
 import type { SaveReason } from '../shared/editor'
 import type { ClipInfo } from '../preload/preload'
 
@@ -152,7 +152,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     if (video) video.playbackRate = speed
   }, [speed])
 
-  const source = `file://${clip.filePath.replace(/\\/g, '/')}`
+  const source = clipUrl(clip.filePath)
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'color-mix(in srgb, var(--bg) 97%, transparent)' }}>
