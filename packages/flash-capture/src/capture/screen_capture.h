@@ -37,6 +37,10 @@ struct DisplayInfo {
     uint32_t width;
     uint32_t height;
     bool isPrimary;
+    // Capture cannot produce more distinct frames than the display refreshes.
+    // Asking for more just records duplicates at a higher bitrate, so the app
+    // needs this to say so rather than letting the setting quietly lie.
+    uint32_t refreshHz;
 };
 
 using FrameCallback = std::function<void(const FrameData& frame)>;

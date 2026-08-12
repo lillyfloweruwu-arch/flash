@@ -45,6 +45,7 @@ public:
 
 private:
     void ReleaseCurrentFrame();
+    bool DeliverLast(SourceFrame& frame);
 
     ID3D11Device* device_ = nullptr;
     capture::GraphicsCaptureItem item_{nullptr};
@@ -52,6 +53,14 @@ private:
     capture::GraphicsCaptureSession session_{nullptr};
     capture::Direct3D11CaptureFrame current_{nullptr};
     ComPtr<ID3D11Texture2D> currentTexture_;
+    // Our own copy of the last frame. WGC only produces a frame when the screen
+    // changes, so on a still screen the encoder would otherwise be starved and
+    // the clip would come back with almost no frames. Duplication solves this
+    // by re-delivering its previous texture on timeout; this does the same.
+    // Copying also lets each WGC frame be closed immediately, which is what
+    // keeps the pool from starving.
+    ComPtr<ID3D11Texture2D> lastTexture_;
+    ComPtr<ID3D11DeviceContext> context_;
     uint32_t targetFps_ = 60;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
@@ -93,6 +102,8 @@ bool BorderCanBeDisabled() {
 bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
     if (!device_) return false;
     targetFps_ = fps ? fps : 60;
+    device_->GetImmediateContext(&context_);
+    if (!context_) return false;
 
     try {
         if (!capture::GraphicsCaptureSession::IsSupported()) return false;
@@ -147,6 +158,16 @@ bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
     }
 }
 
+// A still screen produces no new WGC frames. Re-delivering the last one keeps
+// the encoder fed at the configured rate, exactly as duplication does on its
+// own timeout, so a paused game still records a watchable clip.
+bool WgcSource::DeliverLast(SourceFrame& frame) {
+    if (!lastTexture_) return false;
+    frame.texture = lastTexture_.Get();
+    frame.timestampUs = CaptureClockUs();
+    return true;
+}
+
 void WgcSource::ReleaseCurrentFrame() {
     currentTexture_.Reset();
     if (current_) {
@@ -163,28 +184,48 @@ bool WgcSource::Next(SourceFrame& frame, uint32_t timeoutMs) {
     // starving.
     ReleaseCurrentFrame();
 
-    const uint32_t slice = 2;
-    for (uint32_t waited = 0;; waited += slice) {
-        try {
-            current_ = pool_.TryGetNextFrame();
-        } catch (...) {
-            return false;
-        }
-        // A null frame means nothing new has arrived yet, which is ordinary
-        // rather than an error.
-        if (current_) break;
-        if (waited >= timeoutMs) return false;
-        Sleep(slice);
+    // Deliberately non-blocking, and timeoutMs is deliberately unused. Polling
+    // with Sleep here cost 124ms per frame at a 60fps target: Windows' default
+    // timer granularity is ~15.6ms, so Sleep(2) sleeps a whole tick, and eight
+    // of those is the entire frame budget spent waiting. CaptureLoop already
+    // paces with a high-resolution waitable timer, so the right thing is to ask
+    // once and let the caller decide when to ask again.
+    (void)timeoutMs;
+    try {
+        current_ = pool_.TryGetNextFrame();
+    } catch (...) {
+        return DeliverLast(frame);
     }
+    // A null frame means nothing new has arrived yet, which is ordinary rather
+    // than an error: the screen simply has not changed since the last ask.
+    if (!current_) return DeliverLast(frame);
 
     try {
         const auto access = current_.Surface()
             .as<::Windows::Graphics::DirectX::Direct3D11::IDirect3DDxgiInterfaceAccess>();
         if (FAILED(access->GetInterface(IID_PPV_ARGS(&currentTexture_))) || !currentTexture_) {
             ReleaseCurrentFrame();
-            return false;
+            return DeliverLast(frame);
         }
-        frame.texture = currentTexture_.Get();
+
+        // Copy into a texture we own, so the WGC frame can be closed at once and
+        // the same picture can be re-delivered while the screen sits still.
+        if (!lastTexture_) {
+            D3D11_TEXTURE2D_DESC desc{};
+            currentTexture_->GetDesc(&desc);
+            desc.BindFlags = 0;
+            desc.MiscFlags = 0;
+            desc.CPUAccessFlags = 0;
+            desc.Usage = D3D11_USAGE_DEFAULT;
+            if (FAILED(device_->CreateTexture2D(&desc, nullptr, &lastTexture_))) {
+                ReleaseCurrentFrame();
+                return false;
+            }
+        }
+        context_->CopyResource(lastTexture_.Get(), currentTexture_.Get());
+        ReleaseCurrentFrame();
+
+        frame.texture = lastTexture_.Get();
         // The frame's own SystemRelativeTime is a QPC value measured since
         // boot. Audio packets and the duplication backend both stamp with
         // CaptureClockUs, so using WGC's clock here puts video and audio on
@@ -202,6 +243,10 @@ bool WgcSource::Next(SourceFrame& frame, uint32_t timeoutMs) {
 
 void WgcSource::Stop() {
     ReleaseCurrentFrame();
+    // Released here rather than left to the destructor: a restart at a new
+    // resolution must not re-deliver a frame of the old size.
+    lastTexture_.Reset();
+    context_.Reset();
     try {
         if (session_) { session_.Close(); session_ = nullptr; }
         if (pool_) { pool_.Close(); pool_ = nullptr; }

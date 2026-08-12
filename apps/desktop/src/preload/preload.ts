@@ -188,4 +188,5 @@ export interface Display {
   width: number
   height: number
   isPrimary: boolean
+  refreshHz?: number
 }

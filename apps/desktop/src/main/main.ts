@@ -154,6 +154,7 @@ export interface Display {
   width: number
   height: number
   isPrimary: boolean
+  refreshHz?: number
 }
 
 let captureAddon: CaptureAddon | null = null
@@ -1144,8 +1145,14 @@ function registerClipProtocol() {
     } catch {
       return new Response('bad request', { status: 400 })
     }
+    // Two roots are allowed: the clips folder, and the app's own bundled
+    // assets. The notification sound lives in the second, and it is served over
+    // this scheme for the same reason clips are - a renderer on
+    // http://localhost:5173 cannot load file:// media at all.
     const normalised = target.replace(/\//g, '\\')
-    if (!normalised.startsWith(settings.clipsFolder) || normalised.includes('..')) {
+    const assetRoot = resource('assets', 'assets')
+    const allowed = normalised.startsWith(settings.clipsFolder) || normalised.startsWith(assetRoot)
+    if (!allowed || normalised.includes('..')) {
       return new Response('forbidden', { status: 403 })
     }
     if (!existsSync(normalised)) return new Response('not found', { status: 404 })
@@ -1155,6 +1162,11 @@ function registerClipProtocol() {
     // `seekable` range, so the scrubber cannot jump anywhere - measured as
     // "asked for 15.00s, landed at 0.00, seekable 0.0-0.0".
     const size = statSync(normalised).size
+    // The scheme serves clips and the notification sound; a wav announced as
+    // video/mp4 will not play.
+    const contentType = normalised.toLowerCase().endsWith(".wav") ? "audio/wav"
+      : normalised.toLowerCase().endsWith(".png") ? "image/png"
+      : "video/mp4"
     const asWeb = (start: number, end: number) =>
       Readable.toWeb(createReadStream(normalised, { start, end })) as unknown as ReadableStream<Uint8Array>
 

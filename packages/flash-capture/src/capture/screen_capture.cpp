@@ -206,8 +206,15 @@ std::vector<DisplayInfo> ScreenCapture::ListDisplays() {
             const auto& r = desc.DesktopCoordinates;
             char name[64]{};
             WideCharToMultiByte(CP_UTF8, 0, desc.DeviceName, -1, name, sizeof(name), nullptr, nullptr);
+            // DXGI_OUTPUT_DESC carries no refresh rate, but it does carry the
+            // device name the display settings API wants.
+            DEVMODEW mode{};
+            mode.dmSize = sizeof(mode);
+            const uint32_t refreshHz =
+                EnumDisplaySettingsW(desc.DeviceName, ENUM_CURRENT_SETTINGS, &mode)
+                    ? mode.dmDisplayFrequency : 0;
             displays.push_back({id++, name, static_cast<uint32_t>(r.right - r.left),
-                static_cast<uint32_t>(r.bottom - r.top), r.left == 0 && r.top == 0});
+                static_cast<uint32_t>(r.bottom - r.top), r.left == 0 && r.top == 0, refreshHz});
         }
     }
 #endif

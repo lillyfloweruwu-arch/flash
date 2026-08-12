@@ -28,6 +28,7 @@ interface Display {
   width: number
   height: number
   isPrimary: boolean
+  refreshHz?: number
 }
 
 interface Settings {
@@ -49,7 +50,22 @@ interface Settings {
 
 const TABS = ['My Clips', 'Settings']
 
-const QUALITY_OPTIONS = ['720p 30fps', '720p 60fps', '1080p 30fps', '1080p 60fps', '1440p 60fps', '4K 30fps']
+// Ordered by how much they cost, not by resolution, so the list reads as a
+// single ladder. High frame rates are only worth offering because capture can
+// actually reach them - the ceiling is the display's refresh rate, which
+// Settings now shows next to this.
+const QUALITY_OPTIONS = [
+  '720p 30fps', '720p 60fps',
+  '1080p 30fps', '1080p 60fps', '1080p 120fps', '1080p 144fps',
+  '1440p 60fps', '1440p 120fps',
+  '4K 30fps', '4K 60fps',
+]
+
+// The fps half of a quality string, for comparing against the display.
+function qualityFps(quality: string): number {
+  const match = /(\d+)fps$/.exec(quality.trim())
+  return match ? Number(match[1]) : 0
+}
 
 // Discord's upload ceilings. The tier is the hint rather than part of the
 // label, so the size stays the thing you read first.
@@ -743,6 +759,10 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
   onOpenFolder: () => void
   onPickFolder: () => void
 }) {
+  // The ceiling for a useful frame rate is the refresh rate of the display
+  // actually being captured, not the fastest one attached.
+  const activeRefreshHz = displays.find(d => d.id === settings.displayId)?.refreshHz ?? 0
+
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
       <span style={{ fontSize: 13, color: 'var(--muted)' }}>{label}</span>
@@ -817,10 +837,27 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
             </Row>
           )}
           <Row label="Quality">
-            <select value={settings.quality} onChange={e => onChange({ quality: e.target.value })}
-              style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge-soft)', borderRadius: 6, padding: '4px 8px' }}>
-              {QUALITY_OPTIONS.map(q => <option key={q} value={q}>{q}</option>)}
-            </select>
+            <div className="flex items-center gap-2">
+              {/* Capture cannot make more distinct frames than the display
+                  refreshes; above that you get duplicates at a higher bitrate.
+                  Say so rather than letting the setting quietly lie. */}
+              {activeRefreshHz > 0 && qualityFps(settings.quality) > activeRefreshHz && (
+                <span title={`Your display runs at ${activeRefreshHz}Hz, so frames above that are duplicates.`}
+                  style={{ fontSize: 11, color: 'var(--spark)' }}>
+                  above {activeRefreshHz}Hz
+                </span>
+              )}
+              <Dropdown
+                value={settings.quality}
+                onChange={quality => onChange({ quality })}
+                options={QUALITY_OPTIONS.map(q => ({
+                  value: q,
+                  label: q,
+                  hint: activeRefreshHz > 0 && qualityFps(q) > activeRefreshHz ? 'over refresh' : undefined,
+                }))}
+                width={150}
+              />
+            </div>
           </Row>
           <Row label={`Buffer length — ${settings.bufferLength}s`}>
             <input type="range" min={10} max={300} step={5} value={settings.bufferLength}
@@ -1085,10 +1122,13 @@ export default function App() {
     window.flash.getCurrentGame().then(setDetectedGame)
     window.flash.onClipSavedRefresh(() => refreshClips())
 
+    // Served over flash-clip, not file://. A renderer page on
+    // http://localhost:5173 cannot load file:// media, so in development the
+    // sound silently never played - and the empty catch below hid it.
     window.flash.onPlayClipSound((soundPath: string) => {
-      const audio = new Audio(`file://${soundPath.replace(/\\/g, '/')}`)
+      const audio = new Audio(clipUrl(soundPath))
       audio.volume = 0.7
-      audio.play().catch(() => {})
+      audio.play().catch(error => console.warn('Could not play the clip sound', error))
     })
 
     refreshClips()
