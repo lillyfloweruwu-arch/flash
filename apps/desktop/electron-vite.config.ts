@@ -19,6 +19,14 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    // The design hook rewrites .impeccable/hook.cache.json on every run, and
+    // the watcher was treating that as a source change and reloading the whole
+    // window mid-use. It is a cache, not source.
+    server: {
+      watch: {
+        ignored: ['**/.impeccable/**', '**/release/**', '**/out/**'],
+      },
+    },
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html'),
