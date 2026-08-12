@@ -186,7 +186,15 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
       }
       else { video = g_ringBuffer->Flush(windowSeconds); audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); width = g_encodeWidth; height = g_encodeHeight; fps = g_quality.fps; }
       if (video.empty()) { Napi::Error::New(info.Env(), "replay buffer is empty").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-      if (windowSeconds > 0.0) {
+      // Audio outside the video's span has to go, and that is true of a
+      // full-buffer save as much as a windowed one. It used to be done only
+      // when a length was given, so a hotkey save kept audio reaching back
+      // before the first video packet. Every one of those samples clamps to
+      // timestamp zero on the way out, IMFSinkWriter waits for the video
+      // stream to catch up to audio it has already been handed, and the save
+      // never returns - measured as a hang that a 28-second save did not have
+      // and a full-buffer save with audio disabled did not have either.
+      {
           const int64_t startUs = video.front().timestamp_us, endUs = video.back().timestamp_us + 1000000 / fps;
           audio.erase(std::remove_if(audio.begin(), audio.end(), [=](const OwnedAudio& packet) {
               const int64_t packetEndUs = packet.timestampUs + (packet.sampleRate ? static_cast<int64_t>(packet.frameCount) * 1000000 / packet.sampleRate : 0);

@@ -1,4 +1,5 @@
 #include "frame_source.h"
+#include "capture_clock.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -184,7 +185,14 @@ bool WgcSource::Next(SourceFrame& frame, uint32_t timeoutMs) {
             return false;
         }
         frame.texture = currentTexture_.Get();
-        frame.timestampUs = current_.SystemRelativeTime().count() / 10;
+        // The frame's own SystemRelativeTime is a QPC value measured since
+        // boot. Audio packets and the duplication backend both stamp with
+        // CaptureClockUs, so using WGC's clock here puts video and audio on
+        // different epochs entirely: every audio packet then looks older than
+        // every video frame, gets discarded as out of range, and a full-buffer
+        // save stalls the muxer waiting for video to catch up to audio it has
+        // already been handed. One clock for both backends.
+        frame.timestampUs = CaptureClockUs();
         return true;
     } catch (...) {
         ReleaseCurrentFrame();
