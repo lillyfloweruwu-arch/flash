@@ -42,11 +42,18 @@
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Flash"
+      "shortcutName": "Flash",
+      "runAfterFinish": true,
+      "installerHeader": "../../assets/installer/header.bmp",
+      "installerSidebar": "../../assets/installer/sidebar.bmp",
+      "uninstallerSidebar": "../../assets/installer/sidebar-uninstall.bmp",
+      "installerIcon": "../../assets/icons/blood.ico",
+      "uninstallerIcon": "../../assets/icons/blood.ico",
+      "uninstallDisplayName": "Flash ${version}"
     }
   },
   "dependencies": {
