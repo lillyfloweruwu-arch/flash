@@ -8,7 +8,8 @@ protocol.registerSchemesAsPrivileged([{
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
 }])
 import { execFile } from 'child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { Readable } from 'stream'
 import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
 
@@ -1143,7 +1144,46 @@ function registerClipProtocol() {
     if (!normalised.startsWith(settings.clipsFolder) || normalised.includes('..')) {
       return new Response('forbidden', { status: 403 })
     }
-    return net.fetch('file:///' + target)
+    if (!existsSync(normalised)) return new Response('not found', { status: 404 })
+
+    // Range support is what makes a clip seekable. Handing back the whole file
+    // in one response plays fine from the start and reports an empty
+    // `seekable` range, so the scrubber cannot jump anywhere - measured as
+    // "asked for 15.00s, landed at 0.00, seekable 0.0-0.0".
+    const size = statSync(normalised).size
+    const asWeb = (start: number, end: number) =>
+      Readable.toWeb(createReadStream(normalised, { start, end })) as unknown as ReadableStream<Uint8Array>
+
+    const range = request.headers.get('Range')
+    const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null
+    if (!match) {
+      return new Response(asWeb(0, size - 1), {
+        status: 200,
+        headers: {
+          'Content-Type': 'video/mp4',
+          'Content-Length': String(size),
+          'Accept-Ranges': 'bytes',
+        },
+      })
+    }
+
+    const start = match[1] ? Number(match[1]) : 0
+    const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1
+    if (!(start >= 0 && start <= end && end < size)) {
+      return new Response('range not satisfiable', {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${size}` },
+      })
+    }
+    return new Response(asWeb(start, end), {
+      status: 206,
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Range': `bytes ${start}-${end}/${size}`,
+        'Content-Length': String(end - start + 1),
+        'Accept-Ranges': 'bytes',
+      },
+    })
   })
 }
 
