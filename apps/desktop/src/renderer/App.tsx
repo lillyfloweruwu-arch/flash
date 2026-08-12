@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl } from '../shared/editor'
 import { ClipActionBar } from './ClipActionBar'
 import Editor from './Editor'
+import { useClipAudio } from './editor/useClipAudio'
+import { useLiveMix } from './editor/useLiveMix'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -233,6 +235,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
 }) {
   const [index, setIndex] = useState(startIndex)
   const [trimNote, setTrimNote] = useState<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
@@ -240,6 +243,16 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
   // Clear the last export note when moving between clips, so it cannot read as
   // if it described the clip now on screen.
   useEffect(() => { setTrimNote(null) }, [index, clips])
+
+  // The element is muted and every track is mixed natively instead. A video
+  // element plays only the FIRST audio track: a clip where the game was quiet
+  // but you spoke has its voice on track two, and played as complete silence.
+  // Audio joins a moment after the video while the decode finishes.
+  const { tracks: audioTracks } = useClipAudio(clip?.filePath ?? '')
+  const unityGains = useMemo(
+    () => Object.fromEntries(audioTracks.map(track => [track.id, 1])),
+    [audioTracks])
+  useLiveMix(videoRef, audioTracks, unityGains)
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
   const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
@@ -280,10 +293,12 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
               why a clip that fails to load also looks tiny. */}
           <div className="flex-1 w-full flex items-center justify-center min-h-0">
             <video
+              ref={videoRef}
               key={clip.filePath}
               src={clipUrl(clip.filePath)}
               controls
               autoPlay
+              muted
               className="rounded-xl"
               style={{ maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
             />

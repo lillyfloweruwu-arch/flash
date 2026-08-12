@@ -3,6 +3,7 @@ import { ClipActionBar } from './ClipActionBar'
 import { AudioLanes } from './editor/AudioLanes'
 import { Filmstrip } from './editor/Filmstrip'
 import { useLiveMix } from './editor/useLiveMix'
+import { useClipAudio } from './editor/useClipAudio'
 import type { LiveMixTrack } from './editor/useLiveMix'
 import { clampRange, clipUrl, deriveSaveMode, formatTimecode, nearestKeyframe } from '../shared/editor'
 import type { SaveReason } from '../shared/editor'
@@ -31,11 +32,10 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [saturation, setSaturation] = useState(100)
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState<string | null>(null)
-  const [audioTracks, setAudioTracks] = useState<LiveMixTrack[]>([])
   // Decoding walks the whole file, so the lanes arrive seconds after the
   // screen. Showing nothing while that happens reads as broken rather than
   // busy, so the mixer renders placeholder rows until the tracks land.
-  const [audioLoading, setAudioLoading] = useState(true)
+  const { tracks: audioTracks, loading: audioLoading } = useClipAudio(clip.filePath)
   const [gains, setGains] = useState<Record<string, number>>({})
   const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
 
@@ -56,34 +56,9 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   }, [clip.filePath])
 
   useEffect(() => {
-    let cancelled = false
-    setAudioTracks([])
-    setGains({})
+    setGains(Object.fromEntries(audioTracks.map(track => [track.id, 1])))
     setMutedTracks(new Set())
-    setAudioLoading(true)
-
-    window.flash?.decodeClipAudio(clip.filePath).then(result => {
-      if (cancelled) return
-      setAudioLoading(false)
-      if (result.error) {
-        console.error(`Could not decode audio for ${clip.filePath}: ${result.error}`)
-        return
-      }
-
-      const decoded = result.tracks.map(track => ({
-        ...track,
-        sampleRate: result.sampleRate,
-      }))
-      setAudioTracks(decoded)
-      setGains(Object.fromEntries(decoded.map(track => [track.id, 1])))
-    }).catch(error => {
-      if (cancelled) return
-      setAudioLoading(false)
-      console.error(`Could not decode audio for ${clip.filePath}`, error)
-    })
-
-    return () => { cancelled = true }
-  }, [clip.filePath])
+  }, [audioTracks])
 
   const liveGains = useMemo(() => Object.fromEntries(
     audioTracks.map(track => [track.id, mutedTracks.has(track.id) ? 0 : (gains[track.id] ?? 1)]),
