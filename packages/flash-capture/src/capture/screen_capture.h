@@ -11,12 +11,13 @@
 
 #ifdef _WIN32
 #include <d3d11.h>
-#include <dxgi1_2.h>
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
 #endif
 
 namespace flash {
+
+class FrameSource;
 
 struct FrameData {
     uint8_t* data = nullptr;
@@ -72,9 +73,7 @@ public:
 
 private:
     void CaptureLoop();
-    bool CreateDuplication();
     bool CreateFrameResources();
-    bool RecreateDuplication();
     void SetCaptureError(const std::string& error);
     void DeliverFrame(ID3D11Texture2D* desktopTexture, int64_t timestampUs);
 
@@ -94,9 +93,9 @@ private:
     std::atomic<bool> gpuOutputEnabled_{true};
 
 #ifdef _WIN32
+    std::unique_ptr<FrameSource> source_;
     ComPtr<ID3D11Device> device_;
     ComPtr<ID3D11DeviceContext> context_;
-    ComPtr<IDXGIOutputDuplication> duplication_;
     ComPtr<ID3D11Texture2D> stagingTexture_;
     ComPtr<ID3D11VideoDevice> videoDevice_;
     ComPtr<ID3D11VideoContext> videoContext_;
@@ -104,8 +103,6 @@ private:
     ComPtr<ID3D11VideoProcessor> videoProcessor_;
     ComPtr<ID3D11Texture2D> nv12Texture_;
     ComPtr<ID3D11VideoProcessorOutputView> outputView_;
-    ComPtr<ID3D11Texture2D> previousDesktopTexture_;
-    HRESULT lastDuplicationError_ = S_OK;
 #endif
 };
 

@@ -1,11 +1,14 @@
 #include "screen_capture.h"
 #include "capture_clock.h"
+#include "frame_source.h"
 #include "../color_space.h"
 #include <algorithm>
 #include <chrono>
+#include <functional>
 
 #ifdef _WIN32
 #include <Windows.h>
+#include <dxgi1_2.h>
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 #endif
@@ -13,13 +16,178 @@
 namespace flash {
 
 #ifdef _WIN32
-static bool IsDeviceLost(HRESULT hr) {
+namespace {
+
+bool IsDeviceLost(HRESULT hr) {
     return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET;
 }
+
+class DuplicationSource final : public FrameSource {
+public:
+    DuplicationSource(ID3D11Device* device, ID3D11DeviceContext* context,
+                      std::atomic<bool>& capturing,
+                      std::function<bool(uint32_t, uint32_t)> resizeFrameResources,
+                      std::function<void(const std::string&)> reportError)
+        : device_(device), context_(context), capturing_(capturing),
+          resizeFrameResources_(std::move(resizeFrameResources)),
+          reportError_(std::move(reportError)) {}
+
+    ~DuplicationSource() override { Stop(); }
+
+    bool Start(uint32_t displayId, uint32_t fps) override {
+        Stop();
+        displayId_ = displayId;
+        fps_ = fps;
+        return CreateDuplication();
+    }
+
+    bool Next(SourceFrame& frame, uint32_t timeoutMs) override {
+        frame = {};
+        ComPtr<IDXGIResource> resource;
+        DXGI_OUTDUPL_FRAME_INFO info{};
+        const HRESULT hr = duplication_
+            ? duplication_->AcquireNextFrame(static_cast<UINT>(timeoutMs), &info, &resource)
+            : DXGI_ERROR_ACCESS_LOST;
+        frame.timestampUs = CaptureClockUs();
+        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+            frame.texture = previousDesktopTexture_.Get();
+            return true;
+        }
+        if (hr == DXGI_ERROR_ACCESS_LOST || hr == E_ACCESSDENIED) {
+            if (!RecreateDuplication()) capturing_.store(false);
+            return false;
+        }
+        if (IsDeviceLost(hr)) {
+            reportError_("D3D11 device was removed or reset; pipeline rebuild required");
+            capturing_.store(false);
+            return false;
+        }
+        if (FAILED(hr)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            return false;
+        }
+
+        ComPtr<ID3D11Texture2D> desktop;
+        if (SUCCEEDED(resource.As(&desktop))) {
+            D3D11_TEXTURE2D_DESC desc{};
+            desktop->GetDesc(&desc);
+            if (!previousDesktopTexture_) {
+                desc.BindFlags = 0;
+                desc.MiscFlags = 0;
+                desc.CPUAccessFlags = 0;
+                desc.Usage = D3D11_USAGE_DEFAULT;
+                device_->CreateTexture2D(&desc, nullptr, &previousDesktopTexture_);
+            }
+            if (previousDesktopTexture_) {
+                context_->CopyResource(previousDesktopTexture_.Get(), desktop.Get());
+                frame.texture = previousDesktopTexture_.Get();
+            }
+        }
+        duplication_->ReleaseFrame();
+        return frame.texture != nullptr;
+    }
+
+    void Stop() override {
+        previousDesktopTexture_.Reset();
+        duplication_.Reset();
+    }
+
+    const char* Name() const override { return "Desktop Duplication"; }
+
+    uint32_t Width() const { return width_; }
+    uint32_t Height() const { return height_; }
+
+private:
+    bool CreateDuplication() {
+        ComPtr<IDXGIDevice> dxgiDevice;
+        ComPtr<IDXGIAdapter> adapter;
+        lastDuplicationError_ = device_.As(&dxgiDevice);
+        if (FAILED(lastDuplicationError_)) return false;
+        lastDuplicationError_ = dxgiDevice->GetAdapter(&adapter);
+        if (FAILED(lastDuplicationError_)) return false;
+        ComPtr<IDXGIOutput> selected;
+        uint32_t id = 0;
+        ComPtr<IDXGIFactory1> factory;
+        lastDuplicationError_ = adapter->GetParent(IID_PPV_ARGS(&factory));
+        if (FAILED(lastDuplicationError_)) return false;
+        for (UINT ai = 0; !selected; ++ai) {
+            ComPtr<IDXGIAdapter1> candidate;
+            if (factory->EnumAdapters1(ai, &candidate) == DXGI_ERROR_NOT_FOUND) break;
+            for (UINT oi = 0;; ++oi) {
+                ComPtr<IDXGIOutput> output;
+                if (candidate->EnumOutputs(oi, &output) == DXGI_ERROR_NOT_FOUND) break;
+                if (id++ == displayId_) {
+                    selected = output;
+                    break;
+                }
+            }
+        }
+        if (!selected) {
+            lastDuplicationError_ = DXGI_ERROR_NOT_FOUND;
+            return false;
+        }
+        ComPtr<IDXGIOutput1> output1;
+        HRESULT duplicateHr = selected.As(&output1);
+        if (SUCCEEDED(duplicateHr)) {
+            duplicateHr = output1->DuplicateOutput(device_.Get(), &duplication_);
+        }
+        lastDuplicationError_ = duplicateHr;
+        if (FAILED(duplicateHr)) return false;
+        DXGI_OUTDUPL_DESC desc{};
+        duplication_->GetDesc(&desc);
+        width_ = desc.ModeDesc.Width;
+        height_ = desc.ModeDesc.Height;
+        return true;
+    }
+
+    bool RecreateDuplication() {
+        const uint32_t previousWidth = width_;
+        const uint32_t previousHeight = height_;
+        previousDesktopTexture_.Reset();
+        int backoffMs = 100;
+        while (capturing_.load()) {
+            duplication_.Reset();
+            if (CreateDuplication()) {
+                if ((width_ == previousWidth && height_ == previousHeight) ||
+                    resizeFrameResources_(width_, height_)) {
+                    return true;
+                }
+            }
+            const HRESULT reason = device_ ? device_->GetDeviceRemovedReason() : lastDuplicationError_;
+            if (IsDeviceLost(lastDuplicationError_) || IsDeviceLost(reason)) {
+                reportError_("D3D11 device was removed or reset; pipeline rebuild required");
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+            backoffMs = (std::min)(backoffMs * 2, 1000);
+        }
+        return false;
+    }
+
+    ComPtr<ID3D11Device> device_;
+    ComPtr<ID3D11DeviceContext> context_;
+    std::atomic<bool>& capturing_;
+    std::function<bool(uint32_t, uint32_t)> resizeFrameResources_;
+    std::function<void(const std::string&)> reportError_;
+    ComPtr<IDXGIOutputDuplication> duplication_;
+    ComPtr<ID3D11Texture2D> previousDesktopTexture_;
+    uint32_t displayId_ = 0;
+    uint32_t fps_ = 0;
+    uint32_t width_ = 0;
+    uint32_t height_ = 0;
+    HRESULT lastDuplicationError_ = S_OK;
+};
+
+} // namespace
 #endif
 
 ScreenCapture::ScreenCapture() = default;
-ScreenCapture::~ScreenCapture() { Stop(); }
+ScreenCapture::~ScreenCapture() {
+    Stop();
+#ifdef _WIN32
+    if (source_) source_->Stop();
+#endif
+}
 
 std::vector<DisplayInfo> ScreenCapture::ListDisplays() {
     std::vector<DisplayInfo> displays;
@@ -44,43 +212,6 @@ std::vector<DisplayInfo> ScreenCapture::ListDisplays() {
     }
 #endif
     return displays;
-}
-
-bool ScreenCapture::CreateDuplication() {
-#ifdef _WIN32
-    ComPtr<IDXGIDevice> dxgiDevice;
-    ComPtr<IDXGIAdapter> adapter;
-    lastDuplicationError_ = device_.As(&dxgiDevice);
-    if (FAILED(lastDuplicationError_)) return false;
-    lastDuplicationError_ = dxgiDevice->GetAdapter(&adapter);
-    if (FAILED(lastDuplicationError_)) return false;
-    ComPtr<IDXGIOutput> selected;
-    uint32_t id = 0;
-    ComPtr<IDXGIFactory1> factory;
-    lastDuplicationError_ = adapter->GetParent(IID_PPV_ARGS(&factory));
-    if (FAILED(lastDuplicationError_)) return false;
-    for (UINT ai = 0; !selected; ++ai) {
-        ComPtr<IDXGIAdapter1> candidate;
-        if (factory->EnumAdapters1(ai, &candidate) == DXGI_ERROR_NOT_FOUND) break;
-        for (UINT oi = 0;; ++oi) {
-            ComPtr<IDXGIOutput> output;
-            if (candidate->EnumOutputs(oi, &output) == DXGI_ERROR_NOT_FOUND) break;
-            if (id++ == displayId_) { selected = output; break; }
-        }
-    }
-    if (!selected) { lastDuplicationError_ = DXGI_ERROR_NOT_FOUND; return false; }
-    ComPtr<IDXGIOutput1> output1;
-    HRESULT duplicateHr = selected.As(&output1);
-    if (SUCCEEDED(duplicateHr)) duplicateHr = output1->DuplicateOutput(device_.Get(), &duplication_);
-    lastDuplicationError_ = duplicateHr;
-    if (FAILED(duplicateHr)) return false;
-    DXGI_OUTDUPL_DESC desc{};
-    duplication_->GetDesc(&desc);
-    width_ = desc.ModeDesc.Width; height_ = desc.ModeDesc.Height;
-    return true;
-#else
-    return false;
-#endif
 }
 
 bool ScreenCapture::CreateFrameResources() {
@@ -127,7 +258,8 @@ bool ScreenCapture::CreateFrameResources() {
 bool ScreenCapture::Initialize(uint32_t targetFps, uint32_t outputWidth, uint32_t outputHeight, uint32_t displayId) {
     Stop(); targetFps_ = targetFps; outputWidth_ = outputWidth; outputHeight_ = outputHeight; displayId_ = displayId;
 #ifdef _WIN32
-    duplication_.Reset(); context_.Reset(); device_.Reset();
+    if (source_) source_->Stop();
+    source_.reset(); context_.Reset(); device_.Reset();
     ComPtr<IDXGIFactory1> factory; ComPtr<IDXGIAdapter1> selectedAdapter;
     if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) return false;
     uint32_t flatId = 0;
@@ -148,7 +280,17 @@ bool ScreenCapture::Initialize(uint32_t targetFps, uint32_t outputWidth, uint32_
     if (FAILED(createHr)) return false;
     ComPtr<ID3D10Multithread> multithread;
     if (SUCCEEDED(context_.As(&multithread))) multithread->SetMultithreadProtected(TRUE);
-    if (!CreateDuplication()) return false;
+    auto source = std::make_unique<DuplicationSource>(device_.Get(), context_.Get(), capturing_,
+        [this](uint32_t width, uint32_t height) {
+            width_ = width;
+            height_ = height;
+            return CreateFrameResources();
+        },
+        [this](const std::string& error) { SetCaptureError(error); });
+    if (!source->Start(displayId_, targetFps_)) return false;
+    width_ = source->Width();
+    height_ = source->Height();
+    source_ = std::move(source);
     if (!CreateFrameResources()) return false;
     return true;
 #else
@@ -170,26 +312,6 @@ void ScreenCapture::Stop() {
     capturing_.store(false);
     if (captureThread_.joinable() && captureThread_.get_id() != std::this_thread::get_id()) captureThread_.join();
     captureHealthy_.store(false);
-}
-
-bool ScreenCapture::RecreateDuplication() {
-    const uint32_t previousWidth = width_, previousHeight = height_;
-    previousDesktopTexture_.Reset();
-    int backoffMs = 100;
-    while (capturing_.load()) {
-        duplication_.Reset();
-        if (CreateDuplication()) {
-            if ((width_ == previousWidth && height_ == previousHeight) || CreateFrameResources()) return true;
-        }
-        const HRESULT reason = device_ ? device_->GetDeviceRemovedReason() : lastDuplicationError_;
-        if (IsDeviceLost(lastDuplicationError_) || IsDeviceLost(reason)) {
-            SetCaptureError("D3D11 device was removed or reset; pipeline rebuild required");
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
-        backoffMs = (std::min)(backoffMs * 2, 1000);
-    }
-    return false;
 }
 
 void ScreenCapture::SetCaptureError(const std::string& error) {
@@ -241,30 +363,9 @@ void ScreenCapture::CaptureLoop() {
 
     while (capturing_.load()) {
         const auto frameStart = clock::now();
-        ComPtr<IDXGIResource> resource; DXGI_OUTDUPL_FRAME_INFO info{};
-        HRESULT hr = duplication_ ? duplication_->AcquireNextFrame(static_cast<UINT>(1000 / targetFps_), &info, &resource) : DXGI_ERROR_ACCESS_LOST;
-        const int64_t timestamp = CaptureClockUs();
-        if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-            DeliverFrame(previousDesktopTexture_.Get(), timestamp);
-        } else if (hr == DXGI_ERROR_ACCESS_LOST || hr == E_ACCESSDENIED) {
-            if (!RecreateDuplication()) { capturing_.store(false); break; }
-        } else if (IsDeviceLost(hr)) {
-            SetCaptureError("D3D11 device was removed or reset; pipeline rebuild required");
-            capturing_.store(false); break;
-        } else if (FAILED(hr)) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        } else {
-            ComPtr<ID3D11Texture2D> desktop;
-            if (SUCCEEDED(resource.As(&desktop))) {
-                D3D11_TEXTURE2D_DESC desc{}; desktop->GetDesc(&desc);
-                if (!previousDesktopTexture_) {
-                    desc.BindFlags = 0; desc.MiscFlags = 0; desc.CPUAccessFlags = 0; desc.Usage = D3D11_USAGE_DEFAULT;
-                    device_->CreateTexture2D(&desc, nullptr, &previousDesktopTexture_);
-                }
-                if (previousDesktopTexture_) context_->CopyResource(previousDesktopTexture_.Get(), desktop.Get());
-                DeliverFrame(desktop.Get(), timestamp);
-            }
-            duplication_->ReleaseFrame();
+        SourceFrame frame{};
+        if (source_ && source_->Next(frame, 1000 / targetFps_)) {
+            DeliverFrame(frame.texture, frame.timestampUs);
         }
         const auto elapsed = clock::now() - frameStart;
         if (elapsed < duration) {
