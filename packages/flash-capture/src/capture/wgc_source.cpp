@@ -39,6 +39,8 @@ public:
     bool Next(SourceFrame& frame, uint32_t timeoutMs) override;
     void Stop() override;
     const char* Name() const override { return "Windows.Graphics.Capture"; }
+    uint32_t Width() const override { return width_; }
+    uint32_t Height() const override { return height_; }
 
 private:
     void ReleaseCurrentFrame();
@@ -50,6 +52,8 @@ private:
     capture::Direct3D11CaptureFrame current_{nullptr};
     ComPtr<ID3D11Texture2D> currentTexture_;
     uint32_t targetFps_ = 60;
+    uint32_t width_ = 0;
+    uint32_t height_ = 0;
 };
 
 // Display ids have to keep meaning what they already mean, so the monitor is
@@ -115,11 +119,16 @@ bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
 
         // Free-threaded: frames are pulled from the capture thread, which has
         // no message pump of its own.
+        const auto size = item_.Size();
+        width_ = static_cast<uint32_t>(size.Width);
+        height_ = static_cast<uint32_t>(size.Height);
+        if (!width_ || !height_) return false;
+
         pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(
             winrtDevice,
             directx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
             2,
-            item_.Size());
+            size);
         if (!pool_) return false;
 
         session_ = pool_.CreateCaptureSession(item_);

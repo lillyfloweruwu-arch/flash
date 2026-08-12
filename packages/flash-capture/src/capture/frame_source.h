@@ -23,6 +23,11 @@ public:
     virtual bool Next(SourceFrame& frame, uint32_t timeoutMs) = 0;
     virtual void Stop() = 0;
     virtual const char* Name() const = 0;
+
+    // Valid only after a successful Start. The caller sizes its conversion
+    // resources from these, so a backend must know them before its first frame.
+    virtual uint32_t Width() const = 0;
+    virtual uint32_t Height() const = 0;
 };
 
 // Returns null when Windows.Graphics.Capture is unavailable, so the caller can

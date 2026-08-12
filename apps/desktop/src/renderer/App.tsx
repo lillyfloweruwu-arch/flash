@@ -721,11 +721,12 @@ interface CaptureHealth {
   error?: string
 }
 
-function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
+  captureBackend: string
   hotkeyRegistered: boolean
   displays: Display[]
   health: CaptureHealth | null
@@ -823,6 +824,17 @@ function SettingsPanel({ settings, onChange, storage, encoder, hotkeyRegistered,
           </Row>
           <Row label="Encoder">
             <span style={{ fontSize: 12, color: encoder === 'none' ? 'var(--alert)' : 'var(--ok)' }}>{encoder}</span>
+          </Row>
+          {/* Desktop Duplication cannot see a fullscreen game and records it as
+              a near-black picture. Saying which backend is running turns that
+              from a mystery into a one-line answer. */}
+          <Row label="Screen capture">
+            <span style={{ fontSize: 12, color: captureBackend === 'Desktop Duplication' ? 'var(--spark)' : 'var(--ok)' }}
+              title={captureBackend === 'Desktop Duplication'
+                ? 'Fullscreen games may record black. Windows.Graphics.Capture was unavailable.'
+                : 'Records fullscreen games correctly.'}>
+              {captureBackend}
+            </span>
           </Row>
           {/* The engine already measures all of this; it was just never shown.
               Every silent-failure class in the app is visible in these numbers. */}
@@ -946,6 +958,7 @@ export default function App() {
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
   })
   const [encoder, setEncoder] = useState('none')
+  const [captureBackend, setCaptureBackend] = useState('unknown')
   const [captureAvailable, setCaptureAvailable] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
@@ -969,6 +982,7 @@ export default function App() {
         error: s.captureError,
       })
       if (s.encoder) setEncoder(s.encoder)
+      if (s.captureBackend) setCaptureBackend(s.captureBackend)
     }
     read()
     const timer = setInterval(read, 2000)
@@ -1058,7 +1072,7 @@ export default function App() {
     window.flash.onIdentifyGame(setIdentifyRequest)
     window.flash.getLearnedGames().then(setLearnedGames)
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
-    window.flash.capture.getStatus().then(s => setEncoder(s.encoder))
+    window.flash.capture.getStatus().then(s => { setEncoder(s.encoder); if (s.captureBackend) setCaptureBackend(s.captureBackend) })
     window.flash.onGameDetected(setDetectedGame)
     window.flash.getCurrentGame().then(setDetectedGame)
     window.flash.onClipSavedRefresh(() => refreshClips())
@@ -1091,6 +1105,7 @@ export default function App() {
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
+              captureBackend={captureBackend}
               hotkeyRegistered={hotkeyRegistered} displays={displays} health={health}
               learnedGames={learnedGames}
               onForgetGame={async exe => setLearnedGames(await window.flash!.forgetGame(exe))}

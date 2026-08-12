@@ -136,6 +136,10 @@ type CaptureAddon = {
     encoder: string
     captureHealthy?: boolean
     captureError?: string
+    // Which screen-capture backend is actually running. Desktop Duplication
+    // cannot see a fullscreen game; knowing which one is in use turns a black
+    // clip from a mystery into a one-line answer.
+    captureBackend?: string
   }
   setCurrentGame(game: string, processId?: number): void
   setBufferLength(seconds: number): void

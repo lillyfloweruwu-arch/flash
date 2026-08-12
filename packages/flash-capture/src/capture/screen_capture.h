@@ -61,6 +61,9 @@ public:
     bool IsCapturing() const { return capturing_.load(); }
     bool IsHealthy() const { return captureHealthy_.load(); }
     std::string GetCaptureError() const;
+    // Which backend is actually recording. Diagnosing a black clip is guesswork
+    // without this, so the app reports it rather than making anyone infer it.
+    std::string GetCaptureBackend() const;
     uint32_t GetWidth() const { return width_; }
     uint32_t GetHeight() const { return height_; }
     uint32_t GetOutputWidth() const { return outputWidth_; }

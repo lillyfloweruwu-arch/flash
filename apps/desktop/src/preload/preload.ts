@@ -165,7 +165,17 @@ export type FlashAPI = {
     startReplayBuffer: () => Promise<boolean>
     stopReplayBuffer: () => Promise<void>
     saveClip: () => Promise<{ path?: string; duration?: number; error?: string }>
-    getStatus: () => Promise<{ recording: boolean; bufferSeconds: number; encoder: string; available: boolean }>
+    getStatus: () => Promise<{
+      recording: boolean
+      bufferSeconds: number
+      encoder: string
+      available: boolean
+      // Absent when the capture engine is not loaded, which is why it is optional
+      // rather than defaulted to a name that would be a lie.
+      captureBackend?: string
+      captureHealthy?: boolean
+      captureError?: string
+    }>
     setBufferLength: (seconds: number) => Promise<void>
     listDisplays: () => Promise<Display[]>
     onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => void

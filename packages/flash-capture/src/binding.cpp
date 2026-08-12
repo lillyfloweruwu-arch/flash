@@ -232,6 +232,7 @@ Napi::Value TrimClipAsync(const Napi::CallbackInfo& info) {
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", g_screenCapture && g_screenCapture->IsCapturing());
     result.Set("captureHealthy", g_screenCapture && g_screenCapture->IsHealthy()); result.Set("captureError", g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError);
+    result.Set("captureBackend", g_screenCapture ? g_screenCapture->GetCaptureBackend() : "none");
     result.Set("bufferSeconds", g_ringBuffer ? g_ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", g_encoder ? g_encoder->GetName() : "none");
     result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); result.Set("fps", g_quality.fps); result.Set("bitrateKbps", g_quality.bitrateKbps); result.Set("displayId", g_displayId);
     result.Set("audioMode", g_audioCapture ? g_audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());

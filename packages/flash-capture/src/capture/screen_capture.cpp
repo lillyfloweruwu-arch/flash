@@ -280,14 +280,26 @@ bool ScreenCapture::Initialize(uint32_t targetFps, uint32_t outputWidth, uint32_
     if (FAILED(createHr)) return false;
     ComPtr<ID3D10Multithread> multithread;
     if (SUCCEEDED(context_.As(&multithread))) multithread->SetMultithreadProtected(TRUE);
-    auto source = std::make_unique<DuplicationSource>(device_.Get(), context_.Get(), capturing_,
-        [this](uint32_t width, uint32_t height) {
-            width_ = width;
-            height_ = height;
-            return CreateFrameResources();
-        },
-        [this](const std::string& error) { SetCaptureError(error); });
-    if (!source->Start(displayId_, targetFps_)) return false;
+    // Windows.Graphics.Capture first, because Desktop Duplication cannot see a
+    // fullscreen-exclusive swapchain and hands back a near-black frame instead
+    // of the game. Duplication remains the fallback: WGC is absent before
+    // Windows 10 1803 and can fail to start for reasons worth degrading over
+    // rather than refusing to record at all.
+    std::unique_ptr<FrameSource> source;
+    if (auto preferred = CreateWgcSource(device_.Get())) {
+        if (preferred->Start(displayId_, targetFps_)) source = std::move(preferred);
+    }
+    if (!source) {
+        auto fallback = std::make_unique<DuplicationSource>(device_.Get(), context_.Get(), capturing_,
+            [this](uint32_t width, uint32_t height) {
+                width_ = width;
+                height_ = height;
+                return CreateFrameResources();
+            },
+            [this](const std::string& error) { SetCaptureError(error); });
+        if (!fallback->Start(displayId_, targetFps_)) return false;
+        source = std::move(fallback);
+    }
     width_ = source->Width();
     height_ = source->Height();
     source_ = std::move(source);
@@ -321,6 +333,14 @@ void ScreenCapture::SetCaptureError(const std::string& error) {
 
 std::string ScreenCapture::GetCaptureError() const {
     std::lock_guard lock(statusMutex_); return captureError_;
+}
+
+std::string ScreenCapture::GetCaptureBackend() const {
+#ifdef _WIN32
+    return source_ ? source_->Name() : "none";
+#else
+    return "none";
+#endif
 }
 
 void ScreenCapture::DeliverFrame(ID3D11Texture2D* texture, int64_t timestampUs) {
