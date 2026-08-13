@@ -307,6 +307,68 @@ function renameClip(filePath: string, requestedName: string): { filePath?: strin
   }
 }
 
+function moveClipToGame(filePath: string, requestedGame: string): { filePath?: string; error?: string } {
+  const game = requestedGame.trim()
+  const validationError = validateClipName(game)
+  if (validationError) return { error: validationError }
+  if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+
+  const sourceExtension = extname(filePath)
+  const extension = sourceExtension.toLowerCase()
+  if (extension !== '.mp4' && extension !== '.png') return { error: 'Only clips and screenshots can be moved' }
+
+  const targetFolder = join(settings.clipsFolder, game)
+  if (dirname(filePath).toLowerCase() === targetFolder.toLowerCase()) return { filePath }
+
+  let existing: string[]
+  try {
+    mkdirSync(targetFolder, { recursive: true })
+    existing = readdirSync(targetFolder)
+  } catch (error: any) {
+    return { error: error?.message || 'Could not read the target game folder' }
+  }
+
+  const originalName = basename(filePath).slice(0, -sourceExtension.length)
+  const target = join(targetFolder, resolveClipFilename(originalName, sourceExtension, existing))
+  const originalSidecar = sidecarPath(filePath)
+  const targetSidecar = sidecarPath(target)
+  const hasSidecar = existsSync(originalSidecar)
+
+  try {
+    renameSync(filePath, target)
+    if (hasSidecar) {
+      try {
+        renameSync(originalSidecar, targetSidecar)
+      } catch (error) {
+        try { renameSync(target, filePath) }
+        catch (restoreError) {
+          console.error('Could not restore clip after sidecar move failed', restoreError)
+          return { error: 'Move failed and the original clip could not be restored' }
+        }
+        throw error
+      }
+    }
+    return { filePath: target }
+  } catch (error: any) {
+    const busy = error?.code === 'EBUSY' || error?.code === 'EPERM'
+    return { error: busy ? 'Close anything using this file, then try again' : error?.message || 'Move failed' }
+  }
+}
+
+function moveClips(filePaths: string[], game: string): { moved: number; error?: string } {
+  if (!Array.isArray(filePaths)) return { moved: 0, error: 'No clips selected' }
+  let moved = 0
+  const errors: string[] = []
+  for (const filePath of filePaths) {
+    const result = moveClipToGame(filePath, game)
+    if (result.error) errors.push(result.error)
+    else moved++
+  }
+  if (!errors.length) return { moved }
+  const count = errors.length
+  return { moved, error: `${count} item${count === 1 ? '' : 's'} could not be moved: ${errors[0]}` }
+}
+
 function pruneOldClips() {
   if (!settings.autoDeleteDays) return
   const cutoff = Date.now() - settings.autoDeleteDays * 86400000
@@ -838,6 +900,7 @@ function setupIPC() {
   ipcMain.handle('get-storage', () => getStorageUsage())
   ipcMain.handle('delete-clip', (_event, filePath: string) => deleteClip(filePath))
   ipcMain.handle('rename-clip', (_event, filePath: string, name: string) => renameClip(filePath, name))
+  ipcMain.handle('move-clips', (_event, filePaths: string[], game: string) => moveClips(filePaths, game))
   ipcMain.handle('open-clip', (_event, filePath: string) => {
     shell.openPath(filePath)
   })
@@ -961,11 +1024,15 @@ function setupIPC() {
   // Native OS drag, so a clip can be dropped straight into Discord. Must be
   // startDrag on the sender's webContents — an ipcMain.handle reply cannot start
   // a drag, so this is `on`, not `handle`.
-  ipcMain.on('start-clip-drag', (event, filePath: string) => {
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return
+  ipcMain.on('start-clip-drag', (event, requestedPaths: string[] | string) => {
+    const filePaths = Array.isArray(requestedPaths) ? requestedPaths : [requestedPaths]
+    const files = filePaths.filter(filePath => filePath.startsWith(settings.clipsFolder) && existsSync(filePath))
+    if (!files.length) return
     const thumb = nativeImage.createFromPath(
       resource(`assets/icons/${settings.theme}.png`, `assets/icons/${settings.theme}.png`))
-    event.sender.startDrag({ file: filePath, icon: thumb.resize({ width: 64, height: 64 }) })
+    // Electron's type still requires the legacy singular field even though
+    // `files` overrides it at runtime.
+    event.sender.startDrag({ file: files[0], files, icon: thumb.resize({ width: 64, height: 64 }) })
   })
 
   // Copy as a file (not a path) so Ctrl+V in Explorer or Discord pastes the clip.

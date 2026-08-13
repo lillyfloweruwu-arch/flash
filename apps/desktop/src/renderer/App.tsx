@@ -3,9 +3,11 @@ import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl, matchesQuery } from '../shared/editor'
 import { resolveGameSettings } from '../shared/perGame'
+import { clearSelection, selectRange, toggleSelection } from '../shared/selection'
 import { ClipActionBar } from './ClipActionBar'
 import { PlayerControls } from './PlayerControls'
 import { Dropdown } from './Dropdown'
+import { EXPORT_LIMITS, SelectionBar } from './SelectionBar'
 import Editor from './Editor'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
@@ -21,6 +23,7 @@ interface Clip {
   filePath: string
   size: number
   createdAt: number
+  kind?: 'clip' | 'shot'
 }
 
 interface Display {
@@ -68,14 +71,6 @@ function qualityFps(quality: string): number {
   const match = /(\d+)fps$/.exec(quality.trim())
   return match ? Number(match[1]) : 0
 }
-
-// Discord's upload ceilings. The tier is the hint rather than part of the
-// label, so the size stays the thing you read first.
-const EXPORT_LIMITS = [
-  { value: 10 * 1048576, label: '10MB', hint: 'Discord free' },
-  { value: 50 * 1048576, label: '50MB', hint: 'Nitro Basic' },
-  { value: 500 * 1048576, label: '500MB', hint: 'Nitro' },
-]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -637,9 +632,11 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
 
 // ── ClipCard ───────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, onClick, onDelete, onRename, suspend }: {
+function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspend }: {
   clip: Clip
-  onClick: () => void
+  selected: boolean
+  onClick: (event: React.MouseEvent<HTMLDivElement>) => void
+  onToggle: () => void
   onDelete: () => void
   onRename: (clip: Clip, name: string) => Promise<string | null>
   suspend: boolean
@@ -683,7 +680,7 @@ function ClipCard({ clip, onClick, onDelete, onRename, suspend }: {
       draggable
       onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(clip.filePath) }}
       className="rounded-xl overflow-hidden cursor-pointer transition-all duration-150 relative"
-      style={{ background: 'var(--panel)', border: `1px solid ${hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
+      style={{ background: 'var(--panel)', border: `1px solid ${selected ? 'var(--accent)' : hov ? 'var(--accent-line)' : 'var(--edge-soft)'}`, transform: hov ? 'translateY(-1px)' : 'none', boxShadow: selected ? '0 0 0 1px var(--accent-line)' : hov ? '0 4px 20px rgba(0,0,0,0.5)' : 'none' }}
       onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)} onClick={onClick}>
       <div className="relative overflow-hidden" style={{ aspectRatio: '16/9', background: 'var(--bg)' }}>
         {/* Cards behind an open player or editor stay in the viewport, so
@@ -703,6 +700,19 @@ function ClipCard({ clip, onClick, onDelete, onRename, suspend }: {
         <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)' }}>
           <span style={{ fontSize: 10, color: 'var(--muted)' }}>{clip.duration}</span>
         </div>
+        <input
+          type="checkbox"
+          checked={selected}
+          readOnly
+          draggable={false}
+          aria-label={`${selected ? 'Deselect' : 'Select'} ${clip.title}`}
+          onClick={event => { event.stopPropagation(); onToggle() }}
+          className="absolute bottom-2 left-2 transition-opacity"
+          style={{
+            width: 17, height: 17, opacity: selected || hov ? 1 : 0,
+            pointerEvents: selected || hov ? 'auto' : 'none', cursor: 'pointer', accentColor: 'var(--accent)',
+          }}
+        />
         {hov && (
           <>
             <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}>
@@ -737,11 +747,16 @@ function ClipCard({ clip, onClick, onDelete, onRename, suspend }: {
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip, onDeleteClip, onRenameClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
+function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, selectedIds, onToggleSelection, onSelectRange, onSelectAll, onClearSelection, onOpenClip, onDeleteClip, onRenameClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
   clips: Clip[]
   query: string
   onQueryChange: (query: string) => void
   shortcutsEnabled: boolean
+  selectedIds: ReadonlySet<string>
+  onToggleSelection: (id: string) => void
+  onSelectRange: (displayedIds: readonly string[], targetId: string) => void
+  onSelectAll: (displayedIds: readonly string[]) => void
+  onClearSelection: () => void
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
   onRenameClip: (clip: Clip, name: string) => Promise<string | null>
@@ -754,23 +769,36 @@ function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip,
   const [sort, setSort] = useState<'Recent' | 'Longest' | 'Largest'>('Recent')
   const searchRef = useRef<HTMLInputElement>(null)
 
+  const sorted = useMemo(() => [...clips].sort((a, b) => {
+    if (sort === 'Longest') return b.durationSec - a.durationSec
+    if (sort === 'Largest') return b.size - a.size
+    return b.createdAt - a.createdAt
+  }), [clips, sort])
+  const displayedIds = useMemo(() => sorted.map(clip => clip.id), [sorted])
+
   useEffect(() => {
     if (!shortcutsEnabled) return
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target
-      if (event.key !== '/' || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
-      event.preventDefault()
-      searchRef.current?.focus()
+      const textInput = target instanceof HTMLInputElement
+        || target instanceof HTMLTextAreaElement
+        || (target instanceof HTMLElement && target.isContentEditable)
+      if (textInput) return
+
+      if (event.key === '/') {
+        event.preventDefault()
+        searchRef.current?.focus()
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        onSelectAll(displayedIds)
+      } else if (event.key === 'Escape' && selectedIds.size > 0) {
+        event.preventDefault()
+        onClearSelection()
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [shortcutsEnabled])
-
-  const sorted = [...clips].sort((a, b) => {
-    if (sort === 'Longest') return b.durationSec - a.durationSec
-    if (sort === 'Largest') return b.size - a.size
-    return b.createdAt - a.createdAt
-  })
+  }, [displayedIds, onClearSelection, onSelectAll, selectedIds.size, shortcutsEnabled])
 
   return (
     <div className="flex-1 overflow-y-auto p-5">
@@ -832,7 +860,24 @@ function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip,
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
           {sorted.map(clip => (
-            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} onRename={onRenameClip} suspend={suspendThumbnails} />
+            <ClipCard
+              key={clip.id}
+              clip={clip}
+              selected={selectedIds.has(clip.id)}
+              onClick={event => {
+                if (event.shiftKey) {
+                  event.preventDefault()
+                  onSelectRange(displayedIds, clip.id)
+                } else if (event.ctrlKey || event.metaKey) {
+                  event.preventDefault()
+                  onToggleSelection(clip.id)
+                } else onOpenClip(clip)
+              }}
+              onToggle={() => onToggleSelection(clip.id)}
+              onDelete={() => onDeleteClip(clip)}
+              onRename={onRenameClip}
+              suspend={suspendThumbnails}
+            />
           ))}
         </div>
       )}
@@ -1219,6 +1264,8 @@ export default function App() {
   const [isRecording, setIsRecording] = useState(false)
   const [detectedGame, setDetectedGame] = useState<string | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectionAnchor = useRef<string | null>(null)
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
     clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', hotkeyShort: 'Shift+F8',
@@ -1296,6 +1343,40 @@ export default function App() {
 
   const gameFilteredClips = gameFilter === 'All' ? clips : clips.filter(c => c.game === gameFilter)
   const filteredClips = clipQuery ? gameFilteredClips.filter(clip => matchesQuery(clip, clipQuery)) : gameFilteredClips
+  const selectedClips = useMemo(() => clips.filter(clip => selectedIds.has(clip.id)), [clips, selectedIds])
+
+  const clearSelected = useCallback(() => {
+    selectionAnchor.current = null
+    setSelectedIds(clearSelection())
+  }, [])
+
+  const toggleSelected = useCallback((id: string) => {
+    selectionAnchor.current = id
+    setSelectedIds(selected => toggleSelection(selected, id))
+  }, [])
+
+  const selectDisplayedRange = useCallback((displayedIds: readonly string[], targetId: string) => {
+    const previousAnchor = selectionAnchor.current
+    const anchor = previousAnchor && displayedIds.includes(previousAnchor) ? previousAnchor : targetId
+    if (anchor !== previousAnchor) selectionAnchor.current = anchor
+    setSelectedIds(selected => selectRange(selected, displayedIds, anchor, targetId))
+  }, [])
+
+  const selectAllDisplayed = useCallback((displayedIds: readonly string[]) => {
+    selectionAnchor.current = displayedIds[0] ?? null
+    setSelectedIds(new Set(displayedIds))
+  }, [])
+
+  // A rename, delete or move changes IDs because IDs are paths. Drop only the
+  // stale entries; filtering the grid does not discard a deliberate selection.
+  useEffect(() => {
+    const liveIds = new Set(clips.map(clip => clip.id))
+    if (selectionAnchor.current && !liveIds.has(selectionAnchor.current)) selectionAnchor.current = null
+    setSelectedIds(selected => {
+      const next = new Set([...selected].filter(id => liveIds.has(id)))
+      return next.size === selected.size ? selected : next
+    })
+  }, [clips])
 
   const updateSettings = useCallback(async (partial: Partial<Settings>) => {
     if (!window.flash) return
@@ -1323,6 +1404,25 @@ export default function App() {
       },
     })
   }, [refreshClips])
+
+  const deleteSelection = useCallback(() => {
+    const selection = [...selectedClips]
+    const count = selection.length
+    if (!count) return
+    const itemWord = count === 1 ? 'item' : 'items'
+    const size = selection.reduce((total, clip) => total + clip.size, 0)
+    setConfirmRequest({
+      title: `Delete ${count} selected ${itemWord}?`,
+      body: `${count} selected ${itemWord} (${formatBytes(size)}) will be permanently deleted from disk.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        await Promise.all(selection.map(clip => window.flash?.deleteClip(clip.filePath)))
+        clearSelected()
+        await refreshClips()
+      },
+    })
+  }, [clearSelected, refreshClips, selectedClips])
 
   const renameClip = useCallback(async (clip: Clip, name: string) => {
     if (!window.flash) return 'Rename is unavailable'
@@ -1383,7 +1483,7 @@ export default function App() {
             storage={storage} onOpenFolder={() => window.flash?.openClipsFolder()}
           />
         )}
-        <main className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
+        <main className="relative flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg)' }}>
           {active === 'Settings' ? (
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
@@ -1402,6 +1502,11 @@ export default function App() {
               clips={filteredClips}
               query={clipQuery} onQueryChange={setClipQuery}
               shortcutsEnabled={previewIndex === null && editingClip === null}
+              selectedIds={selectedIds}
+              onToggleSelection={toggleSelected}
+              onSelectRange={selectDisplayedRange}
+              onSelectAll={selectAllDisplayed}
+              onClearSelection={clearSelected}
               // Index into filteredClips, not into the panel's own sorted copy —
               // sorting by Longest/Largest used to open a different clip.
               onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}
@@ -1410,6 +1515,15 @@ export default function App() {
               isRecording={isRecording} captureAvailable={captureAvailable}
               hotkey={settings.hotkey} bufferLength={settings.bufferLength}
               suspendThumbnails={previewIndex !== null || editingClip !== null}
+            />
+          )}
+          {active !== 'Settings' && selectedClips.length > 0 && (
+            <SelectionBar
+              items={selectedClips}
+              games={games.map(game => game.name)}
+              onClear={clearSelected}
+              onDelete={deleteSelection}
+              onRefresh={refreshClips}
             />
           )}
         </main>

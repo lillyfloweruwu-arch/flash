@@ -9,6 +9,7 @@ export interface ClipInfo {
   filePath: string
   size: number
   createdAt: number
+  kind?: 'clip' | 'shot'
 }
 
 export interface Settings {
@@ -51,7 +52,9 @@ contextBridge.exposeInMainWorld('flash', {
   openClip: (filePath: string) => ipcRenderer.invoke('open-clip', filePath),
   openClipsFolder: () => ipcRenderer.invoke('open-clips-folder'),
   showClipInFolder: (filePath: string) => ipcRenderer.invoke('show-clip-in-folder', filePath),
-  startClipDrag: (filePath: string) => ipcRenderer.send('start-clip-drag', filePath),
+  startClipDrag: (filePaths: string | string[]) => ipcRenderer.send(
+    'start-clip-drag', Array.isArray(filePaths) ? filePaths : [filePaths]),
+  moveClips: (filePaths: string[], game: string) => ipcRenderer.invoke('move-clips', filePaths, game),
   copyClipFile: (filePath: string) => ipcRenderer.invoke('copy-clip-file', filePath),
   trimClip: (filePath: string, start: number, end: number) =>
     ipcRenderer.invoke('trim-clip', filePath, start, end),
@@ -133,7 +136,8 @@ export type FlashAPI = {
   openClip: (filePath: string) => Promise<void>
   openClipsFolder: () => Promise<void>
   showClipInFolder: (filePath: string) => Promise<void>
-  startClipDrag: (filePath: string) => void
+  startClipDrag: (filePaths: string | string[]) => void
+  moveClips: (filePaths: string[], game: string) => Promise<{ moved: number; error?: string }>
   copyClipFile: (filePath: string) => Promise<boolean>
   trimClip: (filePath: string, start: number, end: number) =>
     Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
