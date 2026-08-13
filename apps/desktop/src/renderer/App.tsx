@@ -715,7 +715,11 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
         />
         {hov && (
           <>
-            <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.35)' }}>
+            {/* Decorative only, and transparent to clicks. It covers the whole
+                tile and renders after the checkbox, so without this it eats the
+                checkbox's click and the card opens instead of selecting. The
+                delete button is a sibling, not a child, so it is unaffected. */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none" style={{ background: 'rgba(0,0,0,0.35)' }}>
               <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: 'var(--accent)', boxShadow: '0 0 20px var(--accent-line)' }}>
                 <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><polygon points="3,1 11,6.5 3,12" fill="white"/></svg>
               </div>
