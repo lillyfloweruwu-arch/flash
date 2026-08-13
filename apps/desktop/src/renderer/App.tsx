@@ -826,14 +826,17 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
           </Row>
           {displays.length > 1 && (
             <Row label="Capture display">
-              <select value={settings.displayId} onChange={e => onChange({ displayId: +e.target.value })}
-                style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '4px 8px' }}>
-                {displays.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {`Display ${d.id + 1} — ${d.width}x${d.height}${d.isPrimary ? ' (primary)' : ''}`}
-                  </option>
-                ))}
-              </select>
+              <Dropdown
+                value={settings.displayId}
+                onChange={displayId => onChange({ displayId })}
+                width={210}
+                options={displays.map(d => ({
+                  value: d.id,
+                  label: `Display ${d.id + 1} — ${d.width}x${d.height}`,
+                  hint: [d.refreshHz ? `${d.refreshHz}Hz` : '', d.isPrimary ? 'primary' : '']
+                    .filter(Boolean).join(' · ') || undefined,
+                }))}
+              />
             </Row>
           )}
           <Row label="Quality">
@@ -932,13 +935,17 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
           </Row>
           {settings.overlay && (
             <Row label="Overlay corner">
-              <select value={settings.overlayPosition} onChange={e => onChange({ overlayPosition: e.target.value as Settings['overlayPosition'] })}
-                style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)', borderRadius: 6, padding: '4px 8px' }}>
-                <option value="top-left">Top left</option>
-                <option value="top-right">Top right</option>
-                <option value="bottom-left">Bottom left</option>
-                <option value="bottom-right">Bottom right</option>
-              </select>
+              <Dropdown
+                value={settings.overlayPosition}
+                onChange={overlayPosition => onChange({ overlayPosition: overlayPosition as Settings['overlayPosition'] })}
+                width={140}
+                options={[
+                  { value: 'top-left', label: 'Top left' },
+                  { value: 'top-right', label: 'Top right' },
+                  { value: 'bottom-left', label: 'Bottom left' },
+                  { value: 'bottom-right', label: 'Bottom right' },
+                ]}
+              />
             </Row>
           )}
           <p style={{ fontSize: 11, color: 'var(--muted-3)', paddingTop: 12, lineHeight: 1.5 }}>
@@ -965,13 +972,17 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
             </button>
           </Row>
           <Row label="Auto-delete clips after">
-            <select value={settings.autoDeleteDays} onChange={e => onChange({ autoDeleteDays: +e.target.value })}
-              style={{ fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge-soft)', borderRadius: 6, padding: '4px 8px' }}>
-              <option value={0}>Never</option>
-              <option value={7}>7 days</option>
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-            </select>
+            <Dropdown
+              value={settings.autoDeleteDays}
+              onChange={autoDeleteDays => onChange({ autoDeleteDays })}
+              width={120}
+              options={[
+                { value: 0, label: 'Never' },
+                { value: 7, label: '7 days' },
+                { value: 30, label: '30 days' },
+                { value: 90, label: '90 days' },
+              ]}
+            />
           </Row>
           <Row label="Format"><span style={{ fontSize: 12, color: 'var(--muted-2)' }}>MP4 / H.264</span></Row>
           <button onClick={onOpenFolder}
