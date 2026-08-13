@@ -791,6 +791,29 @@ interface CaptureHealth {
   error?: string
 }
 
+// Defined at module scope on purpose. Declared inside SettingsPanel these were
+// a new component type on every render, so React tore the whole settings tree
+// down and built it again - and the status poll re-renders every two seconds.
+// Anything holding its own state below a Row lost it on that tick: an open
+// dropdown closed by itself before you could pick from it.
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
+      <span style={{ fontSize: 13, color: 'var(--muted)' }}>{label}</span>
+      {children}
+    </div>
+  )
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-xl p-5" style={{ background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
+      {children}
+    </div>
+  )
+}
+
 function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
@@ -808,20 +831,6 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
   // The ceiling for a useful frame rate is the refresh rate of the display
   // actually being captured, not the fastest one attached.
   const activeRefreshHz = displays.find(d => d.id === settings.displayId)?.refreshHz ?? 0
-
-  const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
-    <div className="flex items-center justify-between py-3 gap-4" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
-      <span style={{ fontSize: 13, color: 'var(--muted)' }}>{label}</span>
-      {children}
-    </div>
-  )
-
-  const Card = ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div className="rounded-xl p-5" style={{ background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
-      <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>{title}</p>
-      {children}
-    </div>
-  )
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
