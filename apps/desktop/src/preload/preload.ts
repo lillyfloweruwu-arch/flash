@@ -17,6 +17,7 @@ export interface Settings {
   theme: string
   hotkey: string
   hotkeyShort: string
+  screenshotHotkey: string
   shortClipSeconds: number
   displayId: number
   overlay: boolean

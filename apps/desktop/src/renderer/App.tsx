@@ -40,6 +40,7 @@ interface Settings {
   theme: string
   hotkey: string
   hotkeyShort: string
+  screenshotHotkey: string
   shortClipSeconds: number
   displayId: number
   overlay: boolean
@@ -1052,6 +1053,10 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
             <HotkeyInput value={settings.hotkeyShort} registered
               onChange={hotkeyShort => onChange({ hotkeyShort })} />
           </Row>
+          <Row label="Screenshot hotkey">
+            <HotkeyInput value={settings.screenshotHotkey} registered
+              onChange={screenshotHotkey => onChange({ screenshotHotkey })} />
+          </Row>
           <Row label="Short clip length">
             <input type="range" min={5} max={60} step={5} value={settings.shortClipSeconds}
               onChange={e => onChange({ shortClipSeconds: +e.target.value })}
@@ -1272,7 +1277,7 @@ export default function App() {
   const selectionAnchor = useRef<string | null>(null)
   const [storage, setStorage] = useState({ used: 0, clips: 0 })
   const [settings, setSettings] = useState<Settings>({
-    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', hotkeyShort: 'Shift+F8',
+    clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', hotkeyShort: 'Shift+F8', screenshotHotkey: 'F9',
     shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
     quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,

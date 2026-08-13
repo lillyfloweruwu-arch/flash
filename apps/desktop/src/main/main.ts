@@ -14,6 +14,7 @@ import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
+import { clipTimestamp, firstFreeName, gameFolderName } from '../shared/clipPath'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -22,6 +23,7 @@ const DEFAULTS = {
   theme: 'blood',
   hotkey: 'F8',
   hotkeyShort: 'Shift+F8',
+  screenshotHotkey: 'F9',
   shortClipSeconds: 15,
   displayId: 0,
   overlay: true,
@@ -122,6 +124,7 @@ type CaptureAddon = {
   stopReplayBuffer(): void
   // seconds omitted = the whole buffer, exactly as before.
   saveClip(seconds?: number): Promise<{ path: string; duration: number }>
+  saveScreenshot(path: string): Promise<string>
   setClipsDir?(path: string): void
   trimClip?(input: string, output: string, startSeconds: number, endSeconds: number):
     Promise<{ path: string; duration: number; actualStartSeconds?: number }>
@@ -457,6 +460,43 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
     updateOverlay()
     return { error: message }
+  }
+}
+
+// Screenshots are taken one at a time, chained rather than concurrent. The
+// filename is chosen by listing the folder, so two presses inside the same
+// second would both see the name as free, pick it, and the second would
+// overwrite the first. The native clip writer keeps a reservation list for the
+// same reason; awaiting the previous save is the cheaper answer here.
+let screenshotQueue: Promise<void> = Promise.resolve()
+
+function saveScreenshotNow(): Promise<void> {
+  screenshotQueue = screenshotQueue.then(runSaveScreenshot, runSaveScreenshot)
+  return screenshotQueue
+}
+
+async function runSaveScreenshot(): Promise<void> {
+  let screenshotPath = ''
+  try {
+    if (!captureAddon) throw new Error('Capture engine not available')
+
+    const folder = join(settings.clipsFolder, gameFolderName(currentGame ?? ''))
+    mkdirSync(folder, { recursive: true })
+    const filename = firstFreeName(clipTimestamp(new Date()), '.png', readdirSync(folder))
+    screenshotPath = join(folder, filename)
+
+    await captureAddon.saveScreenshot(screenshotPath)
+    clipboard.writeImage(nativeImage.createFromPath(screenshotPath))
+    playClipSound()
+  } catch (error: any) {
+    if (screenshotPath) {
+      try {
+        if (existsSync(screenshotPath) && statSync(screenshotPath).size === 0) unlinkSync(screenshotPath)
+      } catch { /* the original save error is more useful */ }
+    }
+    const message = error?.message || 'Failed to save screenshot'
+    console.error('Failed to save screenshot', error)
+    mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
   }
 }
 
@@ -1060,7 +1100,7 @@ function setupIPC() {
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
     if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
-    if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined) registerHotkeys()
+    if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined || partial.screenshotHotkey !== undefined) registerHotkeys()
     if (partial.displayId !== undefined) {
       try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
     }
@@ -1221,6 +1261,13 @@ function registerHotkeys(): boolean {
           void saveClipNow(settings.shortClipSeconds)
         })
       } catch { console.warn(`Could not register short-clip hotkey ${settings.hotkeyShort}`) }
+    }
+    if (settings.screenshotHotkey && settings.screenshotHotkey !== settings.hotkey && settings.screenshotHotkey !== settings.hotkeyShort) {
+      try {
+        globalShortcut.register(settings.screenshotHotkey, () => {
+          void saveScreenshotNow()
+        })
+      } catch { console.warn(`Could not register screenshot hotkey ${settings.screenshotHotkey}`) }
     }
   } catch {
     hotkeyRegistered = false  // malformed accelerator
