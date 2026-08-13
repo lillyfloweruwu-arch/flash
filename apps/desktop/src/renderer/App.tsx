@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
-import { clipUrl } from '../shared/editor'
+import { clipUrl, matchesQuery } from '../shared/editor'
 import { ClipActionBar } from './ClipActionBar'
 import { PlayerControls } from './PlayerControls'
 import { Dropdown } from './Dropdown'
@@ -628,8 +628,11 @@ function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: (
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
+function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
   clips: Clip[]
+  query: string
+  onQueryChange: (query: string) => void
+  shortcutsEnabled: boolean
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
   isRecording: boolean
@@ -639,6 +642,19 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
   suspendThumbnails: boolean
 }) {
   const [sort, setSort] = useState<'Recent' | 'Longest' | 'Largest'>('Recent')
+  const searchRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!shortcutsEnabled) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (event.key !== '/' || target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
+      event.preventDefault()
+      searchRef.current?.focus()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [shortcutsEnabled])
 
   const sorted = [...clips].sort((a, b) => {
     if (sort === 'Longest') return b.durationSec - a.durationSec
@@ -658,21 +674,51 @@ function ClipsPanel({ clips, onOpenClip, onDeleteClip, isRecording, captureAvail
             </button>
           ))}
         </div>
-        <span style={{ fontSize: 11, color: 'var(--faint)' }}>{clips.length} clip{clips.length === 1 ? '' : 's'}</span>
+        <div className="flex items-center gap-3">
+          <input
+            ref={searchRef}
+            type="text"
+            aria-label="Search clips"
+            placeholder="Search clips  /"
+            value={query}
+            onChange={event => onQueryChange(event.target.value)}
+            onKeyDown={event => {
+              if (event.key !== 'Escape') return
+              event.preventDefault()
+              onQueryChange('')
+              event.currentTarget.blur()
+            }}
+            className="rounded-lg"
+            style={{ width: 190, fontSize: 12, color: 'var(--muted)', background: 'var(--field)', border: '1px solid var(--edge)', padding: '7px 10px', outline: 'none' }}
+          />
+          <span style={{ fontSize: 11, color: 'var(--faint)', whiteSpace: 'nowrap' }}>{clips.length} clip{clips.length === 1 ? '' : 's'}</span>
+        </div>
       </div>
 
       {clips.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: 300 }}>
-          <div style={{ color: 'var(--edge)' }}><StickmanIcon size={48} /></div>
-          <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--muted-2)' }}>No clips yet</p>
-          <p style={{ fontSize: 13, color: 'var(--muted-3)', textAlign: 'center', maxWidth: 380, lineHeight: 1.6 }}>
-            {!captureAvailable
-              ? 'Capture engine unavailable. Check that the native addon is built.'
-              : isRecording
-                ? <>Replay buffer is running. Press <kbd style={{ background: 'var(--field)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '1px 6px', color: 'var(--accent)', fontSize: 12 }}>{hotkey}</kbd> to save the last {bufferLength} seconds.</>
-                : `Click the IDLE badge in the top bar to start the replay buffer, then press ${hotkey} to clip.`}
-          </p>
-        </div>
+        query ? (
+          <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: 300 }}>
+            <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--muted-2)' }}>No clips match</p>
+            <button
+              onClick={() => onQueryChange('')}
+              className="px-3 py-1.5 rounded-lg text-xs transition-all duration-100"
+              style={{ color: 'var(--accent)', background: 'var(--field)', border: '1px solid var(--edge)' }}>
+              Clear search
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center justify-center gap-3" style={{ minHeight: 300 }}>
+            <div style={{ color: 'var(--edge)' }}><StickmanIcon size={48} /></div>
+            <p style={{ fontSize: 15, fontWeight: 500, color: 'var(--muted-2)' }}>No clips yet</p>
+            <p style={{ fontSize: 13, color: 'var(--muted-3)', textAlign: 'center', maxWidth: 380, lineHeight: 1.6 }}>
+              {!captureAvailable
+                ? 'Capture engine unavailable. Check that the native addon is built.'
+                : isRecording
+                  ? <>Replay buffer is running. Press <kbd style={{ background: 'var(--field)', border: '1px solid var(--accent-line)', borderRadius: 4, padding: '1px 6px', color: 'var(--accent)', fontSize: 12 }}>{hotkey}</kbd> to save the last {bufferLength} seconds.</>
+                  : `Click the IDLE badge in the top bar to start the replay buffer, then press ${hotkey} to clip.`}
+            </p>
+          </div>
+        )
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
           {sorted.map(clip => (
@@ -1001,6 +1047,7 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
 export default function App() {
   const [active, setActive] = useState('My Clips')
   const [gameFilter, setGameFilter] = useState('All')
+  const [clipQuery, setClipQuery] = useState('')
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [editingClip, setEditingClip] = useState<Clip | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -1080,7 +1127,8 @@ export default function App() {
 
   const allGames = clips.length > 0 ? [{ name: 'All', count: clips.length }, ...games] : []
 
-  const filteredClips = gameFilter === 'All' ? clips : clips.filter(c => c.game === gameFilter)
+  const gameFilteredClips = gameFilter === 'All' ? clips : clips.filter(c => c.game === gameFilter)
+  const filteredClips = clipQuery ? gameFilteredClips.filter(clip => matchesQuery(clip, clipQuery)) : gameFilteredClips
 
   const updateSettings = useCallback(async (partial: Partial<Settings>) => {
     if (!window.flash) return
@@ -1177,6 +1225,8 @@ export default function App() {
           ) : (
             <ClipsPanel
               clips={filteredClips}
+              query={clipQuery} onQueryChange={setClipQuery}
+              shortcutsEnabled={previewIndex === null && editingClip === null}
               // Index into filteredClips, not into the panel's own sorted copy —
               // sorting by Longest/Largest used to open a different clip.
               onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}

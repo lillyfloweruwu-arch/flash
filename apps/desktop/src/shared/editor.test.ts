@@ -1,8 +1,15 @@
 // Self-check for the clip editor maths. Run with:
 //   node --experimental-strip-types src/shared/editor.test.ts
 import { strict as assert } from 'node:assert'
-import { formatTimecode, clampRange, nearestKeyframe, deriveSaveMode } from './editor.ts'
+import { formatTimecode, clampRange, nearestKeyframe, deriveSaveMode, matchesQuery } from './editor.ts'
 import { reducePeaks } from './editor.ts'
+
+const searchableClips = [
+  { id: 'title', title: 'Final Escape', game: 'Portal 2' },
+  { id: 'game', title: 'Close Call', game: 'Final Fantasy XIV' },
+  { id: 'miss', title: 'Victory', game: 'Hades' },
+]
+assert.deepEqual(searchableClips.filter(clip => matchesQuery(clip, 'nAl')).map(clip => clip.id), ['title', 'game'])
 
 assert.equal(formatTimecode(0), '0:00.0')
 assert.equal(formatTimecode(4.24), '0:04.2')

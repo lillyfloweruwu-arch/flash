@@ -6,7 +6,7 @@ const THUMBNAIL_COUNT = 10
 // How close a dragged handle has to get before it snaps onto a keyframe. Wide
 // enough to be reachable by hand, narrow enough that a deliberate mid-GOP cut
 // still lands where you put it.
-const SNAP_SEC = 0.15
+export const TRIM_SNAP_SEC = 0.15
 
 type Handle = 'in' | 'out'
 
@@ -89,7 +89,7 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
   }, [safeDuration])
 
   const moveHandle = useCallback((handle: Handle, seconds: number) => {
-    const snapped = nearestKeyframe(keyframesSec, seconds, SNAP_SEC) ?? seconds
+    const snapped = nearestKeyframe(keyframesSec, seconds, TRIM_SNAP_SEC) ?? seconds
     onChange(handle === 'in'
       ? clampRange(snapped, outSec, safeDuration)
       : clampRange(inSec, snapped, safeDuration))

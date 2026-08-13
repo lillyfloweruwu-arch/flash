@@ -1,6 +1,11 @@
 ﻿// Pure maths for the clip editor. No DOM and no Electron, so it can be checked
 // with `node --experimental-strip-types src/shared/editor.test.ts`.
 
+export function matchesQuery(clip: { title: string; game: string }, query: string): boolean {
+  const needle = query.toLowerCase()
+  return clip.title.toLowerCase().includes(needle) || clip.game.toLowerCase().includes(needle)
+}
+
 export function formatTimecode(seconds: number): string {
   const safe = Number.isFinite(seconds) && seconds > 0 ? seconds : 0
   const minutes = Math.floor(safe / 60)

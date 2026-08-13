@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipActionBar } from './ClipActionBar'
 import { AudioLanes } from './editor/AudioLanes'
-import { Filmstrip } from './editor/Filmstrip'
+import { Filmstrip, TRIM_SNAP_SEC } from './editor/Filmstrip'
 import { useLiveMix } from './editor/useLiveMix'
 import { useClipAudio } from './editor/useClipAudio'
 import type { LiveMixTrack } from './editor/useLiveMix'
@@ -115,20 +115,33 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     else video.pause()
   }, [])
 
-  // Escape closes and Space toggles play. Left and right deliberately do
-  // nothing here: they move between clips in the player, and carrying that
-  // into the editor would let a stray keypress swap the clip out from under
-  // an in-progress edit.
+  const setTrimEdge = useCallback((edge: 'in' | 'out', seconds: number) => {
+    const snapped = nearestKeyframe(keyframes, seconds, TRIM_SNAP_SEC) ?? seconds
+    setRange(current => edge === 'in'
+      ? clampRange(snapped, current.outSec, duration)
+      : clampRange(current.inSec, snapped, duration))
+  }, [duration, keyframes])
+
+  // Escape closes, Space toggles play, and brackets set the trim edges. Left
+  // and right deliberately do nothing here: they move between clips in the
+  // player, and carrying that into the editor would let a stray keypress swap
+  // the clip out from under an in-progress edit.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
       if (event.key === 'Escape') onClose()
       if (event.code === 'Space') { event.preventDefault(); togglePlay() }
+      if (event.key === '[' || event.key === ']') {
+        const video = videoRef.current
+        if (!video) return
+        event.preventDefault()
+        setTrimEdge(event.key === '[' ? 'in' : 'out', video.currentTime)
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, togglePlay])
+  }, [onClose, setTrimEdge, togglePlay])
 
   useEffect(() => {
     const video = videoRef.current
@@ -269,6 +282,10 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           {formatTimecode(range.inSec)} → {formatTimecode(range.outSec)}
         </span>
         <span style={{ fontSize: 12, color: 'var(--muted-3)' }}>{(range.outSec - range.inSec).toFixed(1)}s</span>
+        <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>
+          <kbd style={{ color: 'var(--muted-2)' }}>[</kbd> set in&nbsp;&nbsp;
+          <kbd style={{ color: 'var(--muted-2)' }}>]</kbd> set out
+        </span>
         {/* Honest about what the save will cost, and specific about which
             change caused it, rather than just going dark. */}
         <span style={{ fontSize: 11, color: saveMode.lossless ? 'var(--accent)' : 'var(--muted-3)' }}>
