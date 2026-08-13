@@ -134,4 +134,13 @@ if(WIN32)
   if(FLASH_CPPWINRT)
     target_include_directories(flash_screenshot_test PRIVATE "${FLASH_CPPWINRT}")
   endif()
+
+  # Reports rather than asserts: whether a speech language pack is installed is
+  # a fact about the machine, not a defect. Answers whether SpeechRecognizer
+  # works at all from an unpackaged Win32 process before anything is built on it.
+  flash_add_test(flash_voice_probe test/voice_probe.cpp)
+  target_link_libraries(flash_voice_probe windowsapp)
+  if(FLASH_CPPWINRT)
+    target_include_directories(flash_voice_probe PRIVATE "${FLASH_CPPWINRT}")
+  endif()
 endif()

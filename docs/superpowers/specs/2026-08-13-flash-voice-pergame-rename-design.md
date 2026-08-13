@@ -30,17 +30,56 @@ itself unavailable in Settings rather than silently never firing.
 
 ### Where the audio comes from
 
-`AudioCapture` already delivers every buffer through a single `AudioCallback`,
-and `AudioData` already carries a `sourceId` identifying which source produced
-it. Voice activation taps the microphone source inside that existing callback.
+An earlier draft of this spec said voice activation would tap the microphone
+buffers already flowing through `AudioCapture`'s `AudioCallback`. That is not
+possible. `SpeechRecognizer` has no API for pushing PCM into it — it opens an
+audio input device itself and owns that stream. The design has to accept a
+second microphone reader in the process.
 
-This matters for a reason beyond convenience: opening a second capture stream on
-the same microphone risks fighting the first for the device. Reusing the
-callback means there is exactly one microphone reader in the process, and the
-recogniser is downstream of it.
+That is workable rather than merely tolerable: WASAPI shared mode allows
+multiple capture clients on one device, which is already how the recogniser
+coexists with Discord or a game's own voice chat. There is no contention to
+resolve.
 
-Only the microphone source is fed to the recogniser. Game audio and desktop
-audio are never sent, so a video playing the trigger phrase cannot fire it.
+It does have one real consequence, which the UI has to be honest about. The
+recogniser listens to the **Windows default input device**, while Flash's clip
+audio captures whichever microphone its own settings name. On a machine with
+one microphone these are the same device and the distinction never surfaces. On
+a machine with several they can differ, and voice activation would then be
+listening to a microphone the user did not point Flash at. The Settings row
+therefore names the device the recogniser is actually using, rather than
+implying it follows the capture setting.
+
+Because the recogniser owns its own stream, game audio and desktop audio are
+never fed to it — a video playing the trigger phrase cannot fire it, which was
+the property the discarded design was chasing anyway.
+
+### Confirmed feasible
+
+A probe under `packages/flash-capture/test/voice_probe.cpp` was built and run
+before any of this was designed around, because the whole feature dies if the
+answer is no. From an ordinary unpackaged Win32 process it reports:
+
+```
+OK   SpeechRecognizer constructed
+     current language: English (United States)
+     grammar languages installed: 1
+OK   CompileConstraintsAsync status=0
+OK   list constraint compiled offline
+```
+
+Constructing the recogniser outside an MSIX package works, a grammar language
+pack is present, and a list constraint compiles with no network and no
+online-speech privacy setting.
+
+The probe reports rather than asserts. A machine with no speech language pack
+installed is a fact about that machine, not a defect, and the feature must
+degrade to "unavailable" there rather than fail a build.
+
+What the probe does **not** establish is recognition accuracy — that a spoken
+phrase is actually matched, and how often something else is. That needs a
+microphone and a human voice, so it is a manual check, and no claim about
+accuracy should be made until it has been done.
 
 ### Commands
 
