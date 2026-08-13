@@ -143,4 +143,13 @@ if(WIN32)
   if(FLASH_CPPWINRT)
     target_include_directories(flash_voice_probe PRIVATE "${FLASH_CPPWINRT}")
   endif()
+
+  # A measuring tool, not a check: it needs a microphone and a person talking.
+  # The confidence floor the design depends on comes out of this, rather than
+  # out of a number someone picked.
+  flash_add_test(flash_voice_calibrate test/voice_calibrate.cpp)
+  target_link_libraries(flash_voice_calibrate windowsapp)
+  if(FLASH_CPPWINRT)
+    target_include_directories(flash_voice_calibrate PRIVATE "${FLASH_CPPWINRT}")
+  endif()
 endif()
