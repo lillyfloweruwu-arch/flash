@@ -1,10 +1,12 @@
 #include "screen_capture.h"
 #include "capture_clock.h"
 #include "frame_source.h"
+#include "png_writer.h"
 #include "../color_space.h"
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <stdexcept>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -321,6 +323,9 @@ bool ScreenCapture::Start(FrameCallback callback) {
     std::lock_guard lock(stopMutex_);
     if (capturing_.exchange(true)) return false;
     if (captureThread_.joinable()) captureThread_.join();
+#ifdef _WIN32
+    { std::lock_guard frameLock(latestFrameMutex_); latestBgraTexture_.Reset(); }
+#endif
     { std::lock_guard statusLock(statusMutex_); captureError_.clear(); }
     captureHealthy_.store(true);
     callback_ = std::move(callback); captureThread_ = std::thread(&ScreenCapture::CaptureLoop, this); return true;
@@ -331,6 +336,42 @@ void ScreenCapture::Stop() {
     capturing_.store(false);
     if (captureThread_.joinable() && captureThread_.get_id() != std::this_thread::get_id()) captureThread_.join();
     captureHealthy_.store(false);
+}
+
+void ScreenCapture::SaveScreenshot(const std::string& path) {
+    if (!capturing_.load()) throw std::runtime_error("capture is not running");
+    if (path.empty()) throw std::invalid_argument("screenshot path must not be empty");
+#ifdef _WIN32
+    ComPtr<ID3D11Texture2D> readback;
+    D3D11_TEXTURE2D_DESC desc{};
+    {
+        std::lock_guard lock(latestFrameMutex_);
+        if (!latestBgraTexture_) throw std::runtime_error("no capture frame has arrived yet");
+        latestBgraTexture_->GetDesc(&desc);
+        desc.BindFlags = 0;
+        desc.MiscFlags = 0;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        desc.Usage = D3D11_USAGE_STAGING;
+        const HRESULT createHr = device_->CreateTexture2D(&desc, nullptr, &readback);
+        if (FAILED(createHr)) throw std::runtime_error("failed to create screenshot staging texture");
+        context_->CopyResource(readback.Get(), latestBgraTexture_.Get());
+    }
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    const HRESULT mapHr = context_->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(mapHr)) throw std::runtime_error("failed to map screenshot staging texture");
+    try {
+        WritePng(path, static_cast<const uint8_t*>(mapped.pData),
+            desc.Width, desc.Height, mapped.RowPitch);
+    } catch (...) {
+        context_->Unmap(readback.Get(), 0);
+        throw;
+    }
+    context_->Unmap(readback.Get(), 0);
+#else
+    (void)path;
+    throw std::runtime_error("screenshots are only supported on Windows");
+#endif
 }
 
 void ScreenCapture::SetCaptureError(const std::string& error) {
@@ -352,6 +393,25 @@ std::string ScreenCapture::GetCaptureBackend() const {
 
 void ScreenCapture::DeliverFrame(ID3D11Texture2D* texture, int64_t timestampUs) {
 #ifdef _WIN32
+    if (texture) {
+        std::lock_guard lock(latestFrameMutex_);
+        D3D11_TEXTURE2D_DESC sourceDesc{};
+        texture->GetDesc(&sourceDesc);
+        D3D11_TEXTURE2D_DESC latestDesc{};
+        if (latestBgraTexture_) latestBgraTexture_->GetDesc(&latestDesc);
+        if (!latestBgraTexture_ || latestDesc.Width != sourceDesc.Width ||
+            latestDesc.Height != sourceDesc.Height || latestDesc.Format != sourceDesc.Format) {
+            latestBgraTexture_.Reset();
+            sourceDesc.BindFlags = 0;
+            sourceDesc.MiscFlags = 0;
+            sourceDesc.CPUAccessFlags = 0;
+            sourceDesc.Usage = D3D11_USAGE_DEFAULT;
+            if (FAILED(device_->CreateTexture2D(&sourceDesc, nullptr, &latestBgraTexture_))) {
+                SetCaptureError("failed to allocate latest screenshot texture");
+            }
+        }
+        if (latestBgraTexture_) context_->CopyResource(latestBgraTexture_.Get(), texture);
+    }
     FrameData frame{}; frame.timestamp_us = timestampUs; frame.device = device_.Get();
     if (gpuOutputEnabled_.load() && texture && videoProcessor_ && outputView_) {
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inDesc{};

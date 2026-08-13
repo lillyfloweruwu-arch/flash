@@ -29,7 +29,7 @@ struct OwnedAudio { std::vector<float> samples; uint32_t frameCount = 0, channel
 struct Quality { uint32_t height = 1080, fps = 60, bitrateKbps = 20000; };
 
 std::mutex g_stateMutex, g_encodeMutex;
-std::unique_ptr<ScreenCapture> g_screenCapture;
+std::shared_ptr<ScreenCapture> g_screenCapture;
 std::unique_ptr<AudioCapture> g_audioCapture;
 std::unique_ptr<Encoder> g_encoder;
 std::unique_ptr<RingBuffer> g_ringBuffer;
@@ -109,7 +109,7 @@ bool BuildPipeline(bool initializeAudio) {
     const auto& display = displays[g_displayId];
     const uint32_t outputHeight = (std::min)(g_quality.height, display.height);
     const uint32_t outputWidth = ComputeEvenWidth(display.width, display.height, outputHeight);
-    auto screen = std::make_unique<ScreenCapture>();
+    auto screen = std::make_shared<ScreenCapture>();
     if (!screen->Initialize(g_quality.fps, outputWidth, outputHeight, g_displayId)) { g_pipelineError = "DXGI capture initialization failed"; return false; }
     EncoderConfig config; config.width = outputWidth; config.height = outputHeight; config.fps = g_quality.fps;
     config.bitrate = g_quality.bitrateKbps * 1000; config.device = screen->HasGpuOutput() ? screen->GetDevice() : nullptr;
@@ -387,6 +387,25 @@ private:
     ExportResult result_{};
 };
 
+class SaveScreenshotWorker final : public Napi::AsyncWorker {
+public:
+    SaveScreenshotWorker(Napi::Env env, std::shared_ptr<ScreenCapture> capture,
+                         std::string path)
+        : AsyncWorker(env), deferred_(Napi::Promise::Deferred::New(env)),
+          capture_(std::move(capture)), path_(std::move(path)) {}
+    Napi::Promise Promise() const { return deferred_.Promise(); }
+    void Execute() override {
+        try { capture_->SaveScreenshot(path_); }
+        catch (const std::exception& e) { SetError(e.what()); }
+    }
+    void OnOK() override { deferred_.Resolve(Napi::String::New(Env(), path_)); }
+    void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
+private:
+    Napi::Promise::Deferred deferred_;
+    std::shared_ptr<ScreenCapture> capture_;
+    std::string path_;
+};
+
 // Preview audio is mono at 22050: enough to judge a mix and draw waveforms, and
 // it keeps a five minute clip near 26MB across three tracks rather than 345MB.
 constexpr uint32_t kPreviewSampleRate = 22050;
@@ -477,6 +496,34 @@ Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
     return promise;
 }
 
+Napi::Value SaveScreenshotBinding(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (!info.Length() || !info[0].IsString()) {
+        Napi::TypeError::New(env, "saveScreenshot requires a file path")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    std::string path = info[0].As<Napi::String>().Utf8Value();
+    if (path.empty()) {
+        Napi::TypeError::New(env, "screenshot path must not be empty")
+            .ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    std::shared_ptr<ScreenCapture> capture;
+    {
+        std::lock_guard lock(g_stateMutex);
+        capture = g_screenCapture;
+    }
+    if (!capture || !capture->IsCapturing()) {
+        Napi::Error::New(env, "capture is not running").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    auto* worker = new SaveScreenshotWorker(env, std::move(capture), std::move(path));
+    auto promise = worker->Promise();
+    worker->Queue();
+    return promise;
+}
+
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
@@ -484,6 +531,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks));
     exports.Set("decodeClipAudio", Napi::Function::New(env, DecodeClipAudioBinding));
     exports.Set("getClipKeyframes", Napi::Function::New(env, GetClipKeyframesBinding));
+    exports.Set("saveScreenshot", Napi::Function::New(env, SaveScreenshotBinding));
     return exports;
 }
 NODE_API_MODULE(flash_capture, Init)

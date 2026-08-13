@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl, matchesQuery } from '../shared/editor'
+import { resolveGameSettings } from '../shared/perGame'
 import { ClipActionBar } from './ClipActionBar'
 import { PlayerControls } from './PlayerControls'
 import { Dropdown } from './Dropdown'
@@ -46,6 +47,7 @@ interface Settings {
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
+  perGame: Record<string, { quality?: string; bufferLength?: number }>
 }
 
 const TABS = ['My Clips', 'Settings']
@@ -94,6 +96,73 @@ function timeAgo(timestamp: number): string {
   const days = Math.floor(hours / 24)
   if (days < 30) return `${days}d ago`
   return new Date(timestamp).toLocaleDateString()
+}
+
+function RenameTitle({ title, onCommit, size = 12 }: {
+  title: string
+  onCommit: (name: string) => Promise<string | null>
+  size?: number
+}) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(title)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { if (!editing) setValue(title) }, [title, editing])
+
+  const commit = async () => {
+    if (busy) return
+    if (value.trim() === title) { setEditing(false); setError(null); return }
+    setBusy(true); setError(null)
+    let message: string | null
+    try { message = await onCommit(value) }
+    catch (error) { message = error instanceof Error ? error.message : 'Rename failed' }
+    setBusy(false)
+    if (message) { setError(message); return }
+    setEditing(false)
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" title="Rename" onClick={event => { event.stopPropagation(); setEditing(true) }}
+        className="flex items-center gap-1.5 min-w-0 text-left group"
+        style={{ maxWidth: '100%', color: 'var(--fg)', fontSize: size, fontWeight: 500 }}>
+        <span className="truncate">{title}</span>
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"
+          style={{ color: 'var(--muted-3)', flexShrink: 0 }}>
+          <path d="M2 8.5V10h1.5l6-6L8 2.5l-6 6zM7.5 3l1.5 1.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
+    )
+  }
+
+  return (
+    <div draggable={false} onClick={event => event.stopPropagation()} style={{ width: '100%', maxWidth: 420 }}>
+      <div className="grid items-center gap-1.5" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto auto' }}>
+        <input autoFocus value={value} disabled={busy} aria-label="Clip name"
+          onChange={event => setValue(event.target.value)}
+          onFocus={event => event.currentTarget.select()}
+          onKeyDown={event => {
+            event.stopPropagation()
+            if (event.key === 'Enter') { event.preventDefault(); commit() }
+            if (event.key === 'Escape') { event.preventDefault(); setEditing(false); setError(null) }
+          }}
+          className="rounded-md min-w-0"
+          style={{ width: '100%', fontSize: size, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--accent-line)', padding: '4px 7px', outline: 'none' }} />
+        <button type="button" disabled={busy} onClick={commit}
+          className="px-2 py-1 rounded-md"
+          style={{ fontSize: 10, color: 'var(--on-accent)', background: 'var(--accent)', opacity: busy ? 0.5 : 1 }}>
+          {busy ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" disabled={busy} onClick={() => { setEditing(false); setError(null) }}
+          className="px-2 py-1 rounded-md"
+          style={{ fontSize: 10, color: 'var(--muted-2)', border: '1px solid var(--edge)' }}>
+          Cancel
+        </button>
+      </div>
+      {error && <p style={{ fontSize: 10, color: 'var(--alert)', marginTop: 4 }}>{error}</p>}
+    </div>
+  )
 }
 
 // ── Stickman Logo ─────────────────────────────────────────────────────────────
@@ -252,12 +321,13 @@ function WindowControls() {
 
 // ── Clip Player Modal ─────────────────────────────────────────────────────────
 
-function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
+function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: {
   clips: Clip[]
   startIndex: number
   onClose: () => void
   onDelete: (clip: Clip) => void
   onEdit: (clip: Clip) => void
+  onRename: (clip: Clip, name: string) => Promise<string | null>
 }) {
   const [index, setIndex] = useState(startIndex)
   const [trimNote, setTrimNote] = useState<string | null>(null)
@@ -270,6 +340,20 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
+
+  const renameCurrent = useCallback(async (name: string) => {
+    if (!clip) return 'Clip not found'
+    const video = videoRef.current
+    video?.pause()
+    video?.removeAttribute('src')
+    video?.load()
+    const error = await onRename(clip, name)
+    if (error && video) {
+      video.src = clipUrl(clip.filePath)
+      video.load()
+    }
+    return error
+  }, [clip, onRename])
 
   // Clear the last export note when moving between clips, so it cannot read as
   // if it described the clip now on screen.
@@ -397,7 +481,9 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit }: {
 
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
-              <h2 style={{ fontWeight: 600, fontSize: 16, color: 'var(--fg)', marginBottom: 4 }}>{clip.title}</h2>
+              <div style={{ marginBottom: 4 }}>
+                <RenameTitle title={clip.title} onCommit={renameCurrent} size={16} />
+              </div>
               <div className="flex items-center gap-3" style={{ color: 'var(--muted-2)', fontSize: 12 }}>
                 <span style={{ color: 'var(--accent)' }}>{clip.game}</span>
                 <span>·</span>
@@ -551,10 +637,30 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
 
 // ── ClipCard ───────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: () => void; onDelete: () => void; suspend: boolean }) {
+function ClipCard({ clip, onClick, onDelete, onRename, suspend }: {
+  clip: Clip
+  onClick: () => void
+  onDelete: () => void
+  onRename: (clip: Clip, name: string) => Promise<string | null>
+  suspend: boolean
+}) {
   const [hov, setHov] = useState(false)
   const [visible, setVisible] = useState(false)
   const cardRef = useRef<HTMLDivElement>(null)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const commitRename = async (name: string) => {
+    const video = videoRef.current
+    video?.pause()
+    video?.removeAttribute('src')
+    video?.load()
+    const error = await onRename(clip, name)
+    if (error && video) {
+      video.src = `${clipUrl(clip.filePath)}#t=0.5`
+      video.load()
+    }
+    return error
+  }
 
   // Each thumbnail is a real <video> decoding a frame off disk. Mounting one per
   // clip means a library of 200 spins up 200 decoders at once, so hold the src
@@ -586,6 +692,7 @@ function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: (
             past the cap elements simply paint black with no error. */}
         {visible && !suspend && (
           <video
+            ref={videoRef}
             src={`${clipUrl(clip.filePath)}#t=0.5`}
             preload="metadata"
             muted
@@ -616,7 +723,9 @@ function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: (
         </div>
       </div>
       <div className="p-3">
-        <p style={{ fontSize: 12, fontWeight: 500, color: 'var(--fg)', marginBottom: 6, lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{clip.title}</p>
+        <div style={{ marginBottom: 6, lineHeight: 1.4 }}>
+          <RenameTitle title={clip.title} onCommit={commitRename} />
+        </div>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{formatBytes(clip.size)}</span>
           <span style={{ fontSize: 10, color: 'var(--faint)' }}>{timeAgo(clip.createdAt)}</span>
@@ -628,13 +737,14 @@ function ClipCard({ clip, onClick, onDelete, suspend }: { clip: Clip; onClick: (
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip, onDeleteClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
+function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip, onDeleteClip, onRenameClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
   clips: Clip[]
   query: string
   onQueryChange: (query: string) => void
   shortcutsEnabled: boolean
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
+  onRenameClip: (clip: Clip, name: string) => Promise<string | null>
   isRecording: boolean
   captureAvailable: boolean
   hotkey: string
@@ -722,7 +832,7 @@ function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, onOpenClip,
       ) : (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))' }}>
           {sorted.map(clip => (
-            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} suspend={suspendThumbnails} />
+            <ClipCard key={clip.id} clip={clip} onClick={() => onOpenClip(clip)} onDelete={() => onDeleteClip(clip)} onRename={onRenameClip} suspend={suspendThumbnails} />
           ))}
         </div>
       )}
@@ -831,6 +941,25 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
   // The ceiling for a useful frame rate is the refresh rate of the display
   // actually being captured, not the fastest one attached.
   const activeRefreshHz = displays.find(d => d.id === settings.displayId)?.refreshHz ?? 0
+
+  const updateGameOverride = (
+    game: string,
+    field: 'quality' | 'bufferLength',
+    value: string | number | undefined,
+  ) => {
+    const perGame = { ...settings.perGame }
+    const override = { ...perGame[game] }
+    if (field === 'quality') {
+      if (value === undefined) delete override.quality
+      else override.quality = String(value)
+    } else {
+      if (value === undefined) delete override.bufferLength
+      else override.bufferLength = Number(value)
+    }
+    if (Object.keys(override).length) perGame[game] = override
+    else delete perGame[game]
+    onChange({ perGame })
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -963,20 +1092,48 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
             </p>
           ) : (
             <div className="pt-2">
-              {Object.entries(learnedGames).map(([exe, name]) => (
-                <div key={exe} className="flex items-center justify-between py-2"
-                  style={{ borderBottom: '1px solid var(--edge-soft)' }}>
-                  <span style={{ fontSize: 12, color: 'var(--fg)' }}>
-                    {name} <span style={{ color: 'var(--muted-3)' }}>· {exe}</span>
-                  </span>
-                  <button onClick={() => onForgetGame(exe)}
-                    title="Forget this name"
-                    className="px-2 py-1 rounded transition-all hover:bg-white/5"
-                    style={{ fontSize: 11, color: 'var(--muted-2)', border: '1px solid var(--edge)' }}>
-                    Forget
-                  </button>
-                </div>
-              ))}
+              {Object.entries(learnedGames).map(([exe, name]) => {
+                const override = settings.perGame[name] ?? {}
+                const effective = resolveGameSettings(settings.perGame, name, settings)
+                return (
+                  <div key={exe} className="py-2" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="truncate" style={{ fontSize: 12, color: 'var(--fg)' }}>
+                        {name} <span style={{ color: 'var(--muted-3)' }}>· {exe}</span>
+                      </span>
+                      <button onClick={() => onForgetGame(exe)}
+                        title="Forget this name"
+                        className="px-2 py-1 rounded transition-all hover:bg-white/5 shrink-0"
+                        style={{ fontSize: 11, color: 'var(--muted-2)', border: '1px solid var(--edge)' }}>
+                        Forget
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 pt-2">
+                      <span style={{ width: 42, fontSize: 10, color: 'var(--muted-3)' }}>Quality</span>
+                      <Dropdown
+                        value={override.quality ?? ''}
+                        onChange={quality => updateGameOverride(name, 'quality', quality || undefined)}
+                        width={190}
+                        options={[
+                          { value: '', label: `${effective.quality} · inherited` },
+                          ...QUALITY_OPTIONS.map(quality => ({ value: quality, label: `${quality} · set` })),
+                        ]}
+                      />
+                      <span style={{ width: 38, fontSize: 10, color: 'var(--muted-3)' }}>Length</span>
+                      <Dropdown
+                        value={override.bufferLength ?? 0}
+                        onChange={bufferLength => updateGameOverride(name, 'bufferLength', bufferLength || undefined)}
+                        width={130}
+                        options={[
+                          { value: 0, label: `${effective.bufferLength}s · inherited` },
+                          ...Array.from({ length: 59 }, (_, index) => 10 + index * 5)
+                            .map(bufferLength => ({ value: bufferLength, label: `${bufferLength}s · set` })),
+                        ]}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </Card>
@@ -1068,6 +1225,7 @@ export default function App() {
     shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
     quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
+    perGame: {},
   })
   const [encoder, setEncoder] = useState('none')
   const [captureBackend, setCaptureBackend] = useState('unknown')
@@ -1166,6 +1324,14 @@ export default function App() {
     })
   }, [refreshClips])
 
+  const renameClip = useCallback(async (clip: Clip, name: string) => {
+    if (!window.flash) return 'Rename is unavailable'
+    const result = await window.flash.renameClip(clip.filePath, name)
+    if (result.error) return result.error
+    await refreshClips()
+    return null
+  }, [refreshClips])
+
   const toggleRecording = useCallback(async () => {
     if (!window.flash) return
     if (isRecording) await window.flash.capture.stopReplayBuffer()
@@ -1240,6 +1406,7 @@ export default function App() {
               // sorting by Longest/Largest used to open a different clip.
               onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}
               onDeleteClip={deleteClip}
+              onRenameClip={renameClip}
               isRecording={isRecording} captureAvailable={captureAvailable}
               hotkey={settings.hotkey} bufferLength={settings.bufferLength}
               suspendThumbnails={previewIndex !== null || editingClip !== null}
@@ -1248,7 +1415,7 @@ export default function App() {
         </main>
       </div>
       {previewIndex !== null && filteredClips.length > 0 && (
-        <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} onEdit={setEditingClip} />
+        <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} onEdit={setEditingClip} onRename={renameClip} />
       )}
       {editingClip && (
         <Editor clip={editingClip} onClose={() => setEditingClip(null)} />

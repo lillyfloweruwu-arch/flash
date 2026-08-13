@@ -1,5 +1,5 @@
 import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, powerMonitor, protocol, net } from 'electron'
-import { join, basename, dirname } from 'path'
+import { join, basename, dirname, extname } from 'path'
 
 // Must run before the app is ready, or the scheme is not treated as privileged
 // and range requests (video seeking) fail.
@@ -8,10 +8,12 @@ protocol.registerSchemesAsPrivileged([{
   privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
 }])
 import { execFile } from 'child_process'
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'fs'
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { Readable } from 'stream'
 import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
+import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
+import { resolveClipFilename, validateClipName } from '../shared/rename'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -32,6 +34,7 @@ const DEFAULTS = {
   autoDeleteDays: 0,  // 0 = never
   learnedGames: {} as Record<string, string>,   // exe (lowercase) -> display name
   ignoredGames: [] as string[],                 // exe the user said is not a game
+  perGame: {} as PerGameSettings,
 }
 
 type Settings = typeof DEFAULTS
@@ -97,9 +100,12 @@ function applyThemeIcons() {
   }
 }
 
-function applyQuality() {
-  const q = parseQuality(settings.quality)
-  try { captureAddon?.setQuality?.(q) } catch (error) { console.warn('Could not apply quality', error) }
+function applyCaptureSettings(game: string | null = currentGame) {
+  const resolved = resolveGameSettings(settings.perGame ?? {}, game, settings)
+  try { captureAddon?.setBufferLength(resolved.bufferLength) }
+  catch (error) { console.warn('Could not apply buffer length', error) }
+  try { captureAddon?.setQuality?.(parseQuality(resolved.quality)) }
+  catch (error) { console.warn('Could not apply quality', error) }
 }
 
 function ensureClipsFolder() {
@@ -196,7 +202,7 @@ interface ClipInfo {
   createdAt: number
 }
 
-const sidecarPath = (clipPath: string) => clipPath.replace(/\.mp4$/i, '.json')
+const sidecarPath = (clipPath: string) => clipPath.slice(0, -extname(clipPath).length) + '.json'
 
 function readSidecar(clipPath: string): { duration: number; game: string } | null {
   try { return JSON.parse(readFileSync(sidecarPath(clipPath), 'utf8')) } catch { return null }
@@ -250,6 +256,55 @@ function deleteClip(filePath: string): boolean {
   try { unlinkSync(filePath) } catch { return false }
   try { unlinkSync(sidecarPath(filePath)) } catch { /* no sidecar */ }
   return true
+}
+
+function renameClip(filePath: string, requestedName: string): { filePath?: string; error?: string } {
+  const name = requestedName.trim()
+  const validationError = validateClipName(name)
+  if (validationError) return { error: validationError }
+  if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+
+  const extension = extname(filePath).toLowerCase()
+  if (extension !== '.mp4' && extension !== '.png') return { error: 'Only clips and screenshots can be renamed' }
+
+  const folder = dirname(filePath)
+  const originalFilename = basename(filePath)
+  const originalSidecar = sidecarPath(filePath)
+  const originalSidecarFilename = basename(originalSidecar)
+  let existing: string[]
+  try {
+    existing = readdirSync(folder).filter(filename => {
+      const lower = filename.toLowerCase()
+      return lower !== originalFilename.toLowerCase() && lower !== originalSidecarFilename.toLowerCase()
+    })
+  } catch (error: any) {
+    return { error: error?.message || 'Could not read the clips folder' }
+  }
+
+  const target = join(folder, resolveClipFilename(name, extension, existing))
+  if (target.toLowerCase() === filePath.toLowerCase()) return { filePath }
+  const targetSidecar = sidecarPath(target)
+  const hasSidecar = existsSync(originalSidecar)
+
+  try {
+    renameSync(filePath, target)
+    if (hasSidecar) {
+      try {
+        renameSync(originalSidecar, targetSidecar)
+      } catch (error) {
+        try { renameSync(target, filePath) }
+        catch (restoreError) {
+          console.error('Could not restore clip after sidecar rename failed', restoreError)
+          return { error: 'Rename failed and the original clip name could not be restored' }
+        }
+        throw error
+      }
+    }
+    return { filePath: target }
+  } catch (error: any) {
+    const busy = error?.code === 'EBUSY' || error?.code === 'EPERM'
+    return { error: busy ? 'Close anything using this file, then try again' : error?.message || 'Rename failed' }
+  }
 }
 
 function pruneOldClips() {
@@ -485,9 +540,10 @@ function startGameDetection() {
       currentGame = game?.name ?? null
       currentGamePid = game?.pid ?? 0
       if (game) {
+        applyCaptureSettings(game.name)
         try { captureAddon?.setCurrentGame(game.name, game.pid) }
         catch (error) { console.warn('Could not target game audio', error) }
-      }
+      } else applyCaptureSettings(null)
       mainWindow?.webContents.send('game-detected', currentGame)
       // Unrecognised but plausible: ask rather than filing clips under a guess.
       // Asked once per executable — declining records it as "not a game".
@@ -774,13 +830,14 @@ function setupIPC() {
   ipcMain.handle('capture-set-buffer-length', (_event, seconds: number) => {
     settings.bufferLength = seconds
     saveSettings()
-    try { captureAddon?.setBufferLength(seconds) } catch { /* ignore */ }
+    applyCaptureSettings()
   })
 
   // ── Clips ──
   ipcMain.handle('get-clips', () => scanClips())
   ipcMain.handle('get-storage', () => getStorageUsage())
   ipcMain.handle('delete-clip', (_event, filePath: string) => deleteClip(filePath))
+  ipcMain.handle('rename-clip', (_event, filePath: string, name: string) => renameClip(filePath, name))
   ipcMain.handle('open-clip', (_event, filePath: string) => {
     shell.openPath(filePath)
   })
@@ -930,10 +987,9 @@ function setupIPC() {
   ipcMain.handle('set-settings', (_event, partial: Partial<Settings>) => {
     Object.assign(settings, partial)
     saveSettings()
-    if (partial.bufferLength !== undefined) {
-      try { captureAddon?.setBufferLength(partial.bufferLength) } catch { /* ignore */ }
+    if (partial.bufferLength !== undefined || partial.quality !== undefined || partial.perGame !== undefined) {
+      applyCaptureSettings()
     }
-    if (partial.quality !== undefined) applyQuality()
     if (partial.autoDeleteDays !== undefined) pruneOldClips()
     if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
@@ -967,6 +1023,7 @@ function setupIPC() {
     saveSettings()
     if (name) {
       currentGame = name
+      applyCaptureSettings(name)
       try { captureAddon?.setCurrentGame(name, currentGamePid) } catch { /* audio stays mixed */ }
       mainWindow?.webContents.send('game-detected', name)
       updateOverlay()
@@ -1215,8 +1272,7 @@ app.on('ready', () => {
     const status = captureAddon.initialize(settings.clipsFolder, settings.displayId)
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
-    captureAddon.setBufferLength(settings.bufferLength)
-    applyQuality()
+    applyCaptureSettings(null)
     try {
       isRecording = captureAddon.startReplayBuffer()
       if (isRecording) console.log('Replay buffer started automatically')

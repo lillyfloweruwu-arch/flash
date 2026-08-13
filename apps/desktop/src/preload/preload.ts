@@ -26,6 +26,7 @@ export interface Settings {
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
+  perGame: Record<string, { quality?: string; bufferLength?: number }>
 }
 
 contextBridge.exposeInMainWorld('flash', {
@@ -46,6 +47,7 @@ contextBridge.exposeInMainWorld('flash', {
   getClips: () => ipcRenderer.invoke('get-clips'),
   getStorage: () => ipcRenderer.invoke('get-storage'),
   deleteClip: (filePath: string) => ipcRenderer.invoke('delete-clip', filePath),
+  renameClip: (filePath: string, name: string) => ipcRenderer.invoke('rename-clip', filePath, name),
   openClip: (filePath: string) => ipcRenderer.invoke('open-clip', filePath),
   openClipsFolder: () => ipcRenderer.invoke('open-clips-folder'),
   showClipInFolder: (filePath: string) => ipcRenderer.invoke('show-clip-in-folder', filePath),
@@ -127,6 +129,7 @@ export type FlashAPI = {
   getClips: () => Promise<ClipInfo[]>
   getStorage: () => Promise<{ used: number; clips: number }>
   deleteClip: (filePath: string) => Promise<boolean>
+  renameClip: (filePath: string, name: string) => Promise<{ filePath?: string; error?: string }>
   openClip: (filePath: string) => Promise<void>
   openClipsFolder: () => Promise<void>
   showClipInFolder: (filePath: string) => Promise<void>

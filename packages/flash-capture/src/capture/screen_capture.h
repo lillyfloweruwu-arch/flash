@@ -61,6 +61,10 @@ public:
     // Stop capture
     void Stop();
 
+    // Write the most recently delivered raw BGRA frame as a PNG. The GPU
+    // readback and file IO happen on the calling thread, never CaptureLoop.
+    void SaveScreenshot(const std::string& path);
+
     // Query state
     bool IsCapturing() const { return capturing_.load(); }
     bool IsHealthy() const { return captureHealthy_.load(); }
@@ -110,6 +114,8 @@ private:
     ComPtr<ID3D11VideoProcessor> videoProcessor_;
     ComPtr<ID3D11Texture2D> nv12Texture_;
     ComPtr<ID3D11VideoProcessorOutputView> outputView_;
+    std::mutex latestFrameMutex_;
+    ComPtr<ID3D11Texture2D> latestBgraTexture_;
 #endif
 };
 

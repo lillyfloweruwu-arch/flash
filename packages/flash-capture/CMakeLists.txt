@@ -30,6 +30,7 @@ endif()
 set(CAPTURE_SOURCES
   src/binding.cpp
   src/capture/screen_capture.cpp
+  src/capture/png_writer.cpp
   src/capture/wgc_source.cpp
   src/capture/audio_capture.cpp
   src/encoding/encoder_factory.cpp
@@ -122,3 +123,15 @@ flash_add_test(flash_export_budget_test test/export_budget_test.cpp)
 flash_add_test(flash_color_space_test test/color_space_test.cpp)
 flash_add_test(flash_audio_decode_test test/audio_decode_test.cpp)
 flash_add_test(flash_smart_render_test test/smart_render_test.cpp)
+flash_add_test(flash_screenshot_test
+  test/screenshot_test.cpp
+  src/capture/screen_capture.cpp
+  src/capture/png_writer.cpp
+  src/capture/wgc_source.cpp
+)
+if(WIN32)
+  target_link_libraries(flash_screenshot_test windowsapp)
+  if(FLASH_CPPWINRT)
+    target_include_directories(flash_screenshot_test PRIVATE "${FLASH_CPPWINRT}")
+  endif()
+endif()
