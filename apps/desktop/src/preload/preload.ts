@@ -19,6 +19,10 @@ export interface Settings {
   hotkeyShort: string
   screenshotHotkey: string
   shortClipSeconds: number
+  voiceEnabled: boolean
+  voicePhrase: string
+  voiceRawFloor: number
+  voiceCooldownMs: number
   displayId: number
   overlay: boolean
   overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
@@ -92,6 +96,7 @@ contextBridge.exposeInMainWorld('flash', {
     ipcRenderer.on('identify-game', (_event, request) => callback(request))
   },
   setSettings: (partial: Partial<Settings>) => ipcRenderer.invoke('set-settings', partial),
+  getVoiceStatus: () => ipcRenderer.invoke('voice-status'),
   pickClipsFolder: () => ipcRenderer.invoke('pick-clips-folder'),
 
   // Navigation
@@ -168,6 +173,7 @@ export type FlashAPI = {
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => void
   setSettings: (partial: Partial<Settings>) => Promise<Settings>
+  getVoiceStatus: () => Promise<{ available: boolean; language: string; error: string }>
   pickClipsFolder: () => Promise<string | null>
   onNavigate: (callback: (page: string) => void) => void
   onPlayClipSound: (callback: (soundPath: string) => void) => void

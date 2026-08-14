@@ -1,6 +1,7 @@
 #include <napi.h>
 #include "capture/screen_capture.h"
 #include "capture/audio_capture.h"
+#include "capture/voice_trigger.h"
 #include "encoding/encoder.h"
 #include "buffer/ring_buffer.h"
 #include "buffer/clip_writer.h"
@@ -19,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <vector>
 
@@ -43,6 +45,50 @@ bool g_awaitingFirstKeyframe = false;
 Quality g_quality;
 bool g_audioGame = true, g_audioMic = true, g_audioOther = true;
 std::string g_pipelineError;
+std::unique_ptr<VoiceTrigger> g_voiceTrigger;
+VoiceStatus g_voiceFallbackStatus{false, "", "Voice recognition is unavailable."};
+
+struct VoiceCommandEvent {
+    std::string phrase;
+    double rawConfidence = 0.0;
+};
+
+class VoiceCallbackBridge {
+public:
+    VoiceCallbackBridge(Napi::Env env, const Napi::Function& callback)
+        : tsfn_(Napi::ThreadSafeFunction::New(
+              env, callback, "Flash voice command", 0, 1)) {
+        // A registered callback should not keep Electron alive on its own.
+        tsfn_.Unref(env);
+    }
+
+    ~VoiceCallbackBridge() { Close(); }
+
+    void Dispatch(const std::string& phrase, double rawConfidence) noexcept {
+        if (closed_.load()) return;
+        auto* event = new (std::nothrow) VoiceCommandEvent{phrase, rawConfidence};
+        if (!event) return;
+        const napi_status status = tsfn_.NonBlockingCall(
+            event, [](Napi::Env env, Napi::Function callback, VoiceCommandEvent* value) {
+                std::unique_ptr<VoiceCommandEvent> event(value);
+                callback.Call({
+                    Napi::String::New(env, event->phrase),
+                    Napi::Number::New(env, event->rawConfidence),
+                });
+            });
+        if (status != napi_ok) delete event;
+    }
+
+    void Close() noexcept {
+        if (!closed_.exchange(true)) tsfn_.Abort();
+    }
+
+private:
+    Napi::ThreadSafeFunction tsfn_;
+    std::atomic<bool> closed_{false};
+};
+
+std::shared_ptr<VoiceCallbackBridge> g_voiceCallback;
 
 void StopCapture() {
     ScreenCapture* screen; AudioCapture* audio;
@@ -127,7 +173,21 @@ bool BuildPipeline(bool initializeAudio) {
     g_ringBuffer = std::move(ring); g_audioBuffer.clear(); g_encodeWidth = outputWidth; g_encodeHeight = outputHeight; return true;
 }
 
-void Cleanup(void*) { StopCapture(); std::scoped_lock lock(g_stateMutex, g_encodeMutex); g_encoder.reset(); g_audioCapture.reset(); g_screenCapture.reset(); g_ringBuffer.reset(); g_audioBuffer.clear(); }
+void Cleanup(void*) {
+    StopCapture();
+    if (g_voiceTrigger) {
+        g_voiceTrigger->SetEnabled(false);
+        g_voiceTrigger->SetCallback({});
+        g_voiceTrigger.reset();
+    }
+    if (g_voiceCallback) {
+        g_voiceCallback->Close();
+        g_voiceCallback.reset();
+    }
+    std::scoped_lock lock(g_stateMutex, g_encodeMutex);
+    g_encoder.reset(); g_audioCapture.reset(); g_screenCapture.reset();
+    g_ringBuffer.reset(); g_audioBuffer.clear();
+}
 
 Napi::Value Initialize(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env(); StopCapture();
@@ -290,6 +350,91 @@ Napi::Value SetQuality(const Napi::CallbackInfo& info) {
 
 Napi::Value ListDisplays(const Napi::CallbackInfo& info) { auto result = Napi::Array::New(info.Env()); uint32_t i = 0; for (const auto& d : ScreenCapture::ListDisplays()) { auto value = Napi::Object::New(info.Env()); value.Set("id", d.id); value.Set("name", d.name); value.Set("width", d.width); value.Set("height", d.height); value.Set("isPrimary", d.isPrimary); value.Set("refreshHz", d.refreshHz); result.Set(i++, value); } return result; }
 Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "display id must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t id = info[0].As<Napi::Number>().Uint32Value(); if (id >= ScreenCapture::ListDisplays().size()) { Napi::RangeError::New(info.Env(), "display id does not exist").ThrowAsJavaScriptException(); return info.Env().Undefined(); } bool running; { std::lock_guard lock(g_stateMutex); running = g_screenCapture && g_screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(g_stateMutex); g_previousVideo = g_ringBuffer ? g_ringBuffer->Flush() : std::vector<EncodedPacket>{}; g_previousAudio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); g_previousWidth = g_encodeWidth; g_previousHeight = g_encodeHeight; g_previousFps = g_quality.fps; g_awaitingFirstKeyframe = running && !g_previousVideo.empty(); } uint32_t previous = g_displayId; g_displayId = id; if (!BuildPipeline(false)) { g_displayId = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to switch display").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (running && !StartCaptureThreads()) Napi::Error::New(info.Env(), "display switched but capture restart failed").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+
+Napi::Value SetVoiceEnabled(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsBoolean()) {
+        Napi::TypeError::New(info.Env(), "voice enabled must be a boolean")
+            .ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    if (g_voiceTrigger) g_voiceTrigger->SetEnabled(info[0].As<Napi::Boolean>());
+    return info.Env().Undefined();
+}
+
+Napi::Value SetVoicePhrases(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsArray()) {
+        Napi::TypeError::New(info.Env(), "voice phrases must be an array of strings")
+            .ThrowAsJavaScriptException();
+        return Napi::Boolean::New(info.Env(), false);
+    }
+    const auto values = info[0].As<Napi::Array>();
+    std::vector<std::string> phrases;
+    phrases.reserve(values.Length());
+    for (uint32_t i = 0; i < values.Length(); ++i) {
+        const auto value = values.Get(i);
+        if (!value.IsString()) {
+            Napi::TypeError::New(info.Env(), "every voice phrase must be a string")
+                .ThrowAsJavaScriptException();
+            return Napi::Boolean::New(info.Env(), false);
+        }
+        phrases.push_back(value.As<Napi::String>().Utf8Value());
+    }
+    const bool compiled = g_voiceTrigger && g_voiceTrigger->SetPhrases(phrases);
+    return Napi::Boolean::New(info.Env(), compiled);
+}
+
+Napi::Value SetVoiceThreshold(const Napi::CallbackInfo& info) {
+    if (info.Length() < 2 || !info[0].IsNumber() || !info[1].IsNumber()) {
+        Napi::TypeError::New(info.Env(), "voice threshold requires rawFloor and cooldownMs numbers")
+            .ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    const double rawFloor = info[0].As<Napi::Number>().DoubleValue();
+    const double cooldownMs = info[1].As<Napi::Number>().DoubleValue();
+    if (!std::isfinite(rawFloor) || rawFloor < 0.0 || rawFloor > 1.0 ||
+        !std::isfinite(cooldownMs) || cooldownMs < 0.0 ||
+        cooldownMs > static_cast<double>((std::numeric_limits<uint32_t>::max)())) {
+        Napi::RangeError::New(info.Env(),
+            "rawFloor must be between 0 and 1 and cooldownMs must be non-negative")
+            .ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    if (g_voiceTrigger) {
+        g_voiceTrigger->SetThreshold(rawFloor, static_cast<uint32_t>(cooldownMs));
+    }
+    return info.Env().Undefined();
+}
+
+Napi::Value GetVoiceStatus(const Napi::CallbackInfo& info) {
+    const VoiceStatus status = g_voiceTrigger ? g_voiceTrigger->GetStatus()
+                                               : g_voiceFallbackStatus;
+    auto result = Napi::Object::New(info.Env());
+    result.Set("available", status.available);
+    result.Set("language", status.language);
+    result.Set("error", status.error);
+    return result;
+}
+
+Napi::Value OnVoiceCommand(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsFunction()) {
+        Napi::TypeError::New(info.Env(), "voice command callback must be a function")
+            .ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+
+    auto replacement = std::make_shared<VoiceCallbackBridge>(
+        info.Env(), info[0].As<Napi::Function>());
+    if (g_voiceTrigger) {
+        g_voiceTrigger->SetCallback(
+            [replacement](const std::string& phrase, double rawConfidence) {
+                replacement->Dispatch(phrase, rawConfidence);
+            });
+    }
+    auto previous = std::move(g_voiceCallback);
+    g_voiceCallback = std::move(replacement);
+    if (previous) previous->Close();
+    return info.Env().Undefined();
+}
 } // namespace
 
 
@@ -526,12 +671,26 @@ Napi::Value SaveScreenshotBinding(const Napi::CallbackInfo& info) {
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     napi_add_env_cleanup_hook(env, Cleanup, nullptr);
+    try {
+        g_voiceTrigger = std::make_unique<VoiceTrigger>();
+        g_voiceFallbackStatus = g_voiceTrigger->GetStatus();
+    } catch (const std::exception& error) {
+        g_voiceFallbackStatus = {false, "",
+            std::string("Voice recognition is unavailable: ") + error.what()};
+    } catch (...) {
+        g_voiceFallbackStatus = {false, "", "Voice recognition is unavailable."};
+    }
     exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
     exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("exportClip", Napi::Function::New(env, ExportClipBinding)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
     exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks));
     exports.Set("decodeClipAudio", Napi::Function::New(env, DecodeClipAudioBinding));
     exports.Set("getClipKeyframes", Napi::Function::New(env, GetClipKeyframesBinding));
     exports.Set("saveScreenshot", Napi::Function::New(env, SaveScreenshotBinding));
+    exports.Set("setVoiceEnabled", Napi::Function::New(env, SetVoiceEnabled));
+    exports.Set("setVoicePhrases", Napi::Function::New(env, SetVoicePhrases));
+    exports.Set("setVoiceThreshold", Napi::Function::New(env, SetVoiceThreshold));
+    exports.Set("getVoiceStatus", Napi::Function::New(env, GetVoiceStatus));
+    exports.Set("onVoiceCommand", Napi::Function::New(env, OnVoiceCommand));
     return exports;
 }
 NODE_API_MODULE(flash_capture, Init)

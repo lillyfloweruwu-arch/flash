@@ -33,6 +33,7 @@ set(CAPTURE_SOURCES
   src/capture/png_writer.cpp
   src/capture/wgc_source.cpp
   src/capture/audio_capture.cpp
+  src/capture/voice_trigger.cpp
   src/encoding/encoder_factory.cpp
   src/encoding/mf_hardware_encoder.cpp
   src/encoding/software_encoder.cpp
@@ -129,6 +130,7 @@ flash_add_test(flash_screenshot_test
   src/capture/png_writer.cpp
   src/capture/wgc_source.cpp
 )
+flash_add_test(flash_voice_trigger_test test/voice_trigger_test.cpp)
 if(WIN32)
   target_link_libraries(flash_screenshot_test windowsapp)
   if(FLASH_CPPWINRT)

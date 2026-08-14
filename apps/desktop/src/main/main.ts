@@ -25,6 +25,10 @@ const DEFAULTS = {
   hotkeyShort: 'Shift+F8',
   screenshotHotkey: 'F9',
   shortClipSeconds: 15,
+  voiceEnabled: false,
+  voicePhrase: '',
+  voiceRawFloor: 0.5,
+  voiceCooldownMs: 3000,
   displayId: 0,
   overlay: true,
   overlayPosition: 'top-left' as 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
@@ -155,6 +159,17 @@ type CaptureAddon = {
   setQuality?(options: { height: number; fps: number; bitrateKbps: number }): void
   listDisplays?(): Display[]
   setDisplay?(id: number): void
+  setVoiceEnabled?(enabled: boolean): void
+  setVoicePhrases?(phrases: string[]): boolean
+  setVoiceThreshold?(rawFloor: number, cooldownMs: number): void
+  getVoiceStatus?(): VoiceStatus
+  onVoiceCommand?(callback: (phrase: string, rawConfidence: number) => void): void
+}
+
+interface VoiceStatus {
+  available: boolean
+  language: string
+  error: string
 }
 
 export interface Display {
@@ -167,6 +182,66 @@ export interface Display {
 }
 
 let captureAddon: CaptureAddon | null = null
+
+const BUILT_IN_VOICE_PHRASES = [
+  'flash clip that',
+  'flash clip short',
+  'flash screenshot',
+]
+
+function configuredVoicePhrases(): string[] {
+  const phrases = [...BUILT_IN_VOICE_PHRASES]
+  const custom = settings.voicePhrase.trim()
+  if (custom && !phrases.some(phrase => phrase.toLocaleLowerCase() === custom.toLocaleLowerCase())) {
+    phrases.push(custom)
+  }
+  return phrases
+}
+
+function applyVoicePhrases() {
+  if (!captureAddon?.setVoicePhrases) return
+  try {
+    if (!captureAddon.setVoicePhrases(configuredVoicePhrases())) {
+      console.warn('Voice phrase list was rejected by the capture engine')
+    }
+  } catch (error) { console.warn('Could not apply voice phrases', error) }
+}
+
+function applyVoiceThreshold() {
+  if (!captureAddon?.setVoiceThreshold) return
+  try { captureAddon.setVoiceThreshold(settings.voiceRawFloor, settings.voiceCooldownMs) }
+  catch (error) { console.warn('Could not apply voice threshold', error) }
+}
+
+function applyVoiceEnabled() {
+  if (!captureAddon?.setVoiceEnabled) return
+  try { captureAddon.setVoiceEnabled(settings.voiceEnabled) }
+  catch (error) { console.warn('Could not update voice activation', error) }
+}
+
+function initializeVoiceActivation() {
+  if (!captureAddon) return
+  if (captureAddon.onVoiceCommand) {
+    try { captureAddon.onVoiceCommand(handleVoiceCommand) }
+    catch (error) { console.warn('Could not register voice command handler', error) }
+  }
+  applyVoicePhrases()
+  applyVoiceThreshold()
+  applyVoiceEnabled()
+}
+
+function readVoiceStatus(): VoiceStatus {
+  if (!captureAddon) {
+    return { available: false, language: '', error: 'Capture engine not available.' }
+  }
+  if (!captureAddon.getVoiceStatus) {
+    return { available: false, language: '', error: 'Voice activation requires a newer capture engine build.' }
+  }
+  try { return captureAddon.getVoiceStatus() }
+  catch (error: any) {
+    return { available: false, language: '', error: error?.message || 'Could not read voice activation status.' }
+  }
+}
 
 // Packaged, everything ships flat in resources/; in dev it lives in the repo.
 // Every non-code asset must go through here or it breaks once packaged.
@@ -500,6 +575,21 @@ async function runSaveScreenshot(): Promise<void> {
     const message = error?.message || 'Failed to save screenshot'
     console.error('Failed to save screenshot', error)
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
+  }
+}
+
+function handleVoiceCommand(phrase: string, _rawConfidence: number) {
+  const recognised = phrase.trim().toLocaleLowerCase()
+  const custom = settings.voicePhrase.trim().toLocaleLowerCase()
+
+  if (recognised === 'flash clip that' || (custom && recognised === custom)) {
+    mainWindow?.webContents.send('hotkey-clip')
+    void saveClipNow()
+  } else if (recognised === 'flash clip short') {
+    mainWindow?.webContents.send('hotkey-clip')
+    void saveClipNow(settings.shortClipSeconds)
+  } else if (recognised === 'flash screenshot') {
+    void saveScreenshotNow()
   }
 }
 
@@ -938,6 +1028,8 @@ function setupIPC() {
     applyCaptureSettings()
   })
 
+  ipcMain.handle('voice-status', () => readVoiceStatus())
+
   // ── Clips ──
   ipcMain.handle('get-clips', () => scanClips())
   ipcMain.handle('get-storage', () => getStorageUsage())
@@ -1130,6 +1222,9 @@ function setupIPC() {
     if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
     if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined || partial.screenshotHotkey !== undefined) registerHotkeys()
+    if (partial.voicePhrase !== undefined) applyVoicePhrases()
+    if (partial.voiceRawFloor !== undefined || partial.voiceCooldownMs !== undefined) applyVoiceThreshold()
+    if (partial.voiceEnabled !== undefined) applyVoiceEnabled()
     if (partial.displayId !== undefined) {
       try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
     }
@@ -1416,6 +1511,9 @@ app.on('ready', () => {
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
     applyCaptureSettings(null)
+    // Voice owns the Windows default input stream and is deliberately not tied
+    // to replay-buffer state. Once enabled it listens for the lifetime of Flash.
+    initializeVoiceActivation()
     try {
       isRecording = captureAddon.startReplayBuffer()
       if (isRecording) console.log('Replay buffer started automatically')
@@ -1447,6 +1545,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopGameDetection()
   if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
+  try { captureAddon?.setVoiceEnabled?.(false) } catch { /* ignore */ }
   try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
 })
 app.on('activate', () => { if (!mainWindow) createWindow() })

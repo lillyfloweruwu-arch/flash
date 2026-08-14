@@ -4,6 +4,7 @@ import { toAccelerator } from '../shared/accelerator'
 import { clipUrl, matchesQuery } from '../shared/editor'
 import { resolveGameSettings } from '../shared/perGame'
 import { clearSelection, selectRange, toggleSelection } from '../shared/selection'
+import { countSyllables } from '../shared/syllables'
 import { ClipActionBar } from './ClipActionBar'
 import { PlayerControls } from './PlayerControls'
 import { Dropdown } from './Dropdown'
@@ -42,6 +43,10 @@ interface Settings {
   hotkeyShort: string
   screenshotHotkey: string
   shortClipSeconds: number
+  voiceEnabled: boolean
+  voicePhrase: string
+  voiceRawFloor: number
+  voiceCooldownMs: number
   displayId: number
   overlay: boolean
   overlayPosition: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
@@ -1020,6 +1025,12 @@ interface CaptureHealth {
   error?: string
 }
 
+interface VoiceStatus {
+  available: boolean
+  language: string
+  error: string
+}
+
 // Defined at module scope on purpose. Declared inside SettingsPanel these were
 // a new component type on every render, so React tore the whole settings tree
 // down and built it again - and the status poll re-renders every two seconds.
@@ -1043,12 +1054,13 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, voiceStatus, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
   captureBackend: string
+  voiceStatus: VoiceStatus
   hotkeyRegistered: boolean
   displays: Display[]
   health: CaptureHealth | null
@@ -1060,6 +1072,8 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
   // The ceiling for a useful frame rate is the refresh rate of the display
   // actually being captured, not the fastest one attached.
   const activeRefreshHz = displays.find(d => d.id === settings.displayId)?.refreshHz ?? 0
+  const customPhraseSyllables = countSyllables(settings.voicePhrase)
+  const customPhraseTooShort = settings.voicePhrase.trim().length > 0 && customPhraseSyllables < 3
 
   const updateGameOverride = (
     game: string,
@@ -1201,6 +1215,48 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, h
                   : health.error || 'capture stopped'}
               </span>
             </Row>
+          )}
+        </Card>
+
+        <Card title="Voice activation">
+          {!voiceStatus.available ? (
+            <p style={{ fontSize: 12, color: 'var(--alert)', paddingTop: 12, lineHeight: 1.5 }}>
+              {voiceStatus.error || 'Voice activation is unavailable.'}
+            </p>
+          ) : (
+            <>
+              <Row label="Listen to the microphone while Flash is open">
+                <Toggle on={settings.voiceEnabled}
+                  onChange={() => onChange({ voiceEnabled: !settings.voiceEnabled })} />
+              </Row>
+              <Row label="Listening device">
+                <span style={{ fontSize: 12, color: 'var(--muted-2)' }}>Windows default input device</span>
+              </Row>
+              <Row label="Speech language">
+                <span style={{ fontSize: 12, color: 'var(--muted-2)' }}>{voiceStatus.language}</span>
+              </Row>
+              <Row label="Custom full-clip phrase">
+                <div style={{ width: 220 }}>
+                  <input
+                    type="text"
+                    aria-label="Custom full-clip voice phrase"
+                    placeholder="Optional phrase"
+                    value={settings.voicePhrase}
+                    onChange={event => onChange({ voicePhrase: event.target.value })}
+                    className="rounded-lg"
+                    style={{ width: '100%', fontSize: 12, color: 'var(--fg)', background: 'var(--field)', border: '1px solid var(--edge)', padding: '7px 10px', outline: 'none' }}
+                  />
+                  {customPhraseTooShort && (
+                    <p style={{ fontSize: 11, color: 'var(--spark)', paddingTop: 5, lineHeight: 1.4 }}>
+                      Use at least three syllables. Short phrases can collide with ordinary speech.
+                    </p>
+                  )}
+                </div>
+              </Row>
+              <p style={{ fontSize: 11, color: 'var(--muted-3)', paddingTop: 12, lineHeight: 1.5 }}>
+                Built in: “flash clip that”, “flash clip short”, and “flash screenshot”.
+              </p>
+            </>
           )}
         </Card>
 
@@ -1348,6 +1404,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>({
     clipsFolder: '', theme: DEFAULT_THEME, hotkey: 'F8', hotkeyShort: 'Shift+F8', screenshotHotkey: 'F9',
     shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
+    voiceEnabled: false, voicePhrase: '', voiceRawFloor: 0.5, voiceCooldownMs: 3000,
     quality: '1080p 60fps', bufferLength: 30,
     audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
     perGame: {},
@@ -1360,6 +1417,11 @@ export default function App() {
   const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
   const [health, setHealth] = useState<CaptureHealth | null>(null)
   const [learnedGames, setLearnedGames] = useState<Record<string, string>>({})
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>({
+    available: false,
+    language: '',
+    error: 'Checking voice activation…',
+  })
 
   // Poll only while Settings is open — a background timer for a panel nobody is
   // looking at is exactly the kind of idle cost this app exists to avoid.
@@ -1367,8 +1429,13 @@ export default function App() {
     if (active !== 'Settings' || !window.flash) return
     let cancelled = false
     const read = async () => {
-      const s: any = await window.flash!.capture.getStatus()
+      const [captureStatus, voice] = await Promise.all([
+        window.flash!.capture.getStatus(),
+        window.flash!.getVoiceStatus(),
+      ])
       if (cancelled) return
+      const s: any = captureStatus
+      setVoiceStatus(voice)
       setHealth({
         healthy: s.captureHealthy !== false && s.recording !== false,
         fps: s.lastIntervalMs > 0 ? 1000 / s.lastIntervalMs : 0,
@@ -1466,6 +1533,10 @@ export default function App() {
       const status = await window.flash.getHotkeyStatus()
       setHotkeyRegistered(status.registered)
     }
+    if (partial.voiceEnabled !== undefined || partial.voicePhrase !== undefined
+      || partial.voiceRawFloor !== undefined || partial.voiceCooldownMs !== undefined) {
+      setVoiceStatus(await window.flash.getVoiceStatus())
+    }
   }, [refreshClips])
 
   // Confirmation lives here so ClipCard and ClipPlayer both get the same dialog
@@ -1523,6 +1594,7 @@ export default function App() {
     window.flash.onNavigate(setActive)
     window.flash.getRecordingState().then(setIsRecording)
     window.flash.getSettings().then(setSettings)
+    window.flash.getVoiceStatus().then(setVoiceStatus)
     window.flash.getHotkeyStatus().then(s => setHotkeyRegistered(s.registered))
     window.flash.capture.listDisplays().then(setDisplays)
     window.flash.capture.onSaveState(setSaveState)
@@ -1566,6 +1638,7 @@ export default function App() {
             <SettingsPanel
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
               captureBackend={captureBackend}
+              voiceStatus={voiceStatus}
               hotkeyRegistered={hotkeyRegistered} displays={displays} health={health}
               learnedGames={learnedGames}
               onForgetGame={async exe => setLearnedGames(await window.flash!.forgetGame(exe))}
