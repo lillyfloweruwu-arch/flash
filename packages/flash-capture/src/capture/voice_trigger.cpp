@@ -353,6 +353,19 @@ private:
             SpeechContinuousRecognitionResultGeneratedEventArgs& args) noexcept {
         try {
             const auto result = args.Result();
+
+            // Rejected is the recogniser saying it heard speech that is not in
+            // the grammar, and it is the single most valuable signal here: in
+            // calibration, a sentence that matched no phrase came back
+            // Rejected rather than being forced onto a nearest command. Those
+            // results carry a raw confidence of zero today, so the floor alone
+            // would catch them - but that is a coincidence of the API, not a
+            // promise, and an empty phrase must never reach the callback and
+            // be looked up as a command.
+            if (result.Confidence() == winrt::Windows::Media::SpeechRecognition::
+                    SpeechRecognitionConfidence::Rejected) return;
+            if (result.Text().empty()) return;
+
             const double rawConfidence = result.RawConfidence();
             {
                 std::lock_guard lock(gateMutex_);
