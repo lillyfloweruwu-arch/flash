@@ -944,6 +944,32 @@ function setupIPC() {
   ipcMain.handle('delete-clip', (_event, filePath: string) => deleteClip(filePath))
   ipcMain.handle('rename-clip', (_event, filePath: string, name: string) => renameClip(filePath, name))
   ipcMain.handle('move-clips', (_event, filePaths: string[], game: string) => moveClips(filePaths, game))
+  ipcMain.handle('save-clip-frame', (_event, filePath: string, playheadSeconds: number, bytes: Uint8Array) => {
+    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Frames can only be grabbed from clips' }
+    if (!Number.isFinite(playheadSeconds) || playheadSeconds < 0) return { error: 'Invalid playhead position' }
+    if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return { error: 'Screenshot was empty' }
+
+    const folder = dirname(filePath)
+    try {
+      const totalMilliseconds = Math.round(playheadSeconds * 1000)
+      const milliseconds = totalMilliseconds % 1000
+      const totalSeconds = Math.floor(totalMilliseconds / 1000)
+      const seconds = totalSeconds % 60
+      const totalMinutes = Math.floor(totalSeconds / 60)
+      const minutes = totalMinutes % 60
+      const hours = Math.floor(totalMinutes / 60)
+      const pad = (value: number, length = 2) => String(value).padStart(length, '0')
+      const timestamp = `${pad(hours)}-${pad(minutes)}-${pad(seconds)}.${pad(milliseconds, 3)}`
+      const stem = `${basename(filePath, extname(filePath))} - ${timestamp}`
+      const output = join(folder, firstFreeName(stem, '.png', readdirSync(folder)))
+      writeFileSync(output, bytes)
+      mainWindow?.webContents.send('clip-saved-refresh')
+      return { path: output }
+    } catch (error: any) {
+      return { error: error?.message || 'Could not save screenshot' }
+    }
+  })
   ipcMain.handle('open-clip', (_event, filePath: string) => {
     shell.openPath(filePath)
   })

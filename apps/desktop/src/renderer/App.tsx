@@ -333,6 +333,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
   const [playerDuration, setPlayerDuration] = useState(0)
   const [playerVolume, setPlayerVolume] = useState(1)
   const [playerMuted, setPlayerMuted] = useState(false)
+  const [frameBusy, setFrameBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
@@ -372,6 +373,39 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
     if (video.paused) video.play().catch(() => { /* autoplay policy */ })
     else video.pause()
   }, [])
+
+  const grabFrame = useCallback(async () => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setTrimNote('Frame is not ready')
+      return
+    }
+
+    setFrameBusy(true)
+    setTrimNote(null)
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Could not create screenshot canvas')
+      const playheadSeconds = video.currentTime
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob | null>((resolve, reject) => {
+        try { canvas.toBlob(resolve, 'image/png') }
+        catch (error) { reject(error) }
+      })
+      if (!blob) throw new Error('Could not encode frame as PNG')
+      const result = await window.flash?.saveClipFrame(
+        clip.filePath, playheadSeconds, new Uint8Array(await blob.arrayBuffer()))
+      if (!result || result.error) throw new Error(result?.error ?? 'Could not save screenshot')
+      setTrimNote('Frame saved in the same folder')
+    } catch (error) {
+      setTrimNote(error instanceof Error ? error.message : 'Could not grab frame')
+    } finally {
+      setFrameBusy(false)
+    }
+  }, [clip.filePath])
 
   const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
   const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
@@ -460,6 +494,12 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
               className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
               style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>
               Editor
+            </button>
+
+            <button disabled={frameBusy} onClick={grabFrame}
+              className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
+              style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: frameBusy ? 0.5 : 1 }}>
+              {frameBusy ? 'Saving…' : 'Grab frame'}
             </button>
 
             {/* Capture stays archival-quality; this makes a small sibling that

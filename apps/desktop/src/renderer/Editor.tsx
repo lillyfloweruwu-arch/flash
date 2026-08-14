@@ -31,6 +31,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   const [keyframes, setKeyframes] = useState<number[]>([])
   const [saturation, setSaturation] = useState(100)
   const [saving, setSaving] = useState(false)
+  const [grabbing, setGrabbing] = useState(false)
   const [saveNote, setSaveNote] = useState<string | null>(null)
   // Decoding walks the whole file, so the lanes arrive seconds after the
   // screen. Showing nothing while that happens reads as broken rather than
@@ -107,6 +108,39 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
       ? `Saved from ${formatTimecode(result.actualStartSeconds!)} — ${drift.toFixed(1)}s earlier than asked`
       : 'Saved alongside the original')
   }, [audioTracks, liveGains, saturation, saveMode, clip.filePath, range])
+
+  const grabFrame = useCallback(async () => {
+    const video = videoRef.current
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setSaveNote('Frame is not ready')
+      return
+    }
+
+    setGrabbing(true)
+    setSaveNote(null)
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const context = canvas.getContext('2d')
+      if (!context) throw new Error('Could not create screenshot canvas')
+      const playheadSeconds = video.currentTime
+      context.drawImage(video, 0, 0, canvas.width, canvas.height)
+      const blob = await new Promise<Blob | null>((resolve, reject) => {
+        try { canvas.toBlob(resolve, 'image/png') }
+        catch (error) { reject(error) }
+      })
+      if (!blob) throw new Error('Could not encode frame as PNG')
+      const result = await window.flash?.saveClipFrame(
+        clip.filePath, playheadSeconds, new Uint8Array(await blob.arrayBuffer()))
+      if (!result || result.error) throw new Error(result?.error ?? 'Could not save screenshot')
+      setSaveNote('Frame saved alongside the original')
+    } catch (error) {
+      setSaveNote(error instanceof Error ? error.message : 'Could not grab frame')
+    } finally {
+      setGrabbing(false)
+    }
+  }, [clip.filePath])
 
   const togglePlay = useCallback(() => {
     const video = videoRef.current
@@ -292,7 +326,14 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
           {SAVE_NOTES[saveMode.reason]}
         </span>
         {saveNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{saveNote}</span>}
-        <span className="ml-auto">
+        <span className="ml-auto flex items-center gap-2">
+          {clip.kind !== 'shot' && (
+            <button disabled={grabbing} onClick={grabFrame}
+              className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5 shrink-0"
+              style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: grabbing ? 0.5 : 1 }}>
+              {grabbing ? 'Saving…' : 'Grab frame'}
+            </button>
+          )}
           <button
             disabled={saving || !(range.outSec > range.inSec)}
             onClick={save}
