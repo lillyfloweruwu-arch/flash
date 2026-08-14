@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -61,6 +62,25 @@ struct Hit {
 std::mutex hitsMutex;
 std::vector<Hit> hits;
 
+// Every line goes to the terminal and to a log beside the executable. A
+// measuring tool that only prints to a terminal loses its measurements the
+// moment the window scrolls or closes, which defeats the point of measuring.
+std::FILE* logFile = nullptr;
+
+void Say(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    std::vfprintf(stdout, format, args);
+    va_end(args);
+    std::fflush(stdout);
+    if (logFile) {
+        va_start(args, format);
+        std::vfprintf(logFile, format, args);
+        va_end(args);
+        std::fflush(logFile);
+    }
+}
+
 std::string Narrow(const hstring& value) {
     const int length = WideCharToMultiByte(CP_UTF8, 0, value.c_str(),
         static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
@@ -76,6 +96,22 @@ std::string Narrow(const hstring& value) {
 int main(int argc, char** argv) {
     const double seconds = argc > 1 ? std::atof(argv[1]) : 60.0;
 
+    // Beside the executable rather than the working directory, so the log is in
+    // a known place no matter where the tool was launched from. Appended, so a
+    // deliberate run and an ignore-it run accumulate into one file that can be
+    // read together - comparing the two is the entire point.
+    {
+        wchar_t exePath[MAX_PATH]{};
+        if (GetModuleFileNameW(nullptr, exePath, MAX_PATH)) {
+            std::wstring logPath(exePath);
+            const size_t slash = logPath.find_last_of(L"\\/");
+            if (slash != std::wstring::npos) logPath.resize(slash + 1);
+            logPath += L"voice-calibration.log";
+            logFile = _wfopen(logPath.c_str(), L"a");
+        }
+    }
+    Say("\n==== calibration run: %.0fs ====\n", seconds);
+
     std::vector<hstring> phrases{
         L"flash clip that", L"flash clip short", L"flash screenshot" };
     for (int i = 2; i < argc; ++i) {
@@ -90,15 +126,15 @@ int main(int argc, char** argv) {
 
     try {
         SpeechRecognizer recognizer;
-        std::printf("language: %ls\n", recognizer.CurrentLanguage().DisplayName().c_str());
-        std::printf("listening for %.0fs. Phrases:\n", seconds);
-        for (const auto& phrase : phrases) std::printf("  - %ls\n", phrase.c_str());
+        Say("language: %ls\n", recognizer.CurrentLanguage().DisplayName().c_str());
+        Say("listening for %.0fs. Phrases:\n", seconds);
+        for (const auto& phrase : phrases) Say("  - %ls\n", phrase.c_str());
 
         SpeechRecognitionListConstraint constraint(phrases, L"commands");
         recognizer.Constraints().Append(constraint);
         const auto compiled = recognizer.CompileConstraintsAsync().get();
         if (compiled.Status() != SpeechRecognitionResultStatus::Success) {
-            std::printf("FAIL constraints did not compile: status=%d\n",
+            Say("FAIL constraints did not compile: status=%d\n",
                 static_cast<int>(compiled.Status()));
             return 1;
         }
@@ -115,7 +151,7 @@ int main(int argc, char** argv) {
                 std::chrono::steady_clock::now() - started).count();
             Hit hit{ Narrow(result.Text()), result.RawConfidence(),
                      result.Confidence(), at };
-            std::printf("[%6.1fs] raw=%.3f %-8s \"%s\"\n",
+            Say("[%6.1fs] raw=%.3f %-8s \"%s\"\n",
                 hit.atSeconds, hit.raw, ConfidenceName(hit.confidence), hit.text.c_str());
             std::fflush(stdout);
             std::lock_guard lock(hitsMutex);
@@ -127,23 +163,37 @@ int main(int argc, char** argv) {
         try { session.StopAsync().get(); } catch (...) { /* already stopping */ }
 
         std::lock_guard lock(hitsMutex);
-        std::printf("\n%zu match(es) in %.0fs\n", hits.size(), seconds);
-        if (hits.empty()) {
-            std::printf("nothing matched - either nothing was said, or the phrase is not being heard\n");
+
+        // A Rejected result carries no text and a raw confidence of zero. The
+        // recogniser produces them from ordinary room noise, and counting them
+        // as matches pins the reported low at 0.000 and makes the range
+        // meaningless. They are still worth logging - they are the recogniser
+        // correctly declining - but they are not what a floor is set from.
+        std::vector<Hit> real;
+        for (const auto& hit : hits) {
+            if (hit.confidence != SpeechRecognitionConfidence::Rejected && !hit.text.empty())
+                real.push_back(hit);
+        }
+        const size_t rejected = hits.size() - real.size();
+
+        Say("\n%zu recognised, %zu rejected as noise, in %.0fs\n",
+            real.size(), rejected, seconds);
+        if (real.empty()) {
+            Say("nothing recognised - either nothing was said, or the phrase is not being heard\n");
             return 0;
         }
-        auto lowest = std::min_element(hits.begin(), hits.end(),
+        auto lowest = std::min_element(real.begin(), real.end(),
             [](const Hit& a, const Hit& b) { return a.raw < b.raw; });
-        auto highest = std::max_element(hits.begin(), hits.end(),
+        auto highest = std::max_element(real.begin(), real.end(),
             [](const Hit& a, const Hit& b) { return a.raw < b.raw; });
-        std::printf("raw confidence range: %.3f (lowest) .. %.3f (highest)\n",
+        Say("raw confidence range: %.3f (lowest) .. %.3f (highest)\n",
             lowest->raw, highest->raw);
-        std::printf("lowest was \"%s\"\n", lowest->text.c_str());
+        Say("lowest was \"%s\"\n", lowest->text.c_str());
         return 0;
     } catch (const hresult_error& error) {
-        std::printf("FAIL 0x%08X %ls\n",
+        Say("FAIL 0x%08X %ls\n",
             static_cast<unsigned>(error.code()), error.message().c_str());
-        std::printf("if this is an access-denied code, check Settings > Privacy > Microphone\n"
+        Say("if this is an access-denied code, check Settings > Privacy > Microphone\n"
                     "and that desktop apps are allowed to use the microphone.\n");
         return 1;
     }
