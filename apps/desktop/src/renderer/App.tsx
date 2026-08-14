@@ -18,12 +18,12 @@ interface Clip {
   id: string
   title: string
   game: string
+  kind: 'clip' | 'shot'
   duration: string
   durationSec: number
   filePath: string
   size: number
   createdAt: number
-  kind?: 'clip' | 'shot'
 }
 
 interface Display {
@@ -336,6 +336,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
   const [exportBusy, setExportBusy] = useState(false)
   const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
   const clip = clips[index]
+  const isShot = clip?.kind === 'shot'
 
   const renameCurrent = useCallback(async (name: string) => {
     if (!clip) return 'Clip not found'
@@ -410,38 +411,49 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
               A video with no loaded metadata falls back to 300x150, which is
               why a clip that fails to load also looks tiny. */}
           <div className="flex-1 w-full flex items-center justify-center min-h-0">
-            <video
-              ref={videoRef}
-              key={clip.filePath}
-              src={clipUrl(clip.filePath)}
-              autoPlay
-              muted
-              className="rounded-xl"
-              style={{ maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
-              onLoadedMetadata={event => setPlayerDuration(event.currentTarget.duration || clip.durationSec || 0)}
-              onTimeUpdate={event => setPlayerTime(event.currentTarget.currentTime)}
-              onPlay={() => setPlayerPlaying(true)}
-              onPause={() => setPlayerPlaying(false)}
-              onClick={togglePlayerPlay}
-            />
+            {isShot ? (
+              <img
+                key={clip.filePath}
+                src={clipUrl(clip.filePath)}
+                alt={clip.title}
+                className="rounded-xl"
+                style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', background: '#000' }}
+              />
+            ) : (
+              <video
+                ref={videoRef}
+                key={clip.filePath}
+                src={clipUrl(clip.filePath)}
+                autoPlay
+                muted
+                className="rounded-xl"
+                style={{ maxWidth: '100%', maxHeight: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
+                onLoadedMetadata={event => setPlayerDuration(event.currentTarget.duration || clip.durationSec || 0)}
+                onTimeUpdate={event => setPlayerTime(event.currentTarget.currentTime)}
+                onPlay={() => setPlayerPlaying(true)}
+                onPause={() => setPlayerPlaying(false)}
+                onClick={togglePlayerPlay}
+              />
+            )}
           </div>
 
-          <PlayerControls
-            playing={playerPlaying}
-            currentSec={playerTime}
-            durationSec={playerDuration}
-            volume={playerVolume}
-            muted={playerMuted}
-            onTogglePlay={togglePlayerPlay}
-            onSeek={seconds => {
-              const video = videoRef.current
-              if (video) video.currentTime = seconds
-              setPlayerTime(seconds)
-            }}
-            onVolume={next => { setPlayerVolume(next); setPlayerMuted(next === 0) }}
-            onToggleMute={() => setPlayerMuted(m => !m)}
-          />
-          <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
+          {!isShot && <>
+            <PlayerControls
+              playing={playerPlaying}
+              currentSec={playerTime}
+              durationSec={playerDuration}
+              volume={playerVolume}
+              muted={playerMuted}
+              onTogglePlay={togglePlayerPlay}
+              onSeek={seconds => {
+                const video = videoRef.current
+                if (video) video.currentTime = seconds
+                setPlayerTime(seconds)
+              }}
+              onVolume={next => { setPlayerVolume(next); setPlayerMuted(next === 0) }}
+              onToggleMute={() => setPlayerMuted(m => !m)}
+            />
+            <div className="w-full flex items-center gap-3" style={{ maxWidth: 900 }}>
             {/* Trimming moved to its own screen. Two number boxes were never a
                 way to pick a moment. */}
             <button onClick={() => onEdit(clip)}
@@ -473,7 +485,8 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
               options={EXPORT_LIMITS}
             />
             {trimNote && <span style={{ fontSize: 11, color: 'var(--muted-2)' }}>{trimNote}</span>}
-          </div>
+            </div>
+          </>}
 
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
@@ -688,7 +701,15 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
             without `suspend` their decoders stay alive underneath and the
             screen on top runs out. Chromium caps concurrent video decode, and
             past the cap elements simply paint black with no error. */}
-        {visible && !suspend && (
+        {clip.kind === 'shot' ? (
+          <img
+            src={clipUrl(clip.filePath)}
+            alt=""
+            draggable={false}
+            className="w-full h-full object-cover"
+            style={{ pointerEvents: 'none' }}
+          />
+        ) : visible && !suspend && (
           <video
             ref={videoRef}
             src={`${clipUrl(clip.filePath)}#t=0.5`}
@@ -699,7 +720,15 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
           />
         )}
         <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.7)' }}>
-          <span style={{ fontSize: 10, color: 'var(--muted)' }}>{clip.duration}</span>
+          {clip.kind === 'shot' ? (
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-label="Image">
+              <rect x="1" y="1" width="10" height="10" rx="1.5" stroke="var(--muted)"/>
+              <circle cx="8" cy="4" r="1" fill="var(--muted)"/>
+              <path d="M2.5 9l2.25-2.5L6.5 8l1.25-1.25L10 9" stroke="var(--muted)" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          ) : (
+            <span style={{ fontSize: 10, color: 'var(--muted)' }}>{clip.duration}</span>
+          )}
         </div>
         <input
           type="checkbox"

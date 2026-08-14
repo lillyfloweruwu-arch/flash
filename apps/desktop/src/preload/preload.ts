@@ -4,12 +4,12 @@ export interface ClipInfo {
   id: string
   title: string
   game: string
+  kind: 'clip' | 'shot'
   duration: string
   durationSec: number
   filePath: string
   size: number
   createdAt: number
-  kind?: 'clip' | 'shot'
 }
 
 export interface Settings {

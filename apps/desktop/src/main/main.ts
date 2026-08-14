@@ -198,6 +198,7 @@ interface ClipInfo {
   id: string
   title: string
   game: string
+  kind: 'clip' | 'shot'
   duration: string
   durationSec: number
   filePath: string
@@ -216,7 +217,7 @@ function scanClips(): ClipInfo[] {
   const folder = settings.clipsFolder
   if (!existsSync(folder)) return clips
 
-  // Scan for MP4 files in clips folder and game subfolders
+  // Scan for MP4 and PNG files in clips folder and game subfolders
   const scanDir = (dir: string, game: string) => {
     try {
       for (const file of readdirSync(dir)) {
@@ -224,11 +225,12 @@ function scanClips(): ClipInfo[] {
         const stat = statSync(filePath)
         if (stat.isDirectory()) {
           scanDir(filePath, file) // subfolder name = game name
-        } else if (file.endsWith('.mp4')) {
-          const name = basename(file, '.mp4')
+        } else if (file.endsWith('.mp4') || file.endsWith('.png')) {
+          const kind = file.endsWith('.png') ? 'shot' : 'clip'
+          const name = basename(file, extname(file))
           // Real duration comes from the sidecar written at save time; fall back to a
           // size estimate (~2MB/s at 1080p60) for clips saved before sidecars existed.
-          const estimatedSec = readSidecar(filePath)?.duration
+          const estimatedSec = kind === 'shot' ? 0 : readSidecar(filePath)?.duration
             ?? Math.max(1, Math.round(stat.size / (2 * 1024 * 1024)))
           const minutes = Math.floor(estimatedSec / 60)
           const seconds = estimatedSec % 60
@@ -236,7 +238,8 @@ function scanClips(): ClipInfo[] {
             id: filePath,
             title: name.replace(/_/g, ' ').replace(/-/g, ' '),
             game: game || 'Unknown',
-            duration: `${minutes}:${String(seconds).padStart(2, '0')}`,
+            kind,
+            duration: kind === 'shot' ? '—' : `${minutes}:${String(seconds).padStart(2, '0')}`,
             durationSec: estimatedSec,
             filePath,
             size: stat.size,
@@ -1347,7 +1350,7 @@ function registerClipProtocol() {
       return new Response(asWeb(0, size - 1), {
         status: 200,
         headers: {
-          'Content-Type': 'video/mp4',
+          'Content-Type': contentType,
           'Content-Length': String(size),
           'Accept-Ranges': 'bytes',
         },
@@ -1365,7 +1368,7 @@ function registerClipProtocol() {
     return new Response(asWeb(start, end), {
       status: 206,
       headers: {
-        'Content-Type': 'video/mp4',
+        'Content-Type': contentType,
         'Content-Range': `bytes ${start}-${end}/${size}`,
         'Content-Length': String(end - start + 1),
         'Accept-Ranges': 'bytes',
