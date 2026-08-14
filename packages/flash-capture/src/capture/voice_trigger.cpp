@@ -295,8 +295,11 @@ private:
     void StartSessionOnWorker() {
         if (!enabled_ || !grammarCompiled_ || !session_ || sessionRunning_) return;
         try {
-            session_.StartAsync().get();
             sessionRunning_ = true;
+            session_.StartAsync().get();
+            // A failure completion can race StartAsync's completion. Do not
+            // overwrite the event handler's stopped state or its error.
+            if (!sessionRunning_) return;
             {
                 std::lock_guard lock(queueMutex_);
                 sessionStartedAt_ = std::chrono::steady_clock::now();

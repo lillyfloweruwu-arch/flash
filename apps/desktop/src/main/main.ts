@@ -27,7 +27,18 @@ const DEFAULTS = {
   shortClipSeconds: 15,
   voiceEnabled: false,
   voicePhrase: '',
-  voiceRawFloor: 0.5,
+  // Measured, not guessed. Across fifteen deliberate utterances the three
+  // phrases scored: "flash clip short" 0.784-0.960, "flash screenshot"
+  // 0.591-0.828, and "flash clip that" only 0.317-0.730 - never once High.
+  // The 0.5 this started at would have silently dropped two of five "flash
+  // clip that" commands, which reads as a broken feature rather than a tuned
+  // one. 0.30 sits just under the worst real command observed.
+  //
+  // This is deliberately the permissive side of the trade: a missed clip is
+  // the moment gone, while a false positive is one delete. It is set from
+  // real-command data only - the false-positive half of the calibration has
+  // not been run, so how much room is left above ordinary speech is unknown.
+  voiceRawFloor: 0.30,
   voiceCooldownMs: 3000,
   displayId: 0,
   overlay: true,

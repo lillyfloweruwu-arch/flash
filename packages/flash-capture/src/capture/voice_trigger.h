@@ -35,7 +35,11 @@ public:
     }
 
 private:
-    double rawFloor_ = 0.5;
+    // Calibration placeholders, not measured accuracy values.
+    // Only a fallback: the app sets this from its own setting at startup. Kept
+    // in step with that setting's default, which was measured rather than
+    // picked - see the note beside voiceRawFloor in main.ts.
+    double rawFloor_ = 0.30;
     std::chrono::milliseconds cooldown_{3000};
     bool hasTriggered_ = false;
     Clock::time_point lastTrigger_{};
