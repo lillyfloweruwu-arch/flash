@@ -23,7 +23,10 @@ Working branch: clip-editor-native-foundation.
       content filling the rest. After: a clean 1280x720 frame, sizes varying between shots.
       Direct3D11CaptureFramePool::Recreate froze delivery for six seconds and was rejected;
       the source is torn down and restarted instead.
-- [ ] A4 Default audio device change is not followed
+- [ ] A4 Default audio device change — NOT ATTEMPTED. Switching or disabling the default
+      endpoint needs either a second device or a device-disable, and getting that wrong
+      while the user is asleep leaves the machine with no audio. Left for a session where
+      someone can unplug a headset by hand.
 - [x] A5 Track alignment — checked and correct, and it turned up a hang instead.
       Recording with the microphone on for 10s then off for 10s made saveClip hang
       forever. Once fixed, the decoded mic track carries its energy in the first five
@@ -35,8 +38,11 @@ Working branch: clip-editor-native-foundation.
       the sample the plan meant. All 7 keyframes x 5 offsets now land exactly, and asking
       1ms BEFORE a keyframe now snaps forward to it (+0.001s) instead of falling back a
       whole GOP (-1.021s). Mid-GOP trims stay frame-exact; remuxes stay ~90ms.
-- [ ] A7 Prove the watchdog recovers from FrameSource::Failure() and from a dead encoder
-- [ ] A8 Move the measurement harnesses into the repo; run tests from a hook
+- [ ] A7 Watchdog recovery — NOT PROVEN. Both paths need a fault that cannot be staged
+      from software: a monitor physically disconnected, and an encoder that dies. The
+      display mode change exercises the restart path but not the failure path.
+- [x] A8 Harnesses moved to scripts/probes/ with a README saying what each one caught.
+      Not wired into `pnpm test`: they need a live desktop and record the screen.
 
 ## B — Feel better (UI)
 
