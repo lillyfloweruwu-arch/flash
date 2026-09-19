@@ -232,6 +232,9 @@ type CaptureAddon = {
   setQuality?(options: { height: number; fps: number; bitrateKbps: number }): void
   listDisplays?(): Display[]
   setDisplay?(id: number): void
+  // All three recorded tracks at once. The engine keeps them separate so the
+  // editor can mix them; this is the blanket on/off.
+  setAudioTracks?(tracks: { game: boolean; mic: boolean; other: boolean }): void
   setVoiceEnabled?(enabled: boolean): void
   setVoicePhrases?(phrases: string[]): boolean
   setVoiceThreshold?(rawFloor: number, cooldownMs: number): void
@@ -269,6 +272,16 @@ function configuredVoicePhrases(): string[] {
     phrases.push(custom)
   }
   return phrases
+}
+
+// The Audio capture switch. It persisted a boolean and nothing read it, so
+// turning it off changed nothing at all and clips kept their audio — which is
+// the one setting where "looks applied but is not" costs you a recording you
+// thought was silent.
+function applyAudioCapture() {
+  const on = settings.audioCapture
+  try { captureAddon?.setAudioTracks?.({ game: on, mic: on, other: on }) }
+  catch (error) { console.warn('Could not apply audio capture setting', error) }
 }
 
 function applyVoicePhrases() {
@@ -1310,6 +1323,7 @@ function setupIPC() {
     if (changed.bufferLength !== undefined || changed.quality !== undefined || changed.perGame !== undefined) {
       applyCaptureSettings()
     }
+    if (changed.audioCapture !== undefined) applyAudioCapture()
     if (changed.autoDeleteDays !== undefined) pruneOldClips()
     if (changed.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (changed.overlay !== undefined || changed.overlayPosition !== undefined) updateOverlay()
@@ -1615,6 +1629,7 @@ app.on('ready', () => {
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
     applyCaptureSettings(null)
+    applyAudioCapture()
     // Voice owns the Windows default input stream and is deliberately not tied
     // to replay-buffer state. Once enabled it listens for the lifetime of Flash.
     initializeVoiceActivation()

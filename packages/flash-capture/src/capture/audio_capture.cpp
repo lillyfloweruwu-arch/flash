@@ -26,6 +26,10 @@ struct AudioCapture::Source {
     HANDLE event = nullptr;
 #endif
     std::thread thread;
+    // Per source, because a source can now be stopped on its own while the
+    // others keep recording. capturing_ alone only says whether ALL of them
+    // should stop.
+    std::atomic<bool> running{false};
     bool isFloat = true;
     uint16_t bits = 32;
     ~Source() {
@@ -186,7 +190,8 @@ bool AudioCapture::Start(AudioCallback callback) {
 #ifdef _WIN32
     std::lock_guard lock(mutex_);
     for (auto& source : sources_) if (source->info.available && source->info.enabled && SUCCEEDED(source->client->Start())) {
-        source->info.active = true; source->thread = std::thread(&AudioCapture::CaptureLoop, this, source);
+        source->info.active = true; source->running.store(true);
+        source->thread = std::thread(&AudioCapture::CaptureLoop, this, source);
     }
 #endif
     return true;
@@ -195,7 +200,7 @@ bool AudioCapture::Start(AudioCallback callback) {
 void AudioCapture::Stop() {
     capturing_.store(false);
 #ifdef _WIN32
-    for (auto& source : sources_) { if (source->client) source->client->Stop(); if (source->event) SetEvent(source->event); }
+    for (auto& source : sources_) { source->running.store(false); if (source->client) source->client->Stop(); if (source->event) SetEvent(source->event); }
     for (auto& source : sources_) { if (source->thread.joinable()) source->thread.join(); source->info.active = false; }
 #endif
 }
@@ -203,10 +208,10 @@ void AudioCapture::Stop() {
 void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
 #ifdef _WIN32
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    while (capturing_.load()) {
+    while (capturing_.load() && source->running.load()) {
         if (WaitForSingleObject(source->event, 100) != WAIT_OBJECT_0) continue;
         UINT32 packet = 0; source->capture->GetNextPacketSize(&packet);
-        while (packet && capturing_.load()) {
+        while (packet && capturing_.load() && source->running.load()) {
             BYTE* data = nullptr; UINT32 frames = 0; DWORD flags = 0; UINT64 position = 0;
             HRESULT hr = source->capture->GetBuffer(&data, &frames, &flags, &position, nullptr); if (FAILED(hr)) break;
             (void)position;  // see the timestamp note below
@@ -244,10 +249,41 @@ std::vector<AudioSourceInfo> AudioCapture::ListSources() const {
 }
 
 bool AudioCapture::SetSource(const std::string& id, bool enabled, float gain) {
-    std::lock_guard lock(mutex_);
-    for (auto& source : sources_) if (source->info.id == id) {
-        source->info.enabled = enabled; source->info.gain = (std::max)(0.0f, (std::min)(4.0f, gain)); return true;
+    std::shared_ptr<Source> target;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& source : sources_) if (source->info.id == id) { target = source; break; }
+        if (!target) return false;
+        target->info.gain = (std::max)(0.0f, (std::min)(4.0f, gain));
+        if (target->info.enabled == enabled) return true;
+        target->info.enabled = enabled;
     }
-    return false;
+#ifdef _WIN32
+    // Enabling and disabling start and stop the device, rather than only
+    // flipping a flag. Both halves matter:
+    //
+    // Leaving a disabled source running would hold the microphone open after
+    // the user turned it off, and Windows shows that to them as "in use".
+    // Leaving it merely flagged, which is what this did before, means it can
+    // never be turned back on — Start() is the only thing that ever created a
+    // source's thread, and it skips the ones that were disabled at the time.
+    if (!capturing_.load() || !target->info.available || !target->client) return true;
+    if (enabled) {
+        if (target->running.exchange(true)) return true;
+        if (FAILED(target->client->Start())) { target->running.store(false); return true; }
+        if (target->thread.joinable()) target->thread.join();
+        target->thread = std::thread(&AudioCapture::CaptureLoop, this, target);
+        std::lock_guard lock(mutex_); target->info.active = true;
+    } else {
+        if (!target->running.exchange(false)) return true;
+        // The loop waits up to 100ms on this event, so wake it rather than
+        // waiting out the timeout with the JS thread blocked in here.
+        if (target->event) SetEvent(target->event);
+        if (target->thread.joinable()) target->thread.join();
+        target->client->Stop();
+        std::lock_guard lock(mutex_); target->info.active = false;
+    }
+#endif
+    return true;
 }
 } // namespace flash
