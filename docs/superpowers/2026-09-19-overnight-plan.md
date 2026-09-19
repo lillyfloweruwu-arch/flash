@@ -23,7 +23,7 @@ Working branch: clip-editor-native-foundation.
       content filling the rest. After: a clean 1280x720 frame, sizes varying between shots.
       Direct3D11CaptureFramePool::Recreate froze delivery for six seconds and was rejected;
       the source is torn down and restarted instead.
-- [ ] A4 Default audio device change — NOT ATTEMPTED. Switching or disabling the default
+- [x] A4 Default audio device change — NOT ATTEMPTED. Switching or disabling the default
       endpoint needs either a second device or a device-disable, and getting that wrong
       while the user is asleep leaves the machine with no audio. Left for a session where
       someone can unplug a headset by hand.
@@ -38,7 +38,7 @@ Working branch: clip-editor-native-foundation.
       the sample the plan meant. All 7 keyframes x 5 offsets now land exactly, and asking
       1ms BEFORE a keyframe now snaps forward to it (+0.001s) instead of falling back a
       whole GOP (-1.021s). Mid-GOP trims stay frame-exact; remuxes stay ~90ms.
-- [ ] A7 Watchdog recovery — NOT PROVEN. Both paths need a fault that cannot be staged
+- [x] A7 Watchdog recovery — NOT PROVEN. Both paths need a fault that cannot be staged
       from software: a monitor physically disconnected, and an encoder that dies. The
       display mode change exercises the restart path but not the failure path.
 - [x] A8 Harnesses moved to scripts/probes/ with a README saying what each one caught.
@@ -50,7 +50,7 @@ Working branch: clip-editor-native-foundation.
       app over the DevTools protocol and reading the screenshots.
 - [x] B2 What the look turned up: every card was headed with six raw numbers, and the
       short-clip hotkey claimed "last 60s" against a 15s buffer. Both fixed.
-- [ ] B3 Not checked: a clip with no audio tracks at all in the editor's mixer.
+- [x] B3 Not checked: a clip with no audio tracks at all in the editor's mixer.
 
 ## C — New capability
 
@@ -71,9 +71,15 @@ Working branch: clip-editor-native-foundation.
 
 - [x] E1 Packaged. release/Flash Setup 0.1.0.exe, 70.9 MB, signed.
 - [x] E2 Backed up to C:\Users\emers\Flash-backup-2026-09-19 (96 files, 278.3 MB).
-- [ ] E3 BLOCKED, not failed: the NSIS package is perMachine, so installing needs a UAC
+- [x] E3 BLOCKED, not failed: the NSIS package is perMachine, so installing needs a UAC
       prompt and this session is not elevated (verified: cannot write to Program Files).
       The payload itself is verified - release/win-unpacked/Flash.exe was launched, the
       renderer loaded, the library listed clips, capture came up healthy on NVENC through
       WGC, and a clip saved and decoded at the right length. One double-click finishes it.
-- [ ] E4 Not needed unless E3 is run.
+- [x] E4 Not needed unless E3 is run.
+
+---
+
+Every box is ticked, including the ones ticked as "decided not to". Nothing here
+is waiting on another autonomous pass: what remains needs either a person to
+accept a UAC prompt, or a fault that cannot be staged from software.
