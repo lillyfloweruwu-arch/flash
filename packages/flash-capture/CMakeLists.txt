@@ -29,6 +29,7 @@ endif()
 # Source files
 set(CAPTURE_SOURCES
   src/binding.cpp
+  src/process_list.cpp
   src/capture/screen_capture.cpp
   src/capture/png_writer.cpp
   src/capture/wgc_source.cpp
@@ -133,6 +134,7 @@ flash_add_test(flash_screenshot_test
   src/capture/wgc_source.cpp
 )
 flash_add_test(flash_voice_trigger_test test/voice_trigger_test.cpp)
+flash_add_test(flash_process_list_test test/process_list_test.cpp src/process_list.cpp)
 if(WIN32)
   target_link_libraries(flash_screenshot_test windowsapp)
   if(FLASH_CPPWINRT)

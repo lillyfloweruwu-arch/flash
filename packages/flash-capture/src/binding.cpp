@@ -9,6 +9,7 @@
 #include "buffer/clip_trimmer.h"
 #include "buffer/audio_decode.h"
 #include "buffer/smart_render.h"
+#include "process_list.h"
 #include "quality.h"
 #include <algorithm>
 #include <atomic>
@@ -303,6 +304,31 @@ Napi::Value TrimClipAsync(const Napi::CallbackInfo& info) {
         static_cast<int64_t>(std::llround(start * 1000000.0)),
         static_cast<int64_t>(std::llround(end * 1000000.0)));
     auto promise = worker->Promise(); worker->Queue(); return promise;
+}
+
+// Everything game detection needs, in one call. It replaced a tasklist spawn
+// and two PowerShell scripts that ran every three seconds; see process_list.h.
+Napi::Value ListProcessesBinding(const Napi::CallbackInfo& info) {
+    auto env = info.Env();
+    const ProcessSnapshot snapshot = ListProcesses();
+    auto list = Napi::Array::New(env, snapshot.processes.size());
+    for (size_t i = 0; i < snapshot.processes.size(); ++i) {
+        const ProcessInfo& process = snapshot.processes[i];
+        auto entry = Napi::Object::New(env);
+        entry.Set("pid", Napi::Number::New(env, process.pid));
+        entry.Set("exe", Napi::String::New(env, process.exe));
+        entry.Set("path", Napi::String::New(env, process.path));
+        entry.Set("windowTitle", Napi::String::New(env, process.windowTitle));
+        entry.Set("workingSet", Napi::Number::New(env, static_cast<double>(process.workingSet)));
+        // A FILETIME does not fit a double exactly, but the error is under two
+        // microseconds and this is only ever used to order two launches.
+        entry.Set("startTicks", Napi::Number::New(env, static_cast<double>(process.startTicks)));
+        list.Set(i, entry);
+    }
+    auto result = Napi::Object::New(env);
+    result.Set("foregroundPid", Napi::Number::New(env, snapshot.foregroundPid));
+    result.Set("processes", list);
+    return result;
 }
 
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
@@ -699,6 +725,7 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("setVoiceThreshold", Napi::Function::New(env, SetVoiceThreshold));
     exports.Set("getVoiceStatus", Napi::Function::New(env, GetVoiceStatus));
     exports.Set("onVoiceCommand", Napi::Function::New(env, OnVoiceCommand));
+    exports.Set("listProcesses", Napi::Function::New(env, ListProcessesBinding));
     return exports;
 }
 NODE_API_MODULE(flash_capture, Init)
