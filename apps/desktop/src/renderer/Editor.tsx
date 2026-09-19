@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ClipActionBar } from './ClipActionBar'
+import { clipDisplayTitle } from '../shared/clipTitle'
 import { AudioLanes } from './editor/AudioLanes'
 import { Filmstrip, TRIM_SNAP_SEC } from './editor/Filmstrip'
 import { useLiveMix } from './editor/useLiveMix'
@@ -187,7 +188,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   return (
     <div className="fixed inset-0 z-50 flex flex-col" style={{ background: 'color-mix(in srgb, var(--bg) 97%, transparent)' }}>
       <ClipActionBar filePath={clip.filePath} onClose={onClose} backLabel="Back" middle={
-        <span style={{ fontSize: 13, color: 'var(--muted)' }}>{clip.title}</span>
+        <span style={{ fontSize: 13, color: 'var(--muted)' }}>{clipDisplayTitle(clip.title)}</span>
       } />
 
       <div className="flex-1 flex flex-col items-center gap-3 px-6 py-4 overflow-hidden min-h-0" aria-busy={audioTracks.length > 0 && !mixReady}>
