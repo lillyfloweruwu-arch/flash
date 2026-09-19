@@ -110,6 +110,16 @@ void StopCapture() {
 // guessable from the outside.
 std::atomic<int64_t> g_framesDelivered{0}, g_encodeUs{0}, g_intervalUs{0}, g_packetsPushed{0}, g_encodeFailures{0};
 
+// One failed frame is a hiccup worth counting and nothing more. An unbroken
+// run of them is a dead encoder, and that used to be invisible: capture stayed
+// "healthy", the ring buffer kept whatever it held from before the encoder
+// died, and the next hotkey press handed back that old footage as a fresh
+// clip. Two seconds at 60fps is far beyond any transient, so this cannot trip
+// on a working encoder.
+constexpr int kEncoderDeadAfterFrames = 120;
+std::atomic<int> g_encodeFailureStreak{0};
+std::atomic<bool> g_encoderDead{false};
+
 bool StartCaptureThreads() {
     ScreenCapture* screen; AudioCapture* audio;
     { std::lock_guard lock(g_stateMutex); screen = g_screenCapture.get(); audio = g_audioCapture.get(); }
@@ -125,7 +135,10 @@ bool StartCaptureThreads() {
         { std::lock_guard encodeLock(g_encodeMutex);
           if (!g_encoder || !g_ringBuffer) return;
           const auto encodeStart = std::chrono::steady_clock::now();
-          if (!g_encoder->EncodeFrame(frame, packets)) g_encodeFailures.fetch_add(1);
+          if (!g_encoder->EncodeFrame(frame, packets)) {
+              g_encodeFailures.fetch_add(1);
+              if (g_encodeFailureStreak.fetch_add(1) + 1 >= kEncoderDeadAfterFrames) g_encoderDead.store(true);
+          } else g_encodeFailureStreak.store(0);
           g_encodeUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
               std::chrono::steady_clock::now() - encodeStart).count());
           g_framesDelivered.fetch_add(1);
@@ -148,6 +161,8 @@ bool StartCaptureThreads() {
 
 bool BuildPipeline(bool initializeAudio) {
     g_pipelineError.clear();
+    g_encoderDead.store(false);
+    g_encodeFailureStreak.store(0);
     // Release the previous capture BEFORE building the replacement. DXGI permits
     // only one active output duplication per output per process, and the old
     // ScreenCapture holds one until it is destroyed — so DuplicateOutput on the
@@ -211,6 +226,12 @@ Napi::Value Initialize(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value StartReplayBuffer(const Napi::CallbackInfo& info) {
+    // A dead encoder cannot be restarted by starting its threads again, so the
+    // watchdog's stop/start only recovers if the pipeline is rebuilt first.
+    if (g_encoderDead.load()) {
+        StopCapture();
+        if (!BuildPipeline(false)) { Napi::Error::New(info.Env(), g_pipelineError).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    }
     { std::lock_guard lock(g_stateMutex); if (!g_screenCapture || !g_encoder || !g_ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (g_screenCapture->IsCapturing()) return Napi::Boolean::New(info.Env(), true); }
     if (!StartCaptureThreads()) { Napi::Error::New(info.Env(), "failed to start DXGI capture thread").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     return Napi::Boolean::New(info.Env(), true);
@@ -247,6 +268,10 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
         if (!std::isfinite(windowSeconds) || windowSeconds <= 0.0) { Napi::TypeError::New(info.Env(), "clip length must be a positive number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     }
     std::vector<EncodedPacket> video; std::vector<OwnedAudio> audio; std::string path, game; uint32_t width, height, fps;
+    // Refused rather than served: the buffer holds only what was encoded before
+    // the encoder stopped, and a clip of something that happened minutes ago is
+    // worse than no clip, because it looks like it worked.
+    if (g_encoderDead.load()) { Napi::Error::New(info.Env(), "the video encoder stopped accepting frames").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     { std::lock_guard lock(g_stateMutex); if (!g_ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
       if (g_awaitingFirstKeyframe && !g_previousVideo.empty()) {
           width = g_previousWidth; height = g_previousHeight; fps = g_previousFps; audio = g_previousAudio;
@@ -333,7 +358,10 @@ Napi::Value ListProcessesBinding(const Napi::CallbackInfo& info) {
 
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", g_screenCapture && g_screenCapture->IsCapturing());
-    result.Set("captureHealthy", g_screenCapture && g_screenCapture->IsHealthy()); result.Set("captureError", g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError);
+    const bool encoderDead = g_encoderDead.load();
+    result.Set("captureHealthy", !encoderDead && g_screenCapture && g_screenCapture->IsHealthy());
+    result.Set("captureError", encoderDead ? "the video encoder stopped accepting frames"
+        : (g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError));
     result.Set("captureBackend", g_screenCapture ? g_screenCapture->GetCaptureBackend() : "none");
     result.Set("bufferSeconds", g_ringBuffer ? g_ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", g_encoder ? g_encoder->GetName() : "none");
     result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); result.Set("fps", g_quality.fps); result.Set("bitrateKbps", g_quality.bitrateKbps); result.Set("displayId", g_displayId);
