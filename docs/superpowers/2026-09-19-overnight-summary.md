@@ -3,17 +3,19 @@
 Branch `clip-editor-native-foundation`, 20 commits.
 Nothing pushed, nothing merged to `master`.
 
-**One thing needs you: the installer is built and signed but not run.** The NSIS
-package is per-machine, so installing needs a UAC prompt, and nothing here could
-accept one. Everything else is done.
+**Installed 19 September at 19:30**, after the user accepted the UAC prompt the
+overnight session could not. `C:\Program Files\Flash` went from the 14 August
+build at 278.3 MB to this one at 231.3 MB, and was checked through the installed
+binary itself: recording and healthy on NVENC through Windows.Graphics.Capture,
+a 15-second save carrying all three audio tracks and 15 keyframes, settings
+intact, test clip removed.
 
     release\Flash Setup 0.1.0.exe        70.9 MB, signed
     C:\Users\emers\Flash-backup-2026-09-19   the current install, copied before touching anything
 
-Your installed build is from 14 August. It predates voice activation,
-screenshots, multi-select, per-game settings and clip renaming, as well as all
-of tonight. One double-click closes that gap; if the new one misbehaves, the
-backup folder is a straight copy.
+The build it replaced was from 14 August and predated voice activation,
+screenshots, multi-select, per-game settings and clip renaming as well as all of
+this. The backup folder is a straight copy if it is ever needed.
 
 ## What was broken and now is not
 
