@@ -56,12 +56,19 @@ Working branch: clip-editor-native-foundation.
 
 ## D — Lean
 
-- [ ] D1 The installer is 180MB against a <100MB promise. Audit what ships.
-- [ ] D2 Measure idle CPU and memory
+- [x] D1 Installed size 278.3 MB -> 231.0 MB. 40.3 MB of unused locale packs, 7.6 MB of
+      react-dom shipped twice. Chromium is 180 MB of what remains and under-100 MB is not
+      reachable while the shell is Electron.
+- [x] D2 Idle cost was measured earlier and fixed: game detection spent ~1.3s of child
+      process work every 3s and now takes 21ms.
 
 ## E — Ship
 
-- [ ] E1 pnpm package
-- [ ] E2 Back up C:\Program Files\Flash to a dated folder
-- [ ] E3 Install, launch, confirm capture starts and a clip saves
-- [ ] E4 Restore the backup if any of that fails
+- [x] E1 Packaged. release/Flash Setup 0.1.0.exe, 70.9 MB, signed.
+- [x] E2 Backed up to C:\Users\emers\Flash-backup-2026-09-19 (96 files, 278.3 MB).
+- [ ] E3 BLOCKED, not failed: the NSIS package is perMachine, so installing needs a UAC
+      prompt and this session is not elevated (verified: cannot write to Program Files).
+      The payload itself is verified - release/win-unpacked/Flash.exe was launched, the
+      renderer loaded, the library listed clips, capture came up healthy on NVENC through
+      WGC, and a clip saved and decoded at the right length. One double-click finishes it.
+- [ ] E4 Not needed unless E3 is run.
