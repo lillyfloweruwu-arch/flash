@@ -214,6 +214,22 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
 
         ReadNext(reader.Get(), streams[video]);
         if (!streams[video].sample) throw std::runtime_error("trim start is past the end of the input clip");
+        // IMFSourceReader::SetCurrentPosition is documented as approximate: it
+        // positions the source at or BEFORE the requested time, so asking for a
+        // keyframe can return the keyframe before it. That sample is a clean
+        // point too, so the check below waved it through, and the trim came back
+        // a whole GOP early - measured at 1.02s on about half the keyframes this
+        // app's own getClipKeyframes reports, the same ones every time, and
+        // unaffected by nudging the request forward by up to 8ms.
+        //
+        // Read forward to the sample the plan actually meant. The tolerance is
+        // the same half-frame the planner snapped with, so a request that landed
+        // just before its keyframe stops there rather than running on.
+        while (streams[video].sample &&
+               streams[video].time / 10 + snapToleranceUs < startUs) {
+            ReadNext(reader.Get(), streams[video]);
+        }
+        if (!streams[video].sample) throw std::runtime_error("trim start is past the end of the input clip");
         LONGLONG actualStart = streams[video].time;
         LONGLONG copyVideoStart = actualStart;
         if (renderedHead) {
