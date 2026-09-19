@@ -158,48 +158,49 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         std::string_view referenceId;
         for (const auto& s : audioStreams) if (s.present) { referenceId = s.id; break; }
 
-        // The reference timeline: one entry per packet, in order.
-        struct Slot { int64_t timeUs; uint32_t frameCount; };
-        std::vector<Slot> reference;
+        uint32_t cadence = 480;   // 10ms at 48kHz, WASAPI's usual packet
         for (const auto& p : audioPackets)
-            if (p.sourceId == referenceId) reference.push_back({p.timestamp_us, p.frameCount});
-        std::stable_sort(reference.begin(), reference.end(),
-            [](const Slot& a, const Slot& b) { return a.timeUs < b.timeUs; });
+            if (p.sourceId == referenceId && p.frameCount) { cadence = p.frameCount; break; }
 
-        // The reference track can stop too - switching Audio capture off stops
-        // every source at once - and then there is no timeline left to borrow,
-        // so every audio stream ends early together and the writer waits for all
-        // of them. Carry the cadence forward to the end of the video instead.
-        int64_t videoEndUs = 0;
-        for (const auto& p : videoPackets) videoEndUs = (std::max)(videoEndUs, p.timestamp_us);
-        if (!reference.empty() && fallbackRate) {
-            const uint32_t cadence = reference.back().frameCount ? reference.back().frameCount : 480;
+        // Every audio stream has to span the whole clip. IMFSinkWriter waits for
+        // the one that does not, video runs on to the end, Finalize is never
+        // reached, and saveClip hangs with no error - the hotkey simply stops
+        // working for the rest of the session.
+        //
+        // Audio can be missing at the head (switched on partway through), in the
+        // middle (one source stopped), or at the tail (switched off partway).
+        // The Audio capture switch in Settings produces all three, so rather
+        // than patching each, lay a grid of slots across the video's whole span
+        // and let the sweep below skip wherever a track really has samples.
+        struct Slot { int64_t timeUs; uint32_t frameCount; };
+        std::vector<Slot> grid;
+        if (fallbackRate) {
+            int64_t videoStartUs = videoPackets.front().timestamp_us;
+            int64_t videoEndUs = videoStartUs;
+            for (const auto& p : videoPackets) {
+                videoStartUs = (std::min)(videoStartUs, p.timestamp_us);
+                videoEndUs = (std::max)(videoEndUs, p.timestamp_us);
+            }
             const int64_t step = (std::max)(
                 static_cast<int64_t>(1), static_cast<int64_t>(cadence) * 1000000 / fallbackRate);
-            int64_t at = reference.back().timeUs + step;
-            // Bounded by the video's own length, so a corrupt timestamp cannot
-            // spin this.
-            for (int guard = 0; at <= videoEndUs && guard < 200000; ++guard, at += step) {
-                reference.push_back({at, cadence});
+            // Bounded by the video's own length, so a bad timestamp cannot spin
+            // this: a 600s clip at 10ms is 60000 slots.
+            for (int64_t at = videoStartUs; at <= videoEndUs && grid.size() < 200000u; at += step) {
+                grid.push_back({at, cadence});
             }
         }
 
         size_t widest = 0;
         for (const auto& s : audioStreams) {
             if (!s.channels) continue;
-            for (const auto& slot : reference)
-                widest = (std::max)(widest, static_cast<size_t>(slot.frameCount) * s.channels);
+            widest = (std::max)(widest, static_cast<size_t>(cadence) * s.channels);
         }
         silence.assign(widest, 0.0f);
 
-        // The reference track is filled too. It covers its own real packets, so
-        // the sweep only ever adds silence where it has none - which, once the
-        // timeline is carried past the last packet above, is exactly the tail it
-        // needs to reach the end of the video.
         for (const auto& s : audioStreams) {
             if (!s.channels) continue;
-            // What this track already covers, in order, so the sweep below is
-            // linear rather than a search per reference packet.
+            // What this track already covers, in order, so the sweep is linear
+            // rather than a search per slot.
             struct Span { int64_t fromUs, toUs; };
             std::vector<Span> covered;
             for (const auto& p : audioPackets) {
@@ -211,7 +212,7 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
                 [](const Span& a, const Span& b) { return a.fromUs < b.fromUs; });
 
             size_t at = 0;
-            for (const auto& slot : reference) {
+            for (const auto& slot : grid) {
                 while (at < covered.size() && covered[at].toUs <= slot.timeUs) ++at;
                 const bool inside = at < covered.size() && covered[at].fromUs <= slot.timeUs;
                 if (inside) continue;

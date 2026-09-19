@@ -16,6 +16,8 @@ code was not enough:
 | `audio-track-gap.js` | `saveClip` hung forever when a track stopped mid-recording |
 | `audio-toggle.js` | The Audio capture switch had never done anything |
 | `audio-all-tracks-off.js` | `saveClip` hung again when EVERY track stopped, which the toggle does in one click |
+| `audio-starts-late.js` | And again when audio was switched ON partway, so the tracks started late |
+| `audio-lands-in-place.js` | That filling the gaps does not move or flatten the real audio |
 | `audio-under-load.js` | A timestamp defect that is real in the code and does not show up in the output |
 | `process-list-vs-tasklist.js` | That the native process list agrees with `tasklist` on 330 of 332 processes |
 
