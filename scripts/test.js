@@ -35,6 +35,24 @@ console.log('Native self-checks')
 if (!existsSync(nativeDir)) {
   console.log('  skip  capture addon not built (pnpm --filter @flash/capture run build)')
 } else {
+  // Rebuild first. The binaries are excluded from the default target, so
+  // without this a test run grades whatever was compiled last — which is how a
+  // suite ends up green against code that no longer exists.
+  // Run the CLI's entry script through node rather than the .cmd shim: Node
+  // refuses to execFile a .cmd without a shell, and the failure comes back with
+  // an empty message.
+  const capture = join(root, 'packages/flash-capture')
+  try {
+    execFileSync(process.execPath,
+      [join(capture, 'node_modules/cmake-js/bin/cmake-js'), 'build', '--target', 'flash_tests'],
+      { cwd: capture, stdio: 'pipe' })
+  } catch (error) {
+    console.log('  FAIL  building the self-checks')
+    console.log(`${error.stdout ?? ''}${error.stderr ?? ''}`.trim().split('\n').slice(-12)
+      .map(line => `        ${line}`).join('\n'))
+    failed++
+  }
+
   const tests = readdirSync(nativeDir)
     .filter(name => name.startsWith('flash_') && name.endsWith('_test.exe'))
   if (!tests.length) console.log('  skip  no test binaries built')

@@ -330,7 +330,17 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
   onEdit: (clip: Clip) => void
   onRename: (clip: Clip, name: string) => Promise<string | null>
 }) {
-  const [index, setIndex] = useState(startIndex)
+  // Which clip is open is remembered by file, not by row number. The library
+  // re-scans underneath the player — a rename, a save landing, the search box
+  // narrowing — and a stored index quietly slides onto a different clip, or
+  // past the end of a list that just got shorter.
+  const [path, setPath] = useState(() => clips[startIndex]?.filePath ?? '')
+  const lastIndex = useRef(startIndex)
+  const found = clips.findIndex(entry => entry.filePath === path)
+  // The tracked file can still vanish: renamed out of the current search, or
+  // deleted from disk. Hold the position it had rather than jumping to the top.
+  const index = found >= 0 ? found : Math.min(Math.max(lastIndex.current, 0), clips.length - 1)
+  lastIndex.current = index
   const [trimNote, setTrimNote] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playerPlaying, setPlayerPlaying] = useState(false)
@@ -357,6 +367,12 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
     }
     return error
   }, [clip, onRename])
+
+  // Re-anchor onto whatever is at this position after the list changed under
+  // us, so the next arrow press steps from where the player actually is.
+  useEffect(() => {
+    if (clip && clip.filePath !== path) setPath(clip.filePath)
+  }, [clip, path])
 
   // Clear the last export note when moving between clips, so it cannot read as
   // if it described the clip now on screen.
@@ -401,6 +417,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
         catch (error) { reject(error) }
       })
       if (!blob) throw new Error('Could not encode frame as PNG')
+      if (!clip) throw new Error('Clip not found')
       const result = await window.flash?.saveClipFrame(
         clip.filePath, playheadSeconds, new Uint8Array(await blob.arrayBuffer()))
       if (!result || result.error) throw new Error(result?.error ?? 'Could not save screenshot')
@@ -410,10 +427,14 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
     } finally {
       setFrameBusy(false)
     }
-  }, [clip.filePath])
+  }, [clip?.filePath])
 
-  const goNext = useCallback(() => setIndex(i => Math.min(i + 1, clips.length - 1)), [clips.length])
-  const goPrev = useCallback(() => setIndex(i => Math.max(i - 1, 0)), [])
+  const goTo = useCallback((target: number) => {
+    const next = clips[Math.max(0, Math.min(target, clips.length - 1))]
+    if (next) setPath(next.filePath)
+  }, [clips])
+  const goNext = useCallback(() => goTo(index + 1), [goTo, index])
+  const goPrev = useCallback(() => goTo(index - 1), [goTo, index])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -720,12 +741,16 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
 
   // Each thumbnail is a real <video> decoding a frame off disk. Mounting one per
   // clip means a library of 200 spins up 200 decoders at once, so hold the src
-  // back until the card is actually near the viewport.
+  // back until the card is actually near the viewport — and give it back once
+  // the card leaves. Disconnecting on first sight instead meant every card ever
+  // scrolled past kept its decoder for the life of the session, so a long scroll
+  // through a big library ended with the newest thumbnails painting black:
+  // Chromium caps concurrent decodes and drops the excess without an error.
   useEffect(() => {
     const node = cardRef.current
     if (!node) return
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry.isIntersecting) { setVisible(true); observer.disconnect() } },
+      ([entry]) => setVisible(entry.isIntersecting),
       { rootMargin: '300px' },
     )
     observer.observe(node)
@@ -750,6 +775,7 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
           <img
             src={clipUrl(clip.filePath)}
             alt=""
+            loading="lazy"
             draggable={false}
             className="w-full h-full object-cover"
             style={{ pointerEvents: 'none' }}
@@ -1682,7 +1708,11 @@ export default function App() {
           )}
         </main>
       </div>
-      {previewIndex !== null && filteredClips.length > 0 && (
+      {/* Unmounted while the editor is open, not just covered by it. Left
+          mounted, its <video> keeps playing underneath — you hear a clip you
+          cannot see — and its window keydown listener still steals the arrow
+          keys from the editor's own scrubbing. */}
+      {previewIndex !== null && !editingClip && filteredClips.length > 0 && (
         <ClipPlayer clips={filteredClips} startIndex={previewIndex} onClose={() => setPreviewIndex(null)} onDelete={deleteClip} onEdit={setEditingClip} onRename={renameClip} />
       )}
       {editingClip && (

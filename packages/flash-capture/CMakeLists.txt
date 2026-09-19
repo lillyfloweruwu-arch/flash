@@ -107,8 +107,10 @@ target_compile_definitions(flash_capture PRIVATE NAPI_VERSION=8)
 # /UNDEBUG is the point of this helper. CMake's Release config passes /DNDEBUG,
 # which compiles every assert() to nothing, so a Release test exits 0 whether or
 # not its assertions hold. Undefining it keeps the asserts live in every config.
+set(FLASH_TEST_TARGETS "" CACHE INTERNAL "self-check targets")
 function(flash_add_test name)
   add_executable(${name} EXCLUDE_FROM_ALL ${ARGN})
+  set(FLASH_TEST_TARGETS ${FLASH_TEST_TARGETS} ${name} CACHE INTERNAL "self-check targets")
   target_link_libraries(${name} ${PLATFORM_LIBS})
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4 /EHsc /UNDEBUG)
@@ -155,3 +157,7 @@ if(WIN32)
     target_include_directories(flash_voice_calibrate PRIVATE "${FLASH_CPPWINRT}")
   endif()
 endif()
+
+# One target for every self-check, so a test run cannot quietly grade last
+# week's binaries. `pnpm test` builds this before it runs anything.
+add_custom_target(flash_tests DEPENDS ${FLASH_TEST_TARGETS})
