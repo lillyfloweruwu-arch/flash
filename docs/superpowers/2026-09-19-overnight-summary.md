@@ -1,6 +1,6 @@
 # Overnight summary — 2026-09-19
 
-Branch `clip-editor-native-foundation`, 17 commits, 48 files, +1849/−330.
+Branch `clip-editor-native-foundation`, 20 commits.
 Nothing pushed, nothing merged to `master`.
 
 **One thing needs you: the installer is built and signed but not run.** The NSIS
@@ -27,9 +27,14 @@ left the frame pool at the old size, so the new desktop arrived pasted into the
 top-left corner of a buffer still holding the old picture — frames with two
 taskbars in them — while capture reported healthy throughout.
 
-**`saveClip` hung forever if a track stopped mid-recording.** Turning the
-microphone off partway through a session and then pressing the clip key never
-returned. Not slow: hung, with no error, for the rest of the session.
+**`saveClip` hung forever when audio did not span the whole clip.** Three
+variants, all of them reachable from the one switch in Settings: a track that
+stopped, every track stopping at once, and audio switched back on partway so the
+tracks start late. In each case IMFSinkWriter waits for the stream that does not
+reach the end, Finalize is never called, and the clip key simply stops working
+for the rest of the session with no error anywhere. Silence now covers the
+video's whole span, and a check confirms it does not move or flatten the real
+audio it fills around.
 
 **Trimming to a keyframe landed a GOP early on half of them.** Asking for a
 keyframe the app itself reported gave 1.02 seconds of footage nobody asked for,
@@ -74,6 +79,7 @@ The trimmed package was launched and driven through its own bridge:
     editor save, lossless      2s..6s -> 4.013s, actual start exactly 2.000s
     capture                    recording, healthy, NVENC through Windows.Graphics.Capture
     library                    8 clips listed, starring writes through to the sidecar
+    audio off then on, save    15.00s with all three tracks, where it used to hang
 
 The first of those is the save that had never worked. The second shows the trim
 landing exactly where it was asked to rather than a GOP early. Every clip the
