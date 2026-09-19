@@ -95,6 +95,10 @@ export function clampRange(inSec: number, outSec: number, durationSec: number, m
 // "flash-clip:///C:/Users/..." becomes host "c" and path "/Users/...", the
 // drive letter is swallowed, and the file is never found. Measured, not
 // theorised - it fails with MEDIA_ELEMENT_ERROR: Format error.
+// Encoded per segment rather than with encodeURI over the whole path, because
+// encodeURI leaves '#', '?' and '&' alone: a clip named "round#2.mp4" is then
+// requested as "round" with "2.mp4" as a URL fragment, and plays as missing.
 export function clipUrl(filePath: string): string {
-  return 'flash-clip://local/' + encodeURI(filePath.replace(/\\/g, '/'))
+  const path = filePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')
+  return 'flash-clip://local/' + path
 }

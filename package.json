@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "pnpm --filter @flash/desktop dev",
     "build": "pnpm --filter @flash/desktop build",
-    "start": "pnpm --filter @flash/desktop start"
+    "start": "pnpm --filter @flash/desktop start",
+    "test": "node scripts/test.js",
+    "typecheck": "pnpm --filter @flash/desktop exec tsc --noEmit"
   },
   "engines": {
     "node": ">=20.0.0"

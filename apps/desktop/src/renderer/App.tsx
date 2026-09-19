@@ -1054,14 +1054,14 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, voiceStatus, hotkeyRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, voiceStatus, hotkeysRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
   encoder: string
   captureBackend: string
   voiceStatus: VoiceStatus
-  hotkeyRegistered: boolean
+  hotkeysRegistered: { clip: boolean; short: boolean; screenshot: boolean }
   displays: Display[]
   health: CaptureHealth | null
   learnedGames: Record<string, string>
@@ -1129,15 +1129,15 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
 
         <Card title="Capture">
           <Row label={`Clip hotkey — full ${settings.bufferLength}s`}>
-            <HotkeyInput value={settings.hotkey} registered={hotkeyRegistered}
+            <HotkeyInput value={settings.hotkey} registered={hotkeysRegistered.clip}
               onChange={hotkey => onChange({ hotkey })} />
           </Row>
           <Row label={`Short clip hotkey — last ${settings.shortClipSeconds}s`}>
-            <HotkeyInput value={settings.hotkeyShort} registered
+            <HotkeyInput value={settings.hotkeyShort} registered={hotkeysRegistered.short}
               onChange={hotkeyShort => onChange({ hotkeyShort })} />
           </Row>
           <Row label="Screenshot hotkey">
-            <HotkeyInput value={settings.screenshotHotkey} registered
+            <HotkeyInput value={settings.screenshotHotkey} registered={hotkeysRegistered.screenshot}
               onChange={screenshotHotkey => onChange({ screenshotHotkey })} />
           </Row>
           <Row label="Short clip length">
@@ -1413,7 +1413,10 @@ export default function App() {
   const [captureBackend, setCaptureBackend] = useState('unknown')
   const [captureAvailable, setCaptureAvailable] = useState(false)
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
-  const [hotkeyRegistered, setHotkeyRegistered] = useState(true)
+  // All three keys, so a secondary hotkey lost to another app is visible in
+  // Settings instead of looking fine and doing nothing.
+  const [hotkeysRegistered, setHotkeysRegistered] = useState(
+    { hotkey: '', clip: true, short: true, screenshot: true })
   const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
   const [health, setHealth] = useState<CaptureHealth | null>(null)
   const [learnedGames, setLearnedGames] = useState<Record<string, string>>({})
@@ -1531,7 +1534,7 @@ export default function App() {
     // A rebind can fail if another program already owns the key.
     if (partial.hotkey) {
       const status = await window.flash.getHotkeyStatus()
-      setHotkeyRegistered(status.registered)
+      setHotkeysRegistered(status)
     }
     if (partial.voiceEnabled !== undefined || partial.voicePhrase !== undefined
       || partial.voiceRawFloor !== undefined || partial.voiceCooldownMs !== undefined) {
@@ -1595,7 +1598,7 @@ export default function App() {
     window.flash.getRecordingState().then(setIsRecording)
     window.flash.getSettings().then(setSettings)
     window.flash.getVoiceStatus().then(setVoiceStatus)
-    window.flash.getHotkeyStatus().then(s => setHotkeyRegistered(s.registered))
+    window.flash.getHotkeyStatus().then(setHotkeysRegistered)
     window.flash.capture.listDisplays().then(setDisplays)
     window.flash.capture.onSaveState(setSaveState)
     window.flash.onIdentifyGame(setIdentifyRequest)
@@ -1639,7 +1642,7 @@ export default function App() {
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
               captureBackend={captureBackend}
               voiceStatus={voiceStatus}
-              hotkeyRegistered={hotkeyRegistered} displays={displays} health={health}
+              hotkeysRegistered={hotkeysRegistered} displays={displays} health={health}
               learnedGames={learnedGames}
               onForgetGame={async exe => setLearnedGames(await window.flash!.forgetGame(exe))}
               onOpenFolder={() => window.flash?.openClipsFolder()}

@@ -15,6 +15,7 @@ import { getTheme } from '../shared/themes'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
 import { clipTimestamp, firstFreeName, gameFolderName } from '../shared/clipPath'
+import { isInsideRoot } from '../shared/clipsRoot'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -59,11 +60,45 @@ type Settings = typeof DEFAULTS
 let settings: Settings = { ...DEFAULTS }
 let settingsPath = ''
 
+// Spreading the parsed file over the defaults fills in missing keys but keeps
+// whatever type the file happened to hold. A hand-edited (or half-written)
+// settings.json with `"overlayPosition": null` then reaches overlayBounds and
+// throws during startup, before the window exists — Flash appears not to launch
+// at all. Anything whose type does not match its default is dropped instead.
+function sanitiseSettings(parsed: unknown): Partial<Settings> {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const fallback = (DEFAULTS as Record<string, unknown>)[key]
+    if (fallback === undefined) continue                      // unknown key
+    if (Array.isArray(fallback)) {
+      if (Array.isArray(value)) clean[key] = value
+      continue
+    }
+    if (typeof fallback === 'object') {
+      if (value && typeof value === 'object' && !Array.isArray(value)) clean[key] = value
+      continue
+    }
+    if (typeof value !== typeof fallback) continue
+    if (typeof value === 'number' && !Number.isFinite(value)) continue
+    clean[key] = value
+  }
+  // overlayPosition is really an enum, and a wrong value crashes rather than
+  // merely looking wrong: overlayBounds reads it as two booleans and an unknown
+  // string silently pins the pill to the top-left of the wrong monitor edge.
+  // (An unknown theme is already safe — getTheme falls back to the default.)
+  if (typeof clean.overlayPosition === 'string' &&
+      !['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(clean.overlayPosition)) {
+    delete clean.overlayPosition
+  }
+  return clean as Partial<Settings>
+}
+
 function loadSettings() {
   settingsPath = join(app.getPath('userData'), 'settings.json')
   try {
     if (existsSync(settingsPath)) {
-      settings = { ...DEFAULTS, ...JSON.parse(readFileSync(settingsPath, 'utf8')) }
+      settings = { ...DEFAULTS, ...sanitiseSettings(JSON.parse(readFileSync(settingsPath, 'utf8'))) }
       // "Not a game" answers have to survive a restart or Flash asks again.
       for (const exe of settings.ignoredGames ?? []) ignoredExecutables.add(exe)
     }
@@ -71,8 +106,14 @@ function loadSettings() {
 }
 
 function saveSettings() {
+  // Written to a sibling and renamed over the real file. A direct write that is
+  // interrupted (crash, power loss, full disk) leaves valid JSON impossible to
+  // parse, loadSettings falls back to DEFAULTS, and every learned game, hotkey
+  // and folder choice is silently gone. Rename on Windows replaces atomically.
   try {
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2))
+    const temporary = `${settingsPath}.tmp`
+    writeFileSync(temporary, JSON.stringify(settings, null, 2))
+    renameSync(temporary, settingsPath)
   } catch (error) {
     console.error('Failed to save settings', error)
   }
@@ -125,9 +166,30 @@ function applyCaptureSettings(game: string | null = currentGame) {
   catch (error) { console.warn('Could not apply quality', error) }
 }
 
-function ensureClipsFolder() {
-  if (!existsSync(settings.clipsFolder)) {
-    mkdirSync(settings.clipsFolder, { recursive: true })
+// Every path below arrives from the renderer. isInsideRoot resolves '..' and
+// compares whole path segments, so neither a traversal nor a sibling folder
+// sharing the root's name gets through.
+const isInsideClips = (filePath: string) => isInsideRoot(settings.clipsFolder, filePath)
+
+// The only two kinds of file Flash ever puts in the library.
+const MEDIA_EXTENSIONS = new Set(['.mp4', '.png'])
+
+// Returns the error rather than throwing: this runs before the window exists,
+// and a clips folder on a removable or network drive that is not mounted would
+// otherwise take the whole app down at startup with nothing on screen to say
+// why. Falling back to the default keeps Flash usable and recording.
+function ensureClipsFolder(): string | null {
+  try {
+    if (!existsSync(settings.clipsFolder)) mkdirSync(settings.clipsFolder, { recursive: true })
+    return null
+  } catch (error: any) {
+    const unavailable = settings.clipsFolder
+    if (unavailable === DEFAULTS.clipsFolder) return error?.message || 'Could not create the clips folder'
+    console.warn(`Clips folder ${unavailable} is unavailable, falling back to ${DEFAULTS.clipsFolder}`, error)
+    settings.clipsFolder = DEFAULTS.clipsFolder
+    try { mkdirSync(settings.clipsFolder, { recursive: true }) }
+    catch (fallbackError: any) { return fallbackError?.message || 'Could not create the clips folder' }
+    return `${unavailable} is not available — clips are going to ${settings.clipsFolder} for now`
   }
 }
 
@@ -344,7 +406,7 @@ function scanClips(): ClipInfo[] {
 
 function deleteClip(filePath: string): boolean {
   // Only delete inside the clips folder — filePath comes from the renderer.
-  if (!filePath.startsWith(settings.clipsFolder)) return false
+  if (!isInsideClips(filePath)) return false
   try { unlinkSync(filePath) } catch { return false }
   try { unlinkSync(sidecarPath(filePath)) } catch { /* no sidecar */ }
   return true
@@ -354,7 +416,7 @@ function renameClip(filePath: string, requestedName: string): { filePath?: strin
   const name = requestedName.trim()
   const validationError = validateClipName(name)
   if (validationError) return { error: validationError }
-  if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+  if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
 
   const extension = extname(filePath).toLowerCase()
   if (extension !== '.mp4' && extension !== '.png') return { error: 'Only clips and screenshots can be renamed' }
@@ -403,7 +465,7 @@ function moveClipToGame(filePath: string, requestedGame: string): { filePath?: s
   const game = requestedGame.trim()
   const validationError = validateClipName(game)
   if (validationError) return { error: validationError }
-  if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+  if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
 
   const sourceExtension = extname(filePath)
   const extension = sourceExtension.toLowerCase()
@@ -577,6 +639,9 @@ async function runSaveScreenshot(): Promise<void> {
     await captureAddon.saveScreenshot(screenshotPath)
     clipboard.writeImage(nativeImage.createFromPath(screenshotPath))
     playClipSound()
+    // Without this the PNG lands on disk and the open library never shows it:
+    // nothing else rescans, so a screenshot looks like it silently failed.
+    mainWindow?.webContents.send('clip-saved-refresh')
   } catch (error: any) {
     if (screenshotPath) {
       try {
@@ -1048,7 +1113,7 @@ function setupIPC() {
   ipcMain.handle('rename-clip', (_event, filePath: string, name: string) => renameClip(filePath, name))
   ipcMain.handle('move-clips', (_event, filePaths: string[], game: string) => moveClips(filePaths, game))
   ipcMain.handle('save-clip-frame', (_event, filePath: string, playheadSeconds: number, bytes: Uint8Array) => {
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Frames can only be grabbed from clips' }
     if (!Number.isFinite(playheadSeconds) || playheadSeconds < 0) return { error: 'Invalid playhead position' }
     if (!(bytes instanceof Uint8Array) || bytes.byteLength === 0) return { error: 'Screenshot was empty' }
@@ -1073,7 +1138,12 @@ function setupIPC() {
       return { error: error?.message || 'Could not save screenshot' }
     }
   })
+  // openPath hands the file to whatever Windows has associated with it, which
+  // for an .exe or .bat means running it. The path comes over the bridge, so it
+  // has to be a media file inside the library before it goes anywhere near the
+  // shell — the same rule every other clip handler already follows.
   ipcMain.handle('open-clip', (_event, filePath: string) => {
+    if (!isInsideClips(filePath) || !MEDIA_EXTENSIONS.has(extname(filePath).toLowerCase())) return
     shell.openPath(filePath)
   })
   // Trim is lossless: a remux, not a re-encode, so this returns in well under a
@@ -1082,7 +1152,7 @@ function setupIPC() {
   // user may want to retry with different bounds.
   ipcMain.handle('trim-clip', async (_event, filePath: string, start: number, end: number) => {
     if (!captureAddon?.trimClip) return { error: 'This build cannot trim clips' }
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (!(end > start)) return { error: 'End must be after start' }
     const output = filePath.replace(/\.mp4$/i, ` - trim ${Date.now()}.mp4`)
     try {
@@ -1110,7 +1180,7 @@ function setupIPC() {
     saturation?: number
     reEncode: boolean
   }) => {
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (!(options.endSeconds > options.startSeconds)) return { error: 'End must be after start' }
 
     const output = filePath.replace(/\.mp4$/i, ` - edit ${Date.now()}.mp4`)
@@ -1147,7 +1217,7 @@ function setupIPC() {
   // on a worker thread and these just await.
   ipcMain.handle('decode-clip-audio', async (_event, filePath: string) => {
     if (!captureAddon?.decodeClipAudio) return { error: 'This build cannot decode clip audio' }
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     try {
       return await captureAddon.decodeClipAudio(filePath)
     } catch (error: any) {
@@ -1157,7 +1227,7 @@ function setupIPC() {
 
   ipcMain.handle('get-clip-keyframes', async (_event, filePath: string) => {
     if (!captureAddon?.getClipKeyframes) return { error: 'This build cannot read keyframes' }
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     try {
       return await captureAddon.getClipKeyframes(filePath)
     } catch (error: any) {
@@ -1169,7 +1239,7 @@ function setupIPC() {
   // purpose; this produces a small sibling that actually fits an upload limit.
   ipcMain.handle('export-clip', async (_event, filePath: string, maxBytes: number) => {
     if (!captureAddon?.exportClip) return { error: 'This build cannot export clips' }
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return { error: 'Clip not found' }
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     const mb = Math.round(maxBytes / (1024 * 1024))
     const output = filePath.replace(/\.mp4$/i, ` - ${mb}MB.mp4`)
     try {
@@ -1190,6 +1260,7 @@ function setupIPC() {
     shell.openPath(settings.clipsFolder)
   })
   ipcMain.handle('show-clip-in-folder', (_event, filePath: string) => {
+    if (!isInsideClips(filePath)) return
     shell.showItemInFolder(filePath)
   })
 
@@ -1198,7 +1269,7 @@ function setupIPC() {
   // a drag, so this is `on`, not `handle`.
   ipcMain.on('start-clip-drag', (event, requestedPaths: string[] | string) => {
     const filePaths = Array.isArray(requestedPaths) ? requestedPaths : [requestedPaths]
-    const files = filePaths.filter(filePath => filePath.startsWith(settings.clipsFolder) && existsSync(filePath))
+    const files = filePaths.filter(filePath => isInsideClips(filePath) && existsSync(filePath))
     if (!files.length) return
     const thumb = nativeImage.createFromPath(
       resource(`assets/icons/${settings.theme}.png`, `assets/icons/${settings.theme}.png`))
@@ -1211,7 +1282,7 @@ function setupIPC() {
   // CF_HDROP is not exposed by Electron, but Windows also accepts the shell's
   // "FileNameW" format, which is a single null-terminated UTF-16 path.
   ipcMain.handle('copy-clip-file', (_event, filePath: string) => {
-    if (!filePath.startsWith(settings.clipsFolder) || !existsSync(filePath)) return false
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return false
     try {
       clipboard.writeBuffer('FileNameW', Buffer.from(`${filePath}\0`, 'ucs2'))
       return true
@@ -1224,24 +1295,34 @@ function setupIPC() {
   // ── Settings ──
   ipcMain.handle('get-settings', () => ({ ...settings }))
   ipcMain.handle('set-settings', (_event, partial: Partial<Settings>) => {
-    Object.assign(settings, partial)
+    // clipsFolder is the boundary every other handler checks against, so it is
+    // not something the renderer gets to move: pointing it at C:\ would make the
+    // whole drive deletable through delete-clip. It changes only through
+    // pick-clips-folder, where the user picks the folder in an OS dialog.
+    // sanitiseSettings runs here too — a bad value from the renderer crashes
+    // exactly like a bad value from the file.
+    const { clipsFolder: _ignored, ...rest } = partial
+    // Everything below keys off `changed`, not the raw request: a value the
+    // sanitiser dropped must not trigger the side effect that applies it.
+    const changed = sanitiseSettings(rest)
+    Object.assign(settings, changed)
     saveSettings()
-    if (partial.bufferLength !== undefined || partial.quality !== undefined || partial.perGame !== undefined) {
+    if (changed.bufferLength !== undefined || changed.quality !== undefined || changed.perGame !== undefined) {
       applyCaptureSettings()
     }
-    if (partial.autoDeleteDays !== undefined) pruneOldClips()
-    if (partial.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
-    if (partial.overlay !== undefined || partial.overlayPosition !== undefined) updateOverlay()
-    if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined || partial.screenshotHotkey !== undefined) registerHotkeys()
-    if (partial.voicePhrase !== undefined) applyVoicePhrases()
-    if (partial.voiceRawFloor !== undefined || partial.voiceCooldownMs !== undefined) applyVoiceThreshold()
-    if (partial.voiceEnabled !== undefined) applyVoiceEnabled()
-    if (partial.displayId !== undefined) {
-      try { captureAddon?.setDisplay?.(partial.displayId) } catch (error) { console.warn('Could not switch display', error) }
+    if (changed.autoDeleteDays !== undefined) pruneOldClips()
+    if (changed.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
+    if (changed.overlay !== undefined || changed.overlayPosition !== undefined) updateOverlay()
+    if (changed.hotkey !== undefined || changed.hotkeyShort !== undefined || changed.screenshotHotkey !== undefined) registerHotkeys()
+    if (changed.voicePhrase !== undefined) applyVoicePhrases()
+    if (changed.voiceRawFloor !== undefined || changed.voiceCooldownMs !== undefined) applyVoiceThreshold()
+    if (changed.voiceEnabled !== undefined) applyVoiceEnabled()
+    if (changed.displayId !== undefined) {
+      try { captureAddon?.setDisplay?.(changed.displayId) } catch (error) { console.warn('Could not switch display', error) }
     }
     return { ...settings }
   })
-  ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, registered: hotkeyRegistered }))
+  ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, ...hotkeyStatus }))
   ipcMain.handle('get-learned-games', () => ({ ...learnedGames() }))
   ipcMain.handle('forget-game', (_event, exe: string) => {
     const learned = { ...learnedGames() }
@@ -1377,37 +1458,49 @@ function setRecordingState(recording: boolean, error?: string) {
 // ── Hotkeys ───────────────────────────────────────────────────────────────────
 
 // True if the accelerator was claimed. Another app (or a game) holding the same
-// key makes this false, which the UI surfaces rather than failing silently.
+// key makes this false, which the UI surfaces rather than failing silently. All
+// three are tracked: a screenshot key silently lost to another app used to be
+// invisible, because Settings drew the other two rows as registered no matter
+// what happened.
+const hotkeyStatus = { clip: false, short: false, screenshot: false }
 let hotkeyRegistered = false
+
+// register() throws on a malformed accelerator and returns false on a taken one.
+// Both mean "this key does not work", and both have to reach the UI.
+function claim(accelerator: string, handler: () => void): boolean {
+  if (!accelerator) return false
+  try { return globalShortcut.register(accelerator, handler) }
+  catch { return false }
+}
 
 function registerHotkeys(): boolean {
   globalShortcut.unregisterAll()
-  try {
-    hotkeyRegistered = globalShortcut.register(settings.hotkey, () => {
+
+  hotkeyStatus.clip = claim(settings.hotkey, () => {
+    mainWindow?.webContents.send('hotkey-clip')
+    void saveClipNow()
+  })
+
+  // A second key for a short clip. An eight-second play should not ship as
+  // thirty seconds of nothing.
+  // A key that duplicates another Flash action counts as unregistered rather
+  // than silently doing nothing: the first claim wins and the duplicate row
+  // should say so.
+  hotkeyStatus.short = settings.hotkeyShort !== settings.hotkey &&
+    claim(settings.hotkeyShort, () => {
       mainWindow?.webContents.send('hotkey-clip')
-      void saveClipNow()
+      void saveClipNow(settings.shortClipSeconds)
     })
-    // A second key for a short clip. An eight-second play should not ship as
-    // thirty seconds of nothing, and there is no editor yet to fix it after.
-    if (settings.hotkeyShort && settings.hotkeyShort !== settings.hotkey) {
-      try {
-        globalShortcut.register(settings.hotkeyShort, () => {
-          mainWindow?.webContents.send('hotkey-clip')
-          void saveClipNow(settings.shortClipSeconds)
-        })
-      } catch { console.warn(`Could not register short-clip hotkey ${settings.hotkeyShort}`) }
-    }
-    if (settings.screenshotHotkey && settings.screenshotHotkey !== settings.hotkey && settings.screenshotHotkey !== settings.hotkeyShort) {
-      try {
-        globalShortcut.register(settings.screenshotHotkey, () => {
-          void saveScreenshotNow()
-        })
-      } catch { console.warn(`Could not register screenshot hotkey ${settings.screenshotHotkey}`) }
-    }
-  } catch {
-    hotkeyRegistered = false  // malformed accelerator
-  }
-  if (!hotkeyRegistered) console.warn(`Could not register hotkey ${settings.hotkey} — already taken`)
+
+  hotkeyStatus.screenshot =
+    settings.screenshotHotkey !== settings.hotkey &&
+    settings.screenshotHotkey !== settings.hotkeyShort &&
+    claim(settings.screenshotHotkey, () => { void saveScreenshotNow() })
+
+  hotkeyRegistered = hotkeyStatus.clip
+  if (!hotkeyStatus.clip) console.warn(`Could not register clip hotkey ${settings.hotkey} — already taken`)
+  if (!hotkeyStatus.short) console.warn(`Could not register short-clip hotkey ${settings.hotkeyShort} — already taken`)
+  if (!hotkeyStatus.screenshot) console.warn(`Could not register screenshot hotkey ${settings.screenshotHotkey} — already taken`)
   updateTrayMenu()
   return hotkeyRegistered
 }
@@ -1457,8 +1550,8 @@ function registerClipProtocol() {
     // http://localhost:5173 cannot load file:// media at all.
     const normalised = target.replace(/\//g, '\\')
     const assetRoot = resource('assets', 'assets')
-    const allowed = normalised.startsWith(settings.clipsFolder) || normalised.startsWith(assetRoot)
-    if (!allowed || normalised.includes('..')) {
+    const allowed = isInsideClips(normalised) || isInsideRoot(assetRoot, normalised)
+    if (!allowed) {
       return new Response('forbidden', { status: 403 })
     }
     if (!existsSync(normalised)) return new Response('not found', { status: 404 })
@@ -1512,7 +1605,7 @@ function registerClipProtocol() {
 app.on('ready', () => {
   registerClipProtocol()
   loadSettings()
-  ensureClipsFolder()
+  const clipsFolderError = ensureClipsFolder()
 
   pruneOldClips()
 
@@ -1535,6 +1628,13 @@ app.on('ready', () => {
   }
 
   createWindow()
+  // The folder check runs before the window exists, so its message has to wait
+  // for one to talk to.
+  if (clipsFolderError) {
+    mainWindow?.webContents.once('did-finish-load', () => {
+      mainWindow?.webContents.send('clip-save-state', { saving: false, error: clipsFolderError })
+    })
+  }
   createTray()
   applyThemeIcons()
   updateOverlay()

@@ -2,7 +2,7 @@
 //   node --experimental-strip-types src/shared/editor.test.ts
 import { strict as assert } from 'node:assert'
 import { formatTimecode, clampRange, nearestKeyframe, deriveSaveMode, matchesQuery } from './editor.ts'
-import { reducePeaks } from './editor.ts'
+import { reducePeaks, clipUrl } from './editor.ts'
 
 const searchableClips = [
   { id: 'title', title: 'Final Escape', game: 'Portal 2' },
@@ -89,5 +89,20 @@ assert.deepEqual(deriveSaveMode(false, [1, 0, 1], 80), { lossless: false, reason
 
 // No tracks at all is still lossless when nothing else changed.
 assert.deepEqual(deriveSaveMode(true, [], 100), { lossless: true, reason: 'none' })
+
+// clipUrl has to survive the punctuation Windows allows in a filename. '#' is
+// the one that matters: encodeURI leaves it alone, so "round#2.mp4" was
+// requested as "round" with the rest as a fragment, and played as missing.
+assert.equal(clipUrl('C:\\Clips\\Halo\\round#2.mp4'),
+  'flash-clip://local/C%3A/Clips/Halo/round%232.mp4')
+assert.equal(clipUrl('C:\\Clips\\a b & c?.mp4'),
+  'flash-clip://local/C%3A/Clips/a%20b%20%26%20c%3F.mp4')
+// Every segment survives a decode round trip, which is what the protocol
+// handler does before it touches the disk.
+for (const path of ['C:\\Clips\\Halo\\round#2.mp4', 'C:\\Clips\\a b & c?.mp4', 'C:\\Clips\\100% win.mp4']) {
+  const decoded = decodeURIComponent(new URL(clipUrl(path)).pathname)
+    .replace(/^\//, '').replace(/\//g, '\\')
+  assert.equal(decoded, path)
+}
 
 console.log('clip editor self-check passed')

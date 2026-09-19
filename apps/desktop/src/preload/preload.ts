@@ -167,7 +167,12 @@ export type FlashAPI = {
   onHotkeyClip: (callback: () => void) => void
   onClipSavedRefresh: (callback: () => void) => void
   getSettings: () => Promise<Settings>
-  getHotkeyStatus: () => Promise<{ hotkey: string; registered: boolean }>
+  getHotkeyStatus: () => Promise<{
+    hotkey: string
+    // One flag per key: the clip, short-clip and screenshot accelerators can
+    // each be taken by another app independently.
+    clip: boolean; short: boolean; screenshot: boolean
+  }>
   getLearnedGames: () => Promise<Record<string, string>>
   forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
