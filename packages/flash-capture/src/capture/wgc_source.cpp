@@ -58,6 +58,7 @@ private:
     // still be in flight when it does.
     std::shared_ptr<std::atomic<bool>> closed_;
     capture::GraphicsCaptureItem::Closed_revoker closedRevoker_;
+    winrt::Windows::Graphics::DirectX::Direct3D11::IDirect3DDevice winrtDevice_{nullptr};
     capture::Direct3D11CaptureFramePool pool_{nullptr};
     capture::GraphicsCaptureSession session_{nullptr};
     capture::Direct3D11CaptureFrame current_{nullptr};
@@ -70,6 +71,7 @@ private:
     // keeps the pool from starving.
     ComPtr<ID3D11Texture2D> lastTexture_;
     ComPtr<ID3D11DeviceContext> context_;
+    uint32_t displayId_ = 0;
     uint32_t targetFps_ = 60;
     uint32_t width_ = 0;
     uint32_t height_ = 0;
@@ -110,6 +112,7 @@ bool BorderCanBeDisabled() {
 
 bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
     if (!device_) return false;
+    displayId_ = displayId;
     targetFps_ = fps ? fps : 60;
     device_->GetImmediateContext(&context_);
     if (!context_) return false;
@@ -142,7 +145,7 @@ bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
         if (FAILED(CreateDirect3D11DeviceFromDXGIDevice(dxgiDevice.Get(), inspectable.put()))) {
             return false;
         }
-        const auto winrtDevice = inspectable.as<directx::Direct3D11::IDirect3DDevice>();
+        winrtDevice_ = inspectable.as<directx::Direct3D11::IDirect3DDevice>();
 
         // Free-threaded: frames are pulled from the capture thread, which has
         // no message pump of its own.
@@ -152,7 +155,7 @@ bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
         if (!width_ || !height_) return false;
 
         pool_ = capture::Direct3D11CaptureFramePool::CreateFreeThreaded(
-            winrtDevice,
+            winrtDevice_,
             directx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
             2,
             size);
@@ -193,6 +196,28 @@ void WgcSource::ReleaseCurrentFrame() {
 
 bool WgcSource::Next(SourceFrame& frame, uint32_t timeoutMs) {
     if (!pool_) return false;
+
+    // A game switching display mode changes the capture item's size under us.
+    // The pool goes on producing frames at its original size, so the new, smaller
+    // desktop arrives pasted into the corner of a buffer still holding the old
+    // picture - recorded as a frame with two taskbars in it.
+    //
+    // Direct3D11CaptureFramePool::Recreate looks like the answer and is not:
+    // measured on this machine, frame delivery stopped dead for the whole six
+    // seconds the new mode was active, and the first frame at the new size only
+    // arrived after the mode changed back. Tearing the source down and starting
+    // it again uses the path that is known to work. It costs a few frames at the
+    // moment of the change, which is what a mode change looks like anyway.
+    try {
+        const auto size = item_ ? item_.Size() : winrt::Windows::Graphics::SizeInt32{};
+        const uint32_t contentWidth = static_cast<uint32_t>(size.Width);
+        const uint32_t contentHeight = static_cast<uint32_t>(size.Height);
+        if (contentWidth && contentHeight && (contentWidth != width_ || contentHeight != height_)) {
+            Stop();
+            if (!Start(displayId_, targetFps_)) return false;
+            return false;   // nothing to deliver this tick; the caller resizes first
+        }
+    } catch (...) { /* a failed restart is caught by the next tick or by Closed */ }
 
     // The previous frame is held until now so its texture stays valid while the
     // encoder reads it. Closing it before pulling the next keeps the pool from

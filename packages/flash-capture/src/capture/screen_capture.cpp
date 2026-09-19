@@ -451,6 +451,21 @@ void ScreenCapture::CaptureLoop() {
     while (capturing_.load()) {
         const auto frameStart = clock::now();
         SourceFrame frame{};
+        // The source can change size under us - a game switching display mode.
+        // The staging texture and the video processor are both built from these
+        // dimensions, so they have to be rebuilt before the next frame is
+        // converted, or the new picture lands in the corner of a buffer still
+        // holding the old one.
+        if (source_ && (source_->Width() != width_ || source_->Height() != height_) &&
+            source_->Width() && source_->Height()) {
+            width_ = source_->Width();
+            height_ = source_->Height();
+            if (!CreateFrameResources()) {
+                SetCaptureError("could not rebuild capture resources after a display mode change");
+                capturing_.store(false);
+                break;
+            }
+        }
         if (source_ && source_->Next(frame, 1000 / targetFps_)) {
             DeliverFrame(frame.texture, frame.timestampUs);
         }
