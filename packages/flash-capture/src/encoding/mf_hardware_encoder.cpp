@@ -76,7 +76,10 @@ static bool AppendOutput(IMFTransform* transform, const MFT_OUTPUT_STREAM_INFO& 
     const bool releaseSample = (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES) != 0;
     ComPtr<IMFMediaBuffer> bytes; hr = out.pSample->ConvertToContiguousBuffer(&bytes);
     if (out.pEvents) out.pEvents->Release(); if (FAILED(hr)) { if (releaseSample) out.pSample->Release(); return false; }
-    BYTE* data = nullptr; DWORD length = 0; if (FAILED(bytes->Lock(&data, nullptr, &length))) return false;
+    // Every other failure path below already releases an MFT-provided sample;
+    // this one did not, and leaked the sample and its surface on each failure.
+    BYTE* data = nullptr; DWORD length = 0;
+    if (FAILED(bytes->Lock(&data, nullptr, &length))) { if (releaseSample) out.pSample->Release(); return false; }
     EncodedPacket packet; packet.data.assign(data, data + length); bytes->Unlock();
     LONGLONG time = 0; out.pSample->GetSampleTime(&time); packet.timestamp_us = time / 10;
     UINT32 clean = FALSE; packet.isKeyframe = SUCCEEDED(out.pSample->GetUINT32(MFSampleExtension_CleanPoint, &clean)) && clean;
@@ -146,10 +149,16 @@ bool MfHardwareEncoder::EncodeFrame(const FrameData& frame, std::vector<EncodedP
     const uint32_t fps = impl_->config.fps ? impl_->config.fps : 60;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(4 * 1000000 / fps);
     // Allocate the input pool once rather than allocating a texture per frame.
+    // All or nothing. A failure partway through used to leave slot zero filled,
+    // so the next call saw a populated pool, skipped allocation, and eventually
+    // rotated onto an empty slot and handed CopyResource a null destination.
     if (!impl_->inputTextures[0]) {
         D3D11_TEXTURE2D_DESC desc{}; frame.texture->GetDesc(&desc);
         for (auto& texture : impl_->inputTextures)
-            if (FAILED(impl_->config.device->CreateTexture2D(&desc, nullptr, &texture))) return false;
+            if (FAILED(impl_->config.device->CreateTexture2D(&desc, nullptr, &texture))) {
+                for (auto& allocated : impl_->inputTextures) allocated.Reset();
+                return false;
+            }
     }
 
     auto submit = [&]() -> bool {

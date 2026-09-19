@@ -65,6 +65,12 @@ public:
     ~VoiceCallbackBridge() { Close(); }
 
     void Dispatch(const std::string& phrase, double rawConfidence) noexcept {
+        // Serialised against Close. Checking the flag and enqueueing were two
+        // separate steps, so a Close landing between them aborted the
+        // ThreadSafeFunction — releasing its only thread reference — and the
+        // call went to a finalised function. NonBlockingCall only queues, so
+        // no JavaScript runs under this lock.
+        std::lock_guard lock(mutex_);
         if (closed_.load()) return;
         auto* event = new (std::nothrow) VoiceCommandEvent{phrase, rawConfidence};
         if (!event) return;
@@ -80,11 +86,13 @@ public:
     }
 
     void Close() noexcept {
+        std::lock_guard lock(mutex_);
         if (!closed_.exchange(true)) tsfn_.Abort();
     }
 
 private:
     Napi::ThreadSafeFunction tsfn_;
+    std::mutex mutex_;
     std::atomic<bool> closed_{false};
 };
 

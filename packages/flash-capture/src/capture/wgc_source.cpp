@@ -15,6 +15,7 @@
 #include <winrt/Windows.Graphics.Capture.h>
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -40,6 +41,9 @@ public:
     bool Next(SourceFrame& frame, uint32_t timeoutMs) override;
     void Stop() override;
     const char* Name() const override { return "Windows.Graphics.Capture"; }
+    const char* Failure() const override {
+        return closed_ && closed_->load() ? "the captured display was closed or disconnected" : nullptr;
+    }
     uint32_t Width() const override { return width_; }
     uint32_t Height() const override { return height_; }
 
@@ -49,6 +53,11 @@ private:
 
     ID3D11Device* device_ = nullptr;
     capture::GraphicsCaptureItem item_{nullptr};
+    // Shared with the Closed handler so the handler cannot outlive what it
+    // writes to. The revoker below unsubscribes on Stop, but the event can
+    // still be in flight when it does.
+    std::shared_ptr<std::atomic<bool>> closed_;
+    capture::GraphicsCaptureItem::Closed_revoker closedRevoker_;
     capture::Direct3D11CaptureFramePool pool_{nullptr};
     capture::GraphicsCaptureSession session_{nullptr};
     capture::Direct3D11CaptureFrame current_{nullptr};
@@ -118,6 +127,12 @@ bool WgcSource::Start(uint32_t displayId, uint32_t fps) {
                 winrt::put_abi(item_))) || !item_) {
             return false;
         }
+
+        // The one signal that says the target is gone for good rather than
+        // merely quiet.
+        closed_ = std::make_shared<std::atomic<bool>>(false);
+        closedRevoker_ = item_.Closed(winrt::auto_revoke,
+            [closed = closed_](auto&&, auto&&) { closed->store(true); });
 
         // The frame pool is built on the capture device the encoder already
         // shares, so a frame reaches the encoder without a cross-device copy.
@@ -242,6 +257,7 @@ bool WgcSource::Next(SourceFrame& frame, uint32_t timeoutMs) {
 }
 
 void WgcSource::Stop() {
+    closedRevoker_.revoke();
     ReleaseCurrentFrame();
     // Released here rather than left to the destructor: a restart at a new
     // resolution must not re-deliver a frame of the old size.

@@ -28,6 +28,14 @@ public:
     // resources from these, so a backend must know them before its first frame.
     virtual uint32_t Width() const = 0;
     virtual uint32_t Height() const = 0;
+
+    // Non-null once the backend has failed for good — the captured monitor was
+    // unplugged, the session was closed under it. Distinct from Next()
+    // returning false, which only means no new frame this tick. The caller has
+    // to stop rather than keep recording, because both backends re-deliver
+    // their last frame on an empty tick: without this a dead source records a
+    // frozen image and reports itself healthy the whole time.
+    virtual const char* Failure() const { return nullptr; }
 };
 
 // Returns null when Windows.Graphics.Capture is unavailable, so the caller can

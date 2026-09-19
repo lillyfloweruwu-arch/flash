@@ -454,6 +454,17 @@ void ScreenCapture::CaptureLoop() {
         if (source_ && source_->Next(frame, 1000 / targetFps_)) {
             DeliverFrame(frame.texture, frame.timestampUs);
         }
+        // Checked after the frame, not instead of it: a source that has just
+        // died still hands back its last image, and recording that forever is
+        // worse than stopping, because the clip looks fine until you watch it.
+        // The watchdog restarts from here.
+        if (source_) {
+            if (const char* failure = source_->Failure()) {
+                SetCaptureError(failure);
+                capturing_.store(false);
+                break;
+            }
+        }
         const auto elapsed = clock::now() - frameStart;
         if (elapsed < duration) {
             const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(duration - elapsed);
