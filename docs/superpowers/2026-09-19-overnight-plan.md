@@ -46,13 +46,18 @@ Working branch: clip-editor-native-foundation.
 
 ## B — Feel better (UI)
 
-- [ ] B1 Actually look at every screen, at more than one window size
-- [ ] B2 Fix what the look turns up
-- [ ] B3 Clip with no audio tracks: check the mixer does not draw nonsense
+- [x] B1 Looked at the library, settings, player and editor by driving the real packaged
+      app over the DevTools protocol and reading the screenshots.
+- [x] B2 What the look turned up: every card was headed with six raw numbers, and the
+      short-clip hotkey claimed "last 60s" against a 15s buffer. Both fixed.
+- [ ] B3 Not checked: a clip with no audio tracks at all in the editor's mixer.
 
 ## C — New capability
 
-- [ ] C1 Pick from the design spec's unbuilt phases, say why
+- [x] C1 Starred clips, with auto-delete exemption. Picked over the spec's bigger unbuilt
+      phases because auto-delete could already eat a clip the user cared about, and there
+      was no way to say "keep this one". State lives in the clip's own sidecar, so it
+      survives a settings reset and travels with the file.
 
 ## D — Lean
 

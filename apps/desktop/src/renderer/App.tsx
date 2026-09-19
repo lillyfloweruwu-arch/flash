@@ -26,6 +26,7 @@ interface Clip {
   filePath: string
   size: number
   createdAt: number
+  starred: boolean
 }
 
 interface Display {
@@ -173,6 +174,17 @@ function RenameTitle({ title, display, onCommit, size = 12 }: {
 }
 
 // ── Stickman Logo ─────────────────────────────────────────────────────────────
+
+// One shape, filled or outlined, so a starred clip reads at a glance without a
+// second icon to learn.
+function StarIcon({ filled, size = 12 }: { filled: boolean; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 12 12" fill={filled ? 'currentColor' : 'none'} aria-hidden="true">
+      <path d="M6 1l1.55 3.14 3.45.5-2.5 2.44.59 3.44L6 8.9l-3.09 1.62.59-3.44L1 4.64l3.45-.5z"
+        stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" />
+    </svg>
+  )
+}
 
 function StickmanIcon({ size = 22 }: { size?: number }) {
   return (
@@ -669,10 +681,13 @@ function TopBar({ active, setActive, isRecording, onToggleRecording, detectedGam
 
 // ── Sidebar (My Clips only) ────────────────────────────────────────────────────
 
-function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
+function Sidebar({ games, gameFilter, setGameFilter, starredOnly, setStarredOnly, starredCount, storage, onOpenFolder }: {
   games: { name: string; count: number }[]
   gameFilter: string
   setGameFilter: (g: string) => void
+  starredOnly: boolean
+  setStarredOnly: (on: boolean) => void
+  starredCount: number
   storage: { used: number; clips: number }
   onOpenFolder: () => void
 }) {
@@ -683,6 +698,20 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
           className="w-full py-2 rounded-lg transition-all hover:brightness-110 active:scale-95 mb-4"
           style={{ fontWeight: 600, fontSize: 13, background: 'var(--accent)', color: 'var(--on-accent)' }}>
           Open Clips Folder
+        </button>
+
+        {/* Above Games, because "the ones I kept" cuts across every game. */}
+        <button onClick={() => setStarredOnly(!starredOnly)}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all duration-100 text-left mb-3"
+          style={{ background: starredOnly ? 'var(--accent-wash)' : 'transparent',
+                   color: starredOnly ? 'var(--fg)' : 'var(--muted-2)' }}>
+          <span className="flex items-center gap-2" style={{ fontSize: 13, fontWeight: starredOnly ? 500 : 400 }}>
+            <span style={{ color: starredOnly ? 'var(--spark)' : 'var(--muted-3)', display: 'flex' }}>
+              <StarIcon filled={starredOnly} size={11} />
+            </span>
+            Starred
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--faint)' }}>{starredCount}</span>
         </button>
 
         <p style={{ fontSize: 10, fontWeight: 600, color: 'var(--faint)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6, paddingLeft: 8 }}>Games</p>
@@ -718,13 +747,14 @@ function Sidebar({ games, gameFilter, setGameFilter, storage, onOpenFolder }: {
 
 // ── ClipCard ───────────────────────────────────────────────────────────────────
 
-function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspend }: {
+function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, onStar, suspend }: {
   clip: Clip
   selected: boolean
   onClick: (event: React.MouseEvent<HTMLDivElement>) => void
   onToggle: () => void
   onDelete: () => void
   onRename: (clip: Clip, name: string) => Promise<string | null>
+  onStar: () => void
   suspend: boolean
 }) {
   const [hov, setHov] = useState(false)
@@ -839,6 +869,19 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
             </button>
           </>
         )}
+        {/* Shown whenever it is set, not only on hover: which clips you kept is
+            the thing you want to see while scanning the grid. */}
+        {(hov || clip.starred) && (
+          <button
+            onClick={e => { e.stopPropagation(); onStar() }}
+            title={clip.starred ? 'Starred — kept when old clips are deleted' : 'Star this clip to keep it'}
+            aria-label={clip.starred ? `Unstar ${clip.title}` : `Star ${clip.title}`}
+            className="absolute w-6 h-6 rounded flex items-center justify-center transition-all"
+            style={{ top: 8, right: hov ? 40 : 8, background: 'rgba(0,0,0,0.6)',
+                     color: clip.starred ? 'var(--spark)' : 'var(--muted)' }}>
+            <StarIcon filled={clip.starred} />
+          </button>
+        )}
         <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.55)', border: '1px solid var(--edge-soft)' }}>
           <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--muted)' }}>{clip.game}</span>
         </div>
@@ -858,7 +901,7 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
 
 // ── ClipsPanel ─────────────────────────────────────────────────────────────────
 
-function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, selectedIds, onToggleSelection, onSelectRange, onSelectAll, onClearSelection, onOpenClip, onDeleteClip, onRenameClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
+function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, selectedIds, onToggleSelection, onSelectRange, onSelectAll, onClearSelection, onOpenClip, onDeleteClip, onRenameClip, onStarClip, isRecording, captureAvailable, hotkey, bufferLength, suspendThumbnails }: {
   clips: Clip[]
   query: string
   onQueryChange: (query: string) => void
@@ -871,6 +914,7 @@ function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, selectedIds
   onOpenClip: (clip: Clip) => void
   onDeleteClip: (clip: Clip) => void
   onRenameClip: (clip: Clip, name: string) => Promise<string | null>
+  onStarClip: (clip: Clip) => void
   isRecording: boolean
   captureAvailable: boolean
   hotkey: string
@@ -987,6 +1031,7 @@ function ClipsPanel({ clips, query, onQueryChange, shortcutsEnabled, selectedIds
               onToggle={() => onToggleSelection(clip.id)}
               onDelete={() => onDeleteClip(clip)}
               onRename={onRenameClip}
+              onStar={() => onStarClip(clip)}
               suspend={suspendThumbnails}
             />
           ))}
@@ -1411,6 +1456,11 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
               ]}
             />
           </Row>
+          {settings.autoDeleteDays > 0 && (
+            <p style={{ fontSize: 11, color: 'var(--muted-3)', lineHeight: 1.5, marginTop: 2 }}>
+              Starred clips are kept regardless.
+            </p>
+          )}
           <Row label="Format"><span style={{ fontSize: 12, color: 'var(--muted-2)' }}>MP4 / H.264</span></Row>
           <button onClick={onOpenFolder}
             className="mt-4 w-full py-2 rounded-lg text-xs transition-all hover:brightness-110"
@@ -1428,6 +1478,7 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
 export default function App() {
   const [active, setActive] = useState('My Clips')
   const [gameFilter, setGameFilter] = useState('All')
+  const [starredOnly, setStarredOnly] = useState(false)
   const [clipQuery, setClipQuery] = useState('')
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const [editingClip, setEditingClip] = useState<Clip | null>(null)
@@ -1526,7 +1577,8 @@ export default function App() {
   const allGames = clips.length > 0 ? [{ name: 'All', count: clips.length }, ...games] : []
 
   const gameFilteredClips = gameFilter === 'All' ? clips : clips.filter(c => c.game === gameFilter)
-  const filteredClips = clipQuery ? gameFilteredClips.filter(clip => matchesQuery(clip, clipQuery)) : gameFilteredClips
+  const starredFilteredClips = starredOnly ? gameFilteredClips.filter(c => c.starred) : gameFilteredClips
+  const filteredClips = clipQuery ? starredFilteredClips.filter(clip => matchesQuery(clip, clipQuery)) : starredFilteredClips
   const selectedClips = useMemo(() => clips.filter(clip => selectedIds.has(clip.id)), [clips, selectedIds])
 
   const clearSelected = useCallback(() => {
@@ -1612,6 +1664,18 @@ export default function App() {
     })
   }, [clearSelected, refreshClips, selectedClips])
 
+  // Written to the clip's sidecar, so the answer survives a settings reset and
+  // travels with the file. The list is updated optimistically because the round
+  // trip is a small file write and a flicker on a star is worse than a stale one.
+  const starClip = useCallback(async (clip: Clip) => {
+    const next = !clip.starred
+    setClips(current => current.map(c => c.filePath === clip.filePath ? { ...c, starred: next } : c))
+    const result = await window.flash?.setClipStarred(clip.filePath, next)
+    if (!result || result.error) {
+      setClips(current => current.map(c => c.filePath === clip.filePath ? { ...c, starred: clip.starred } : c))
+    }
+  }, [])
+
   const renameClip = useCallback(async (clip: Clip, name: string) => {
     if (!window.flash) return 'Rename is unavailable'
     const result = await window.flash.renameClip(clip.filePath, name)
@@ -1669,6 +1733,8 @@ export default function App() {
         {active !== 'Settings' && (
           <Sidebar
             games={allGames} gameFilter={gameFilter} setGameFilter={setGameFilter}
+            starredOnly={starredOnly} setStarredOnly={setStarredOnly}
+            starredCount={clips.filter(c => c.starred).length}
             storage={storage} onOpenFolder={() => window.flash?.openClipsFolder()}
           />
         )}
@@ -1702,6 +1768,7 @@ export default function App() {
               onOpenClip={clip => setPreviewIndex(filteredClips.findIndex(c => c.id === clip.id))}
               onDeleteClip={deleteClip}
               onRenameClip={renameClip}
+              onStarClip={starClip}
               isRecording={isRecording} captureAvailable={captureAvailable}
               hotkey={settings.hotkey} bufferLength={settings.bufferLength}
               suspendThumbnails={previewIndex !== null || editingClip !== null}

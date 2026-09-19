@@ -361,11 +361,12 @@ interface ClipInfo {
   filePath: string
   size: number
   createdAt: number
+  starred: boolean
 }
 
 const sidecarPath = (clipPath: string) => clipPath.slice(0, -extname(clipPath).length) + '.json'
 
-function readSidecar(clipPath: string): { duration: number; game: string } | null {
+function readSidecar(clipPath: string): { duration: number; game: string; starred?: boolean } | null {
   try { return JSON.parse(readFileSync(sidecarPath(clipPath), 'utf8')) } catch { return null }
 }
 
@@ -387,7 +388,8 @@ function scanClips(): ClipInfo[] {
           const name = basename(file, extname(file))
           // Real duration comes from the sidecar written at save time; fall back to a
           // size estimate (~2MB/s at 1080p60) for clips saved before sidecars existed.
-          const estimatedSec = kind === 'shot' ? 0 : readSidecar(filePath)?.duration
+          const sidecar = readSidecar(filePath)
+          const estimatedSec = kind === 'shot' ? 0 : sidecar?.duration
             ?? Math.max(1, Math.round(stat.size / (2 * 1024 * 1024)))
           const minutes = Math.floor(estimatedSec / 60)
           const seconds = estimatedSec % 60
@@ -401,6 +403,7 @@ function scanClips(): ClipInfo[] {
             filePath,
             size: stat.size,
             createdAt: stat.birthtimeMs,
+            starred: sidecar?.starred === true,
           })
         }
       }
@@ -540,7 +543,11 @@ let pruneTimer: ReturnType<typeof setInterval> | null = null
 function pruneOldClips() {
   if (!settings.autoDeleteDays) return
   const cutoff = Date.now() - settings.autoDeleteDays * 86400000
-  for (const clip of scanClips()) if (clip.createdAt < cutoff) deleteClip(clip.filePath)
+  // A starred clip is the one the user said they wanted to keep, which makes it
+  // exactly the wrong thing for a background timer to delete.
+  for (const clip of scanClips()) {
+    if (clip.createdAt < cutoff && !clip.starred) deleteClip(clip.filePath)
+  }
 }
 
 // A 30s 1080p60 clip at 20 Mbps is ~75 MB. Refuse below a floor rather than
@@ -1087,6 +1094,20 @@ function setupIPC() {
   ipcMain.handle('get-storage', () => getStorageUsage())
   ipcMain.handle('delete-clip', (_event, filePath: string) => deleteClip(filePath))
   ipcMain.handle('rename-clip', (_event, filePath: string, name: string) => renameClip(filePath, name))
+  // Kept in the clip's own sidecar rather than in settings, so a starred clip
+  // that is moved to another machine, or restored from a backup, is still
+  // starred - and so a settings file that gets reset cannot silently un-protect
+  // everything from the auto-delete timer.
+  ipcMain.handle('set-clip-starred', (_event, filePath: string, starred: boolean) => {
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
+    const sidecar = readSidecar(filePath) ?? { duration: 0, game: 'Unknown' }
+    try {
+      writeFileSync(sidecarPath(filePath), JSON.stringify({ ...sidecar, starred: starred === true }))
+      return { starred: starred === true }
+    } catch (error: any) {
+      return { error: error?.message || 'Could not update this clip' }
+    }
+  })
   ipcMain.handle('move-clips', (_event, filePaths: string[], game: string) => moveClips(filePaths, game))
   ipcMain.handle('save-clip-frame', (_event, filePath: string, playheadSeconds: number, bytes: Uint8Array) => {
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
