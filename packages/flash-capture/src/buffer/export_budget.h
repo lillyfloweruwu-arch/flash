@@ -17,6 +17,14 @@ struct ExportPlan {
 constexpr uint32_t kExportAudioKbps = 128;
 constexpr uint32_t kExportMinVideoKbps = 300;
 
+// The editor's full-quality save asks for a budget of Number.MAX_SAFE_INTEGER,
+// meaning "do not downscale for size". Unclamped, that came out as a bitrate of
+// around 1.7e13 kbps, which does not fit the uint32 it is stored in, and the
+// encoder answered MF_E_INVALIDMEDIATYPE — so every re-encoding save from the
+// editor failed. This is the same ceiling setQuality already enforces on the
+// recording path, and it is far above any real 4K bitrate.
+constexpr uint32_t kExportMaxVideoKbps = 200000;
+
 // Bits a frame can afford at a given resolution before it stops being watchable.
 // Below roughly 0.05 bits per pixel per frame H.264 turns to mush, so the plan
 // drops resolution rather than starving a larger one.
@@ -39,6 +47,7 @@ inline ExportPlan PlanExport(uint32_t sourceWidth, uint32_t sourceHeight, uint32
     const double totalKbits = (static_cast<double>(maxBytes) * 8.0 * 0.95) / 1000.0;
     double videoKbps = totalKbits / durationSeconds - plan.audioKbps;
     if (videoKbps < kExportMinVideoKbps) videoKbps = kExportMinVideoKbps;
+    if (videoKbps > kExportMaxVideoKbps) videoKbps = kExportMaxVideoKbps;
 
     const uint32_t ceiling = maxHeight ? (std::min)(maxHeight, sourceHeight) : sourceHeight;
     const uint32_t ladder[] = {2160, 1440, 1080, 720, 480, 360};

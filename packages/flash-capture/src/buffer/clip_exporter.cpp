@@ -216,14 +216,21 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
                 if (FAILED(buffer->Lock(&data, nullptr, &length))) continue;
                 const size_t frames = length / (kMixChannels * sizeof(float));
                 const int64_t offsetTicks = time - startTicks;
-                size_t at = offsetTicks > 0
+                const size_t at = offsetTicks > 0
                     ? static_cast<size_t>((offsetTicks / 10000000.0) * kMixRate) : 0;
+                // A packet that straddles the in-point used to be mixed in whole
+                // at offset zero, so an export starting mid-packet opened with up
+                // to a packet of audio from before the cut - audible pre-roll
+                // under a picture that starts in the right place.
+                const size_t skip = offsetTicks < 0
+                    ? (std::min)(frames, static_cast<size_t>(
+                        ((startTicks - time) * kMixRate + 9999999) / 10000000)) : 0;
                 const float* source = reinterpret_cast<const float*>(data);
-                for (size_t f = 0; f < frames && at + f < mixFrames; ++f)
+                for (size_t f = skip; f < frames && at + f - skip < mixFrames; ++f)
                     for (uint32_t c = 0; c < kMixChannels; ++c)
-                        mix[(at + f) * kMixChannels + c] += source[f * kMixChannels + c] * gain;
+                        mix[(at + f - skip) * kMixChannels + c] += source[f * kMixChannels + c] * gain;
                 buffer->Unlock();
-                haveAudio = true;
+                haveAudio = haveAudio || (skip < frames && at < mixFrames);
             }
         }
         for (float& sample : mix) sample = (std::max)(-1.0f, (std::min)(1.0f, sample));
@@ -309,7 +316,11 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
             if (flags & MF_SOURCE_READERF_ENDOFSTREAM) break;
             if (!sample) continue;
             if (time >= endTicks) break;
-            const LONGLONG rebased = (std::max)(0LL, time - startTicks);
+            // Frames before the in-point were clamped to zero rather than
+            // dropped, so every frame between the keyframe the reader had to
+            // start from and the requested start piled up on timestamp zero.
+            if (time < startTicks) continue;
+            const LONGLONG rebased = time - startTicks;
             if (plan.fps < fps) {   // halved rate: keep every other frame
                 const LONGLONG slot = rebased / (10000000LL / (std::max)(1u, plan.fps));
                 if (slot == lastSlot) continue;

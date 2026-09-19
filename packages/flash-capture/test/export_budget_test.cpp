@@ -57,6 +57,24 @@ int main() {
         assert(plan.height >= 2);
     }
 
+    // "Do not downscale for size" is spelled Number.MAX_SAFE_INTEGER by the
+    // editor's full-quality save. Unclamped that produced a bitrate of about
+    // 1.7e13 kbps, which does not fit the uint32 it is stored in, so the encoder
+    // rejected the media type and every re-encoding save from the editor failed.
+    {
+        const auto plan = PlanExport(1920, 1080, 60, 4.0, 9007199254740991ull, 0);
+        assert(plan.height == 1080 && plan.width == 1920);
+        assert(plan.videoKbps == kExportMaxVideoKbps);
+        assert(plan.videoKbps <= kExportMaxVideoKbps && plan.videoKbps >= kExportMinVideoKbps);
+    }
+
+    // The clamp must not disturb a budget that was already sane.
+    {
+        const auto plan = PlanExport(1920, 1080, 60, 30.0, 100ull * 1024 * 1024, 0);
+        assert(plan.videoKbps < kExportMaxVideoKbps);
+        assert(plan.videoKbps > kExportMinVideoKbps);
+    }
+
     std::puts("export budget self-check passed");
     return 0;
 }
