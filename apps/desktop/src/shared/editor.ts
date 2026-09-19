@@ -1,9 +1,17 @@
 ﻿// Pure maths for the clip editor. No DOM and no Electron, so it can be checked
 // with `node --experimental-strip-types src/shared/editor.test.ts`.
 
+import { clipDisplayTitle } from './clipTitle.ts'
+
+
 export function matchesQuery(clip: { title: string; game: string }, query: string): boolean {
   const needle = query.toLowerCase()
-  return clip.title.toLowerCase().includes(needle) || clip.game.toLowerCase().includes(needle)
+  // The displayed title too, or searching for what you can plainly read on the
+  // card finds nothing: an unrenamed clip shows "13 Sep · 2:45:12 AM" and is
+  // called "2026 09 13 02 45 12".
+  return clip.title.toLowerCase().includes(needle) ||
+    clipDisplayTitle(clip.title).toLowerCase().includes(needle) ||
+    clip.game.toLowerCase().includes(needle)
 }
 
 export function formatTimecode(seconds: number): string {

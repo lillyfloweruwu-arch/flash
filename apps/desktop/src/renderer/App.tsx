@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl, matchesQuery } from '../shared/editor'
+import { clipDisplayTitle } from '../shared/clipTitle'
 import { resolveGameSettings } from '../shared/perGame'
 import { clearSelection, selectRange, toggleSelection } from '../shared/selection'
 import { countSyllables } from '../shared/syllables'
@@ -99,8 +100,13 @@ function timeAgo(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString()
 }
 
-function RenameTitle({ title, onCommit, size = 12 }: {
+// `display` is what the card shows; `title` is what the rename box starts
+// from and what the file is actually called. They differ only for clips
+// nobody has renamed, where the filename is a timestamp and the title made
+// from it is six numbers in a row.
+function RenameTitle({ title, display, onCommit, size = 12 }: {
   title: string
+  display?: string
   onCommit: (name: string) => Promise<string | null>
   size?: number
 }) {
@@ -128,7 +134,7 @@ function RenameTitle({ title, onCommit, size = 12 }: {
       <button type="button" title="Rename" onClick={event => { event.stopPropagation(); setEditing(true) }}
         className="flex items-center gap-1.5 min-w-0 text-left group"
         style={{ maxWidth: '100%', color: 'var(--fg)', fontSize: size, fontWeight: 500 }}>
-        <span className="truncate">{title}</span>
+        <span className="truncate">{display ?? title}</span>
         <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"
           style={{ color: 'var(--muted-3)', flexShrink: 0 }}>
           <path d="M2 8.5V10h1.5l6-6L8 2.5l-6 6zM7.5 3l1.5 1.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round"/>
@@ -557,7 +563,7 @@ function ClipPlayer({ clips, startIndex, onClose, onDelete, onEdit, onRename }: 
           <div className="w-full flex items-start justify-between" style={{ maxWidth: 900 }}>
             <div>
               <div style={{ marginBottom: 4 }}>
-                <RenameTitle title={clip.title} onCommit={renameCurrent} size={16} />
+                <RenameTitle title={clip.title} display={clipDisplayTitle(clip.title)} onCommit={renameCurrent} size={16} />
               </div>
               <div className="flex items-center gap-3" style={{ color: 'var(--muted-2)', fontSize: 12 }}>
                 <span style={{ color: 'var(--accent)' }}>{clip.game}</span>
@@ -839,7 +845,7 @@ function ClipCard({ clip, selected, onClick, onToggle, onDelete, onRename, suspe
       </div>
       <div className="p-3">
         <div style={{ marginBottom: 6, lineHeight: 1.4 }}>
-          <RenameTitle title={clip.title} onCommit={commitRename} />
+          <RenameTitle title={clip.title} display={clipDisplayTitle(clip.title)} onCommit={commitRename} />
         </div>
         <div className="flex items-center justify-between">
           <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{formatBytes(clip.size)}</span>
@@ -1158,7 +1164,7 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
             <HotkeyInput value={settings.hotkey} registered={hotkeysRegistered.clip}
               onChange={hotkey => onChange({ hotkey })} />
           </Row>
-          <Row label={`Short clip hotkey — last ${settings.shortClipSeconds}s`}>
+          <Row label={`Short clip hotkey — last ${Math.min(settings.shortClipSeconds, settings.bufferLength)}s`}>
             <HotkeyInput value={settings.hotkeyShort} registered={hotkeysRegistered.short}
               onChange={hotkeyShort => onChange({ hotkeyShort })} />
           </Row>
@@ -1167,7 +1173,11 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
               onChange={screenshotHotkey => onChange({ screenshotHotkey })} />
           </Row>
           <Row label="Short clip length">
-            <input type="range" min={5} max={60} step={5} value={settings.shortClipSeconds}
+            {/* A short clip cannot be longer than the buffer it is cut from.
+                Allowing it made the row above claim "last 60s" when there were
+                only 15 seconds in the buffer to save. */}
+            <input type="range" min={5} max={Math.max(5, settings.bufferLength)} step={5}
+              value={Math.min(settings.shortClipSeconds, settings.bufferLength)}
               onChange={e => onChange({ shortClipSeconds: +e.target.value })}
               style={{ accentColor: 'var(--accent)', width: 120 }} />
           </Row>

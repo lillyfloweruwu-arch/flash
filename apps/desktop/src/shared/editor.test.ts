@@ -11,6 +11,13 @@ const searchableClips = [
 ]
 assert.deepEqual(searchableClips.filter(clip => matchesQuery(clip, 'nAl')).map(clip => clip.id), ['title', 'game'])
 
+// An unrenamed clip is searchable by what the card actually shows.
+const autoNamed = [{ id: 'auto', title: '2026 09 13 02 45 12', game: 'Rocket League' }]
+assert.deepEqual(autoNamed.filter(clip => matchesQuery(clip, 'sep')).map(clip => clip.id), ['auto'])
+assert.deepEqual(autoNamed.filter(clip => matchesQuery(clip, '2:45')).map(clip => clip.id), ['auto'])
+assert.deepEqual(autoNamed.filter(clip => matchesQuery(clip, '2026 09 13')).map(clip => clip.id), ['auto'])
+assert.deepEqual(autoNamed.filter(clip => matchesQuery(clip, 'october')).map(clip => clip.id), [])
+
 assert.equal(formatTimecode(0), '0:00.0')
 assert.equal(formatTimecode(4.24), '0:04.2')
 assert.equal(formatTimecode(65.98), '1:05.9')

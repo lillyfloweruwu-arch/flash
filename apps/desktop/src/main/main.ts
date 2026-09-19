@@ -79,6 +79,7 @@ function loadSettings() {
   try {
     if (existsSync(settingsPath)) {
       settings = { ...DEFAULTS, ...sanitiseSettings(JSON.parse(readFileSync(settingsPath, 'utf8'))) }
+      settings.shortClipSeconds = Math.min(settings.shortClipSeconds, settings.bufferLength)
       // "Not a game" answers have to survive a restart or Flash asks again.
       for (const exe of settings.ignoredGames ?? []) ignoredExecutables.add(exe)
     }
@@ -1281,6 +1282,11 @@ function setupIPC() {
     // sanitiser dropped must not trigger the side effect that applies it.
     const changed = sanitiseSettings(rest)
     Object.assign(settings, changed)
+    // A short clip longer than the buffer it is cut from cannot exist: the save
+    // returns the whole buffer and the UI goes on claiming the longer number.
+    // Enforced here rather than only in the slider, because the buffer can be
+    // shortened after the short-clip length was set.
+    settings.shortClipSeconds = Math.min(settings.shortClipSeconds, settings.bufferLength)
     saveSettings()
     if (changed.bufferLength !== undefined || changed.quality !== undefined || changed.perGame !== undefined) {
       applyCaptureSettings()
