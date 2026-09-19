@@ -24,7 +24,11 @@ Working branch: clip-editor-native-foundation.
       Direct3D11CaptureFramePool::Recreate froze delivery for six seconds and was rejected;
       the source is torn down and restarted instead.
 - [ ] A4 Default audio device change is not followed
-- [ ] A5 decodeClipAudio ignores timestamps, so a late mic track draws early
+- [x] A5 Track alignment — checked and correct, and it turned up a hang instead.
+      Recording with the microphone on for 10s then off for 10s made saveClip hang
+      forever. Once fixed, the decoded mic track carries its energy in the first five
+      2-second windows (0.0004, 0.0004, 0.0003, 0.0005, 0.0005) and exactly zero in the
+      last five - the right half, not shifted.
 - [x] A6 Keyframe trim drift — FIXED. IMFSourceReader::SetCurrentPosition is documented as
       approximate and can land on the keyframe BEFORE the one asked for; that sample is a
       clean point too, so the existing check accepted it. The trimmer now reads forward to

@@ -137,29 +137,65 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     struct Write { int64_t timeUs; DWORD stream; const EncodedPacket* video; const AudioData* audio; };
     std::vector<Write> schedule;
     schedule.reserve(videoPackets.size() + audioPackets.size());
-    // A stream that never receives a sample is dropped from the file by
-    // IMFSinkWriter::Finalize, which would renumber the remaining tracks and put
-    // Discord's audio on the mic lane in the editor. Give every silent track the
-    // reference track's packet timing, filled with zeroes.
+    // Two separate failures, one cause: a stream whose timeline does not reach
+    // the end of the clip.
+    //
+    // A stream that never receives a sample at all is dropped from the file by
+    // IMFSinkWriter::Finalize, which renumbers the remaining tracks and puts
+    // Discord's audio on the mic lane in the editor.
+    //
+    // A stream that receives samples and then STOPS is worse: Finalize is not
+    // reached at all. IMFSinkWriter waits for that stream's timeline to catch up
+    // with video that runs on to the end, and saveClip never returns. That is
+    // what happens when the microphone is switched off mid-session, which is a
+    // thing the Settings toggle now actually does.
+    //
+    // Both are fixed the same way: wherever a track has no packet and the
+    // reference track does, write silence with the reference's timing.
     std::vector<float> silence;
     std::vector<AudioData> silentPackets;
     {
         std::string_view referenceId;
         for (const auto& s : audioStreams) if (s.present) { referenceId = s.id; break; }
+
+        // The reference timeline: one entry per packet, in order.
+        struct Slot { int64_t timeUs; uint32_t frameCount; };
+        std::vector<Slot> reference;
+        for (const auto& p : audioPackets)
+            if (p.sourceId == referenceId) reference.push_back({p.timestamp_us, p.frameCount});
+        std::stable_sort(reference.begin(), reference.end(),
+            [](const Slot& a, const Slot& b) { return a.timeUs < b.timeUs; });
+
         size_t widest = 0;
         for (const auto& s : audioStreams) {
-            if (s.present || !s.channels) continue;
-            for (const auto& p : audioPackets)
-                if (p.sourceId == referenceId)
-                    widest = (std::max)(widest, static_cast<size_t>(p.frameCount) * s.channels);
+            if (!s.channels) continue;
+            for (const auto& slot : reference)
+                widest = (std::max)(widest, static_cast<size_t>(slot.frameCount) * s.channels);
         }
         silence.assign(widest, 0.0f);
+
         for (const auto& s : audioStreams) {
-            if (s.present || !s.channels) continue;
-            for (const auto& p : audioPackets)
-                if (p.sourceId == referenceId)
-                    silentPackets.push_back({silence.data(), p.frameCount, s.channels,
-                                             s.sampleRate, p.timestamp_us, std::string(s.id)});
+            if (!s.channels || s.id == referenceId) continue;
+            // What this track already covers, in order, so the sweep below is
+            // linear rather than a search per reference packet.
+            struct Span { int64_t fromUs, toUs; };
+            std::vector<Span> covered;
+            for (const auto& p : audioPackets) {
+                if (p.sourceId != s.id || !p.samples || !p.sampleRate) continue;
+                covered.push_back({p.timestamp_us,
+                    p.timestamp_us + static_cast<int64_t>(p.frameCount) * 1000000 / p.sampleRate});
+            }
+            std::stable_sort(covered.begin(), covered.end(),
+                [](const Span& a, const Span& b) { return a.fromUs < b.fromUs; });
+
+            size_t at = 0;
+            for (const auto& slot : reference) {
+                while (at < covered.size() && covered[at].toUs <= slot.timeUs) ++at;
+                const bool inside = at < covered.size() && covered[at].fromUs <= slot.timeUs;
+                if (inside) continue;
+                silentPackets.push_back({silence.data(), slot.frameCount, s.channels,
+                                         s.sampleRate, slot.timeUs, std::string(s.id)});
+            }
         }
     }
 
@@ -172,7 +208,7 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     }
     for (const auto& p : silentPackets)
         for (const auto& stream : audioStreams)
-            if (!stream.present && p.sourceId == stream.id)
+            if (stream.channels && p.sourceId == stream.id)
                 schedule.push_back({p.timestamp_us, stream.index, nullptr, &p});
     // Stable so that samples sharing a timestamp keep video-before-audio order.
     std::stable_sort(schedule.begin(), schedule.end(),
