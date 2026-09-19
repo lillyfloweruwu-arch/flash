@@ -16,6 +16,7 @@ import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
 import { clipTimestamp, firstFreeName, gameFolderName } from '../shared/clipPath'
 import { isInsideRoot } from '../shared/clipsRoot'
+import { sanitise } from '../shared/sanitise'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -60,33 +61,13 @@ type Settings = typeof DEFAULTS
 let settings: Settings = { ...DEFAULTS }
 let settingsPath = ''
 
-// Spreading the parsed file over the defaults fills in missing keys but keeps
-// whatever type the file happened to hold. A hand-edited (or half-written)
-// settings.json with `"overlayPosition": null` then reaches overlayBounds and
-// throws during startup, before the window exists — Flash appears not to launch
-// at all. Anything whose type does not match its default is dropped instead.
+// The generic half of this lives in shared/sanitise.ts, where it has a
+// self-check. Only the enum belongs here.
 function sanitiseSettings(parsed: unknown): Partial<Settings> {
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-  const clean: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const fallback = (DEFAULTS as Record<string, unknown>)[key]
-    if (fallback === undefined) continue                      // unknown key
-    if (Array.isArray(fallback)) {
-      if (Array.isArray(value)) clean[key] = value
-      continue
-    }
-    if (typeof fallback === 'object') {
-      if (value && typeof value === 'object' && !Array.isArray(value)) clean[key] = value
-      continue
-    }
-    if (typeof value !== typeof fallback) continue
-    if (typeof value === 'number' && !Number.isFinite(value)) continue
-    clean[key] = value
-  }
+  const clean = sanitise(DEFAULTS as Record<string, unknown>, parsed) as Record<string, unknown>
   // overlayPosition is really an enum, and a wrong value crashes rather than
-  // merely looking wrong: overlayBounds reads it as two booleans and an unknown
-  // string silently pins the pill to the top-left of the wrong monitor edge.
-  // (An unknown theme is already safe — getTheme falls back to the default.)
+  // merely looking wrong: overlayBounds reads it as two booleans, and anything
+  // that is not one of these four pins the pill to the wrong screen edge.
   if (typeof clean.overlayPosition === 'string' &&
       !['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(clean.overlayPosition)) {
     delete clean.overlayPosition
@@ -535,6 +516,11 @@ function moveClips(filePaths: string[], game: string): { moved: number; error?: 
   const count = errors.length
   return { moved, error: `${count} item${count === 1 ? '' : 's'} could not be moved: ${errors[0]}` }
 }
+
+// Flash lives in the tray for days at a time, so running this only at launch
+// meant "delete clips older than N days" quietly did nothing until the next
+// restart — on a machine that never restarts, nothing at all.
+let pruneTimer: ReturnType<typeof setInterval> | null = null
 
 function pruneOldClips() {
   if (!settings.autoDeleteDays) return
@@ -1622,6 +1608,7 @@ app.on('ready', () => {
   const clipsFolderError = ensureClipsFolder()
 
   pruneOldClips()
+  pruneTimer = setInterval(pruneOldClips, 6 * 3600 * 1000)
 
   captureAddon = loadCaptureAddon()
   if (captureAddon) {
@@ -1671,6 +1658,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   stopGameDetection()
   if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
+  if (pruneTimer) { clearInterval(pruneTimer); pruneTimer = null }
   try { captureAddon?.setVoiceEnabled?.(false) } catch { /* ignore */ }
   try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
 })
