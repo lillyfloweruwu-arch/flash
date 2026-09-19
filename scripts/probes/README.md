@@ -15,6 +15,7 @@ code was not enough:
 | `display-mode-change.js` | A resolution change recorded the new desktop in the corner of the old one |
 | `audio-track-gap.js` | `saveClip` hung forever when a track stopped mid-recording |
 | `audio-toggle.js` | The Audio capture switch had never done anything |
+| `audio-all-tracks-off.js` | `saveClip` hung again when EVERY track stopped, which the toggle does in one click |
 | `audio-under-load.js` | A timestamp defect that is real in the code and does not show up in the output |
 | `process-list-vs-tasklist.js` | That the native process list agrees with `tasklist` on 330 of 332 processes |
 

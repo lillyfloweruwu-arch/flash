@@ -166,6 +166,24 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         std::stable_sort(reference.begin(), reference.end(),
             [](const Slot& a, const Slot& b) { return a.timeUs < b.timeUs; });
 
+        // The reference track can stop too - switching Audio capture off stops
+        // every source at once - and then there is no timeline left to borrow,
+        // so every audio stream ends early together and the writer waits for all
+        // of them. Carry the cadence forward to the end of the video instead.
+        int64_t videoEndUs = 0;
+        for (const auto& p : videoPackets) videoEndUs = (std::max)(videoEndUs, p.timestamp_us);
+        if (!reference.empty() && fallbackRate) {
+            const uint32_t cadence = reference.back().frameCount ? reference.back().frameCount : 480;
+            const int64_t step = (std::max)(
+                static_cast<int64_t>(1), static_cast<int64_t>(cadence) * 1000000 / fallbackRate);
+            int64_t at = reference.back().timeUs + step;
+            // Bounded by the video's own length, so a corrupt timestamp cannot
+            // spin this.
+            for (int guard = 0; at <= videoEndUs && guard < 200000; ++guard, at += step) {
+                reference.push_back({at, cadence});
+            }
+        }
+
         size_t widest = 0;
         for (const auto& s : audioStreams) {
             if (!s.channels) continue;
@@ -174,8 +192,12 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         }
         silence.assign(widest, 0.0f);
 
+        // The reference track is filled too. It covers its own real packets, so
+        // the sweep only ever adds silence where it has none - which, once the
+        // timeline is carried past the last packet above, is exactly the tail it
+        // needs to reach the end of the video.
         for (const auto& s : audioStreams) {
-            if (!s.channels || s.id == referenceId) continue;
+            if (!s.channels) continue;
             // What this track already covers, in order, so the sweep below is
             // linear rather than a search per reference packet.
             struct Span { int64_t fromUs, toUs; };

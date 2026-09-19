@@ -1,0 +1,21 @@
+// Audio on, then off, then save the whole buffer - the flow the Settings toggle
+// makes easy, and the one where every audio track stops at once.
+const addon = require('./addon')
+const os = require('os'), path = require('path'), fs = require('fs')
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flash-alloff-'))
+const wait = ms => new Promise(r => setTimeout(r, ms))
+;(async () => {
+  addon.initialize(dir, 0); addon.setBufferLength(20); addon.startReplayBuffer()
+  addon.setAudioTracks({ game: true, mic: true, other: true })
+  await wait(8000)
+  addon.setAudioTracks({ game: false, mic: false, other: false })
+  await wait(8000)
+  const started = Date.now()
+  const clip = await addon.saveClip()
+  const audio = await addon.decodeClipAudio(clip.path)
+  const keys = await addon.getClipKeyframes(clip.path)
+  console.log(`saved in ${Date.now() - started}ms: ${clip.duration.toFixed(2)}s video ${keys.durationSeconds.toFixed(2)}s`)
+  console.log(`audio tracks: ${audio.tracks.map(t => `${t.id}=${(t.samples.length / audio.sampleRate).toFixed(2)}s`).join(' ') || 'none'}`)
+  addon.stopReplayBuffer(); fs.rmSync(dir, { recursive: true, force: true })
+  console.log('PASS: saving after every track stopped returns')
+})().catch(e => { console.error('ERROR', e.message); process.exit(1) })
