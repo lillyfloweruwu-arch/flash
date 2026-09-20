@@ -3,6 +3,7 @@ import { THEMES, DEFAULT_THEME } from '../shared/themes'
 import { toAccelerator } from '../shared/accelerator'
 import { clipUrl, matchesQuery } from '../shared/editor'
 import { clipDisplayTitle } from '../shared/clipTitle'
+import type { AutostartState } from '../preload/preload'
 import { resolveGameSettings } from '../shared/perGame'
 import { clearSelection, selectRange, toggleSelection } from '../shared/selection'
 import { countSyllables } from '../shared/syllables'
@@ -1131,7 +1132,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   )
 }
 
-function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, voiceStatus, hotkeysRegistered, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
+function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, voiceStatus, hotkeysRegistered, autostart, onToggleAutostart, displays, health, learnedGames, onForgetGame, onOpenFolder, onPickFolder }: {
   settings: Settings
   onChange: (partial: Partial<Settings>) => void
   storage: { used: number; clips: number }
@@ -1139,6 +1140,8 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
   captureBackend: string
   voiceStatus: VoiceStatus
   hotkeysRegistered: { clip: boolean; short: boolean; screenshot: boolean }
+  autostart: AutostartState
+  onToggleAutostart: () => void
   displays: Display[]
   health: CaptureHealth | null
   learnedGames: Record<string, string>
@@ -1272,6 +1275,18 @@ function SettingsPanel({ settings, onChange, storage, encoder, captureBackend, v
           <Row label="Audio capture">
             <Toggle on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
           </Row>
+          {autostart.supported && (
+            <Row label="Start with Windows">
+              <Toggle on={autostart.enabled} onChange={onToggleAutostart} />
+            </Row>
+          )}
+          {autostart.supported && (autostart.managedByWindows || autostart.error) && (
+            <p style={{ fontSize: 11, color: 'var(--alert)', lineHeight: 1.5, marginTop: 2 }}>
+              {autostart.managedByWindows
+                ? 'Turned off in Windows. Re-enable Flash under Startup apps in Task Manager.'
+                : autostart.error}
+            </p>
+          )}
           <Row label="Encoder">
             <span style={{ fontSize: 12, color: encoder === 'none' ? 'var(--alert)' : 'var(--ok)' }}>{encoder}</span>
           </Row>
@@ -1502,6 +1517,22 @@ export default function App() {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null)
   // All three keys, so a secondary hotkey lost to another app is visible in
   // Settings instead of looking fine and doing nothing.
+  // Windows is the source of truth here, not our own settings file, so this is
+  // re-read whenever Settings is opened rather than remembered.
+  const [autostart, setAutostart] = useState<AutostartState>(
+    { enabled: false, managedByWindows: false, supported: false })
+  // Re-read every time Settings is opened. Windows can have been changed
+  // underneath us since the app started - Task Manager's Startup tab is one
+  // click away - and a toggle showing a cached answer is a toggle that lies.
+  useEffect(() => {
+    if (active === 'Settings') window.flash?.getAutostart().then(setAutostart)
+  }, [active])
+
+  const toggleAutostart = useCallback(async () => {
+    const next = await window.flash?.setAutostart(!autostart.enabled)
+    if (next) setAutostart(next)
+  }, [autostart.enabled])
+
   const [hotkeysRegistered, setHotkeysRegistered] = useState(
     { hotkey: '', clip: true, short: true, screenshot: true })
   const [identifyRequest, setIdentifyRequest] = useState<{ exe: string; suggested: string } | null>(null)
@@ -1699,6 +1730,7 @@ export default function App() {
     window.flash.getSettings().then(setSettings)
     window.flash.getVoiceStatus().then(setVoiceStatus)
     window.flash.getHotkeyStatus().then(setHotkeysRegistered)
+    window.flash.getAutostart().then(setAutostart)
     window.flash.capture.listDisplays().then(setDisplays)
     window.flash.capture.onSaveState(setSaveState)
     window.flash.onIdentifyGame(setIdentifyRequest)
@@ -1744,7 +1776,8 @@ export default function App() {
               settings={settings} onChange={updateSettings} storage={storage} encoder={encoder}
               captureBackend={captureBackend}
               voiceStatus={voiceStatus}
-              hotkeysRegistered={hotkeysRegistered} displays={displays} health={health}
+              hotkeysRegistered={hotkeysRegistered} autostart={autostart} onToggleAutostart={toggleAutostart}
+              displays={displays} health={health}
               learnedGames={learnedGames}
               onForgetGame={async exe => setLearnedGames(await window.flash!.forgetGame(exe))}
               onOpenFolder={() => window.flash?.openClipsFolder()}

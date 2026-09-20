@@ -54,7 +54,8 @@
       "uninstallerSidebar": "../../assets/installer/sidebar-uninstall.bmp",
       "installerIcon": "../../assets/icons/blood.ico",
       "uninstallerIcon": "../../assets/icons/blood.ico",
-      "uninstallDisplayName": "Flash ${version}"
+      "uninstallDisplayName": "Flash ${version}",
+      "include": "installer/flash-autostart.nsh"
     },
     "electronLanguages": [
       "en-US"

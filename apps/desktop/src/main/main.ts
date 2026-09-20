@@ -16,6 +16,7 @@ import { resolveClipFilename, validateClipName } from '../shared/rename'
 import { clipTimestamp, firstFreeName, gameFolderName } from '../shared/clipPath'
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
+import { decideAutostart } from '../shared/autostart'
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -50,6 +51,13 @@ const DEFAULTS = {
   autoSave: true,
   notifications: true,
   autoDeleteDays: 0,  // 0 = never
+  // WHICH installer request has already been acted on for this Windows
+  // account, as the marker file's modification time. Not a boolean: the app
+  // cannot delete the marker (it lives in Program Files, which it may not
+  // write), so a plain "already done" flag would make every later install
+  // ignore the checkbox. A new install writes a new marker with a new
+  // timestamp, which is a new request. 0 means none consumed yet.
+  autostartMarkerConsumedAt: 0,
   learnedGames: {} as Record<string, string>,   // exe (lowercase) -> display name
   ignoredGames: [] as string[],                 // exe the user said is not a game
   perGame: {} as PerGameSettings,
@@ -172,6 +180,90 @@ function ensureClipsFolder(): string | null {
     catch (fallbackError: any) { return fallbackError?.message || 'Could not create the clips folder' }
     return `${unavailable} is not available — clips are going to ${settings.clipsFolder} for now`
   }
+}
+
+// ── Start with Windows ───────────────────────────────────────────────────────
+
+// The argument Windows launches us with, and the only way to know it did.
+// Electron's `wasOpenedAtLogin` and `openAsHidden` are macOS-only, so the
+// launch item carries its own flag and we read our own argv.
+const AUTOSTART_FLAG = '--autostart'
+const startedByWindows = process.argv.includes(AUTOSTART_FLAG)
+
+// The installer drops this beside the app when its checkbox was ticked. It is a
+// request, never a state: the app owns the actual Windows startup entry, because
+// the installer runs elevated per-machine and a startup entry written from there
+// would land on the administrator's account rather than the person using Flash.
+const autostartMarkerPath = () => resource('autostart-requested', 'autostart-requested')
+
+function loginItemArgs(): string[] {
+  return [AUTOSTART_FLAG]
+}
+
+// Windows is the source of truth, never the settings file. Someone can turn
+// Flash off in Task Manager's Startup tab, and a toggle that reported our own
+// saved boolean would sit there claiming to be on.
+function autostartState(): { enabled: boolean; managedByWindows: boolean } {
+  if (process.platform !== 'win32' || !app.isPackaged) return { enabled: false, managedByWindows: false }
+  try {
+    const state = app.getLoginItemSettings({ path: app.getPath('exe'), args: loginItemArgs() })
+    // executableWillLaunchAtLogin accounts for Task Manager having disabled the
+    // entry, which openAtLogin on its own does not.
+    return {
+      enabled: state.executableWillLaunchAtLogin,
+      managedByWindows: state.openAtLogin && !state.executableWillLaunchAtLogin,
+    }
+  } catch (error) {
+    console.warn('Could not read the Windows startup entry', error)
+    return { enabled: false, managedByWindows: false }
+  }
+}
+
+function setAutostart(enabled: boolean): { enabled: boolean; managedByWindows: boolean; error?: string } {
+  if (process.platform !== 'win32') return { enabled: false, managedByWindows: false, error: 'Only Windows has a startup list' }
+  // A development run would register electron.exe in the user's Run key, which
+  // is somebody else's mess to clean up.
+  if (!app.isPackaged) return { enabled: false, managedByWindows: false, error: 'Only an installed build can start with Windows' }
+  try {
+    app.setLoginItemSettings({ openAtLogin: enabled, path: app.getPath('exe'), args: loginItemArgs() })
+  } catch (error: any) {
+    return { ...autostartState(), error: error?.message || 'Windows refused the change' }
+  }
+  // Read back rather than report what was asked for: the write can be refused by
+  // policy without throwing.
+  const state = autostartState()
+  if (state.enabled !== enabled) {
+    return { ...state, error: enabled ? 'Windows did not accept the change' : 'Windows still lists Flash as a startup app' }
+  }
+  return state
+}
+
+// Runs once at startup. Deliberately never turns autostart OFF: the marker is
+// absent both when the user declined and when they simply were not asked, and
+// an update that silently switched off a setting they chose would be worse than
+// not having the feature.
+function applyInstallerAutostartRequest() {
+  if (process.platform !== 'win32') return
+  const marker = autostartMarkerPath()
+  let writtenAt = 0
+  try { writtenAt = existsSync(marker) ? Math.round(statSync(marker).mtimeMs) : 0 }
+  catch { writtenAt = 0 }
+
+  const decision = decideAutostart({
+    installerRequested: writtenAt !== 0,
+    markerConsumed: writtenAt !== 0 && writtenAt === settings.autostartMarkerConsumedAt,
+    currentlyEnabled: autostartState().enabled,
+    packaged: app.isPackaged,
+  })
+  if (!decision.consumeMarker) return
+
+  settings.autostartMarkerConsumedAt = writtenAt
+  if (decision.apply) {
+    const result = setAutostart(true)
+    if (result.error) console.warn('Could not apply the installer autostart request:', result.error)
+    else console.log('Autostart enabled from the installer request')
+  }
+  saveSettings()
 }
 
 // ── Capture Addon ────────────────────────────────────────────────────────────
@@ -1018,6 +1110,11 @@ function createWindow() {
     // No titleBarOverlay: Chromium draws those controls on top of the app's own
     // top-right buttons. The window controls are rendered in React instead.
     frame: false,
+    // Created hidden when Windows launched us, not shown and then hidden: the
+    // second way paints a full window for a frame before it disappears, at every
+    // single login. Every other background app on a normal machine starts quiet
+    // (Steam -silent, Discord --start-inactive, Spotify --minimized).
+    show: !startedByWindows,
     backgroundColor: '#0C0607',
     webPreferences: {
       preload: join(__dirname, '../preload/preload.js'),
@@ -1326,6 +1423,10 @@ function setupIPC() {
     return { ...settings }
   })
   ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, ...hotkeyStatus }))
+  ipcMain.handle('autostart-status', () => ({ ...autostartState(), supported: process.platform === 'win32' && app.isPackaged }))
+  ipcMain.handle('set-autostart', (_event, enabled: boolean) => ({
+    ...setAutostart(enabled === true), supported: process.platform === 'win32' && app.isPackaged,
+  }))
   ipcMain.handle('get-learned-games', () => ({ ...learnedGames() }))
   ipcMain.handle('forget-game', (_event, exe: string) => {
     const learned = { ...learnedGames() }
@@ -1517,8 +1618,11 @@ function registerHotkeys(): boolean {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
     if (!mainWindow) createWindow()
+    // Windows launching a second copy at login, while Flash is already open, is
+    // not a request to come to the front. Clicking the shortcut is.
+    if (argv.includes(AUTOSTART_FLAG)) return
     mainWindow?.show()
     if (mainWindow?.isMinimized()) mainWindow.restore()
     mainWindow?.focus()
@@ -1609,6 +1713,8 @@ app.on('ready', () => {
   registerClipProtocol()
   loadSettings()
   const clipsFolderError = ensureClipsFolder()
+
+  applyInstallerAutostartRequest()
 
   pruneOldClips()
   pruneTimer = setInterval(pruneOldClips, 6 * 3600 * 1000)

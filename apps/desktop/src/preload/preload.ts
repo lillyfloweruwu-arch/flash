@@ -13,6 +13,13 @@ export interface ClipInfo {
   starred: boolean
 }
 
+export interface AutostartState {
+  enabled: boolean
+  managedByWindows: boolean
+  supported: boolean
+  error?: string
+}
+
 export interface Settings {
   clipsFolder: string
   theme: string
@@ -92,6 +99,8 @@ contextBridge.exposeInMainWorld('flash', {
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   getHotkeyStatus: () => ipcRenderer.invoke('hotkey-status'),
+  getAutostart: () => ipcRenderer.invoke('autostart-status'),
+  setAutostart: (enabled: boolean) => ipcRenderer.invoke('set-autostart', enabled),
   getLearnedGames: () => ipcRenderer.invoke('get-learned-games'),
   forgetGame: (exe: string) => ipcRenderer.invoke('forget-game', exe),
   identifyGame: (exe: string, name: string | null) => ipcRenderer.invoke('identify-game', exe, name),
@@ -177,6 +186,10 @@ export type FlashAPI = {
     // each be taken by another app independently.
     clip: boolean; short: boolean; screenshot: boolean
   }>
+  // `enabled` is what Windows says, not what was last asked for.
+  // `managedByWindows` means Flash is listed but Task Manager has disabled it.
+  getAutostart: () => Promise<AutostartState>
+  setAutostart: (enabled: boolean) => Promise<AutostartState>
   getLearnedGames: () => Promise<Record<string, string>>
   forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
