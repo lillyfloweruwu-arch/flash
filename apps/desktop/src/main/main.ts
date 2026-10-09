@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, powerMonitor, protocol, net } from 'electron'
+import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, ClipboardItem, powerMonitor, protocol, net } from 'electron'
 import { join, basename, dirname, extname } from 'path'
 
 // Must run before the app is ready, or the scheme is not treated as privileged
@@ -9,6 +9,7 @@ protocol.registerSchemesAsPrivileged([{
 }])
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { Readable } from 'stream'
+import { pathToFileURL } from 'url'
 import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
@@ -496,13 +497,24 @@ function scanClips(): ClipInfo[] {
   return clips
 }
 
-function deleteClip(filePath: string): boolean {
+async function deleteClip(filePath: string): Promise<boolean> {
   // Only delete inside the clips folder — filePath comes from the renderer.
   if (!isInsideClips(filePath)) return false
   try {
     if (migrateSidecars(dirname(filePath)).has(filePath)) return false
-    unlinkSync(filePath)
   } catch { return false }
+  // The Watch screen starts decoding a clip's audio the moment it appears, and
+  // Media Foundation holds the file without delete sharing while it reads. A
+  // delete in that window failed with EBUSY and the clip silently stayed, so
+  // retry briefly before giving up.
+  for (let attempt = 0; ; attempt++) {
+    try { unlinkSync(filePath); break }
+    catch (error: any) {
+      const busy = error?.code === 'EBUSY' || error?.code === 'EPERM'
+      if (!busy || attempt >= 10) { console.warn(`Could not delete ${filePath}`, error); return false }
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+  }
   try { unlinkSync(sidecarPath(filePath)) } catch { /* no sidecar */ }
   return true
 }
@@ -639,7 +651,7 @@ function pruneOldClips() {
   // A starred clip is the one the user said they wanted to keep, which makes it
   // exactly the wrong thing for a background timer to delete.
   for (const clip of scanClips()) {
-    if (clip.createdAt < cutoff && !clip.starred) deleteClip(clip.filePath)
+    if (clip.createdAt < cutoff && !clip.starred) void deleteClip(clip.filePath)
   }
 }
 
@@ -753,7 +765,8 @@ async function runSaveScreenshot(): Promise<void> {
 
     await captureAddon.saveScreenshot(screenshotPath)
     writeSidecar(screenshotPath, { duration: 0, game })
-    clipboard.writeImage(nativeImage.createFromPath(screenshotPath))
+    // Electron 44's clipboard is the async W3C-style one: an item per write.
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([readFileSync(screenshotPath)], { type: 'image/png' }) })])
     playClipSound()
     // Without this the PNG lands on disk and the open library never shows it:
     // nothing else rescans, so a screenshot looks like it silently failed.
@@ -1406,10 +1419,15 @@ function setupIPC() {
   // Copy as a file (not a path) so Ctrl+V in Explorer or Discord pastes the clip.
   // CF_HDROP is not exposed by Electron, but Windows also accepts the shell's
   // "FileNameW" format, which is a single null-terminated UTF-16 path.
-  ipcMain.handle('copy-clip-file', (_event, filePath: string) => {
+  // Electron 44 dropped writeBuffer; raw formats now go through its
+  // osclipboard escape hatch. Linux file managers and Discord take a URI list.
+  ipcMain.handle('copy-clip-file', async (_event, filePath: string) => {
     if (!isInsideClips(filePath) || !existsSync(filePath)) return false
     try {
-      clipboard.writeBuffer('FileNameW', Buffer.from(`${filePath}\0`, 'ucs2'))
+      const item: Record<string, Blob | string> = process.platform === 'win32'
+        ? { 'electron application/osclipboard;format="FileNameW"': new Blob([Buffer.from(`${filePath}\0`, 'ucs2')]) }
+        : { 'text/uri-list': `${pathToFileURL(filePath).href}\r\n` }
+      await clipboard.write([new ClipboardItem(item)])
       return true
     } catch (error) {
       console.warn('Could not copy clip to clipboard', error)
