@@ -9,14 +9,19 @@ export type DropdownOption<T> = { value: T; label: string; hint?: string }
 // keeps the keyboard behaviour the native one gives away for free - arrows to
 // move, Enter to choose, Escape to cancel, Home and End to jump - because a
 // dropdown that only works with a mouse is worse than an ugly one.
-export function Dropdown<T extends string | number>({ value, options, onChange, title, width = 168 }: {
+export function Dropdown<T extends string | number>({ value, options, onChange, title, width = 168, variant = 'plain' }: {
   value: T
   options: DropdownOption<T>[]
   onChange: (value: T) => void
   title?: string
   width?: number
+  // 'joined' butts against the button on its left, the pair reading as one control.
+  variant?: 'plain' | 'joined'
 }) {
   const [open, setOpen] = useState(false)
+  // Opens upward when there is not room below, which is most of the time in
+  // the feed, where the control sits near the bottom of the window.
+  const [upward, setUpward] = useState(false)
   const [active, setActive] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
   const selected = options.find(option => option.value === value) ?? options[0]
@@ -24,6 +29,8 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
   useEffect(() => {
     if (!open) return
     setActive(Math.max(0, options.findIndex(option => option.value === value)))
+    const rect = rootRef.current?.getBoundingClientRect()
+    if (rect) setUpward(window.innerHeight - rect.bottom < options.length * 30 + 16)
     const onPointerDown = (event: PointerEvent) => {
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
     }
@@ -67,11 +74,14 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
         aria-expanded={open}
         onClick={() => setOpen(o => !o)}
         onKeyDown={onButtonKey}
-        className="w-full flex items-center gap-2 rounded-md transition-all hover:bg-white/5"
+        className="w-full flex items-center gap-2 transition-colors hover:bg-white/5"
         style={{
-          fontSize: 11, color: 'var(--muted-2)', background: 'var(--field)',
-          border: `1px solid ${open ? 'var(--accent-line)' : 'var(--edge)'}`,
-          padding: '4px 8px', textAlign: 'left',
+          fontSize: 12, color: 'var(--fg)', background: 'transparent',
+          border: `1px solid ${open ? 'var(--line-strong)' : 'var(--line)'}`,
+          borderRadius: variant === 'joined' ? '0 6px 6px 0' : 6,
+          marginLeft: variant === 'joined' ? -1 : 0,
+          height: variant === 'joined' ? 34 : 30,
+          padding: '0 10px', textAlign: 'left',
         }}>
         <span className="flex-1 truncate">{selected?.label}</span>
         <svg width="9" height="9" viewBox="0 0 10 10" fill="none" aria-hidden="true"
@@ -82,11 +92,12 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
 
       {open && (
         <div role="listbox" aria-activedescendant={`dropdown-option-${active}`}
-          className="absolute z-50 rounded-md overflow-hidden"
+          className="absolute z-50 overflow-hidden"
           style={{
-            top: 'calc(100% + 4px)', left: 0, width: '100%',
+            ...(upward ? { bottom: 'calc(100% + 6px)' } : { top: 'calc(100% + 6px)' }),
+            left: 0, minWidth: '100%', width: 'max-content', borderRadius: 8, padding: 4,
             background: 'var(--panel)', border: '1px solid var(--edge)',
-            boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
           }}>
           {options.map((option, index) => {
             const isSelected = option.value === value
@@ -99,14 +110,17 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
                 type="button"
                 onPointerEnter={() => setActive(index)}
                 onClick={() => choose(index)}
-                className="w-full flex items-baseline gap-2 transition-colors"
+                className="w-full flex items-center gap-3 transition-colors"
                 style={{
-                  padding: '6px 8px', textAlign: 'left', fontSize: 11,
-                  color: isSelected ? 'var(--accent)' : 'var(--muted)',
+                  padding: '7px 10px', textAlign: 'left', fontSize: 12, borderRadius: 5,
+                  color: isSelected ? 'var(--fg)' : 'var(--muted)',
                   background: index === active ? 'var(--hover)' : 'transparent',
                 }}>
                 <span className="flex-1 truncate">{option.label}</span>
-                {option.hint && <span style={{ fontSize: 10, color: 'var(--muted-3)' }}>{option.hint}</span>}
+                {option.hint && <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{option.hint}</span>}
+                <span style={{ width: 12, display: 'flex', color: 'var(--accent)' }} aria-hidden="true">
+                  {isSelected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
+                </span>
               </button>
             )
           })}

@@ -1,6 +1,7 @@
-// Palettes ported from FlashDomain so the two apps feel like siblings.
+// Theme palettes for the full-bleed feed look: near-black neutrals with a
+// faint tint, and an accent that only ever marks something live or engaged.
 // Imported by both the main process (toast popup) and the renderer, so it lives
-// outside src/main and src/renderer.
+// outside src/main and src/renderer. Keep in sync with renderer/index.css.
 
 export interface Theme {
   label: string
@@ -21,45 +22,45 @@ export interface Theme {
 export const THEMES: Record<string, Theme> = {
   blood: {
     label: 'Blood',
-    bg: '#0C0607', panel: '#1C0E11', field: '#28141A', edge: '#4A2029', hover: '#331A21',
-    fg: '#FFF0F1', muted: '#BC9599', accent: '#C1121F', accentDim: '#780116',
-    onAccent: '#FFF0F1', spark: '#FF9E00',
-    // The chrome is red on this theme, so errors move to a hot rose that cannot
-    // be mistaken for the interface itself.
-    alert: '#FF5C8A',
+    bg: '#0A0A0B', panel: '#121316', field: '#1B1D22', edge: '#2A2D34', hover: '#1F2126',
+    fg: '#F2F3F5', muted: '#9AA0AB', accent: '#E8192C', accentDim: '#8C0F1B',
+    onAccent: '#FFFFFF', spark: '#FFB020',
+    // The accent is red on this theme, so errors move to a hot rose that cannot
+    // be mistaken for a live state.
+    alert: '#FF6B8E',
   },
   ultraviolet: {
     label: 'Electric ultraviolet',
-    bg: '#09060F', panel: '#15101F', field: '#20182D', edge: '#38294A', hover: '#292037',
-    fg: '#F5F1FA', muted: '#A69BB8', accent: '#B45CFF', accentDim: '#7628C9',
-    onAccent: '#15051F', spark: '#FF4FA3', alert: '#FF6B6B',
+    bg: '#0A090D', panel: '#131218', field: '#1D1B24', edge: '#2D2A37', hover: '#201E28',
+    fg: '#F4F2F8', muted: '#A19CAF', accent: '#B45CFF', accentDim: '#6B2BB3',
+    onAccent: '#12051F', spark: '#FF9AD0', alert: '#FF6B6B',
   },
   cobalt: {
     label: 'Cobalt',
-    bg: '#070910', panel: '#101521', field: '#171E2D', edge: '#2B3850', hover: '#202A3B',
-    fg: '#F0F4FF', muted: '#94A2BA', accent: '#4D7CFE', accentDim: '#294DBA',
-    onAccent: '#050B1E', spark: '#C45CFF', alert: '#FF6B6B',
+    bg: '#090A0D', panel: '#111318', field: '#1A1E25', edge: '#293039', hover: '#1E2229',
+    fg: '#F1F4F8', muted: '#98A2B3', accent: '#4D7CFE', accentDim: '#2647A8',
+    onAccent: '#050B1E', spark: '#FFB020', alert: '#FF6B6B',
   },
   fuchsia: {
     label: 'Fuchsia',
-    bg: '#0D0710', panel: '#1B111C', field: '#271829', edge: '#452940', hover: '#332032',
-    fg: '#FFF1FA', muted: '#BC9BB0', accent: '#FF4FA3', accentDim: '#B01765',
-    onAccent: '#1E0512', spark: '#B45CFF',
-    // Coral is nearly indistinguishable from this accent, so errors go deeper red.
-    alert: '#E01E37',
+    bg: '#0C090B', panel: '#151115', field: '#201A1F', edge: '#33292F', hover: '#221B21',
+    fg: '#FBF2F7', muted: '#AB9CA6', accent: '#FF4FA3', accentDim: '#A51A62',
+    onAccent: '#1E0512', spark: '#FFB020',
+    // Coral sits too close to this accent, so errors go deeper red.
+    alert: '#FF4D5E',
   },
   indigo: {
     label: 'Deep indigo',
-    bg: '#080814', panel: '#121223', field: '#1B1B31', edge: '#2F2F52', hover: '#23233F',
-    fg: '#F1F1FF', muted: '#9B9BC0', accent: '#7C74FF', accentDim: '#463CC4',
-    onAccent: '#070616', spark: '#FF4FA3', alert: '#FF6B6B',
+    bg: '#09090D', panel: '#121219', field: '#1B1B25', edge: '#2B2B39', hover: '#1F1F2B',
+    fg: '#F2F2FB', muted: '#9D9DB8', accent: '#7C74FF', accentDim: '#4239B8',
+    onAccent: '#070616', spark: '#FF9AD0', alert: '#FF6B6B',
   },
   bone: {
     label: 'Bone',
-    // No hue at all — the only saturated pixels on screen belong to your clips.
-    bg: '#0A0A0C', panel: '#151517', field: '#1F1F23', edge: '#33333A', hover: '#26262B',
-    fg: '#F2F2F5', muted: '#9C9CA6', accent: '#EDE9F5', accentDim: '#6E6E7A',
-    onAccent: '#0A0A0C', spark: '#C9C9D4', alert: '#FF6B6B',
+    // No hue at all; the only saturated pixels on screen belong to your clips.
+    bg: '#0A0A0A', panel: '#131313', field: '#1C1C1C', edge: '#2C2C2C', hover: '#202020',
+    fg: '#F2F2F2', muted: '#A0A0A0', accent: '#F0F0F0', accentDim: '#6A6A6A',
+    onAccent: '#0A0A0A', spark: '#D6D6D6', alert: '#FF6B6B',
   },
 }
 

@@ -2,7 +2,7 @@
   "name": "@flash/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Flash desktop app \u00e2\u20ac\u201d Electron + React",
+  "description": "Flash desktop app â€” Electron + React",
   "main": "out/main/main.js",
   "scripts": {
     "dev": "electron-vite dev",
@@ -62,6 +62,7 @@
     ]
   },
   "devDependencies": {
+    "@fontsource-variable/antonio": "^5.3.0",
     "@tailwindcss/postcss": "^4.3.3",
     "@tailwindcss/vite": "^4.0.0",
     "@types/react": "^19.0.0",

@@ -57,7 +57,9 @@ function Waveform({ track }: { track: LiveMixTrack }) {
 
       const buckets = Math.max(1, Math.floor((width + 1) / 2))
       const peaks = reducePeaks(track.samples, buckets)
-      context.fillStyle = styles.getPropertyValue('--accent').trim()
+      // Sound is content, not a live state, so it is drawn in the interface
+      // white; the accent stays reserved for recording and selection.
+      context.fillStyle = styles.getPropertyValue('--muted').trim()
       const maxHalfHeight = Math.max(0.5, center - 2)
       for (let index = 0; index < peaks.length; index++) {
         const halfHeight = Math.max(0.5, Math.min(1, peaks[index]) * maxHalfHeight)
@@ -69,7 +71,7 @@ function Waveform({ track }: { track: LiveMixTrack }) {
     const resize = new ResizeObserver(draw)
     resize.observe(canvas)
 
-    // Canvas cannot read a CSS variable, so the accent colour is baked in at
+    // Canvas cannot read a CSS variable, so the colour is baked in at
     // paint time. Switching theme changes that variable without touching the
     // canvas, which would leave the waveform in the old theme's colour until
     // something else forced a repaint.
@@ -91,7 +93,7 @@ function Waveform({ track }: { track: LiveMixTrack }) {
 }
 
 const LANE_SHELL = 'w-full overflow-hidden rounded-lg'
-const LANE_GRID = '32px 54px minmax(80px, 1fr) 112px 42px'
+const LANE_GRID = '32px 54px minmax(60px, 1fr) 88px 42px'
 // Every clip carries these three, so the placeholder can name them rather than
 // showing anonymous grey bars.
 const EXPECTED_TRACKS = ['game', 'mic', 'other'] as const
@@ -106,12 +108,12 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
 }) {
   if (tracks.length === 0 && loading) {
     return (
-      <div className={LANE_SHELL} style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+      <div className={LANE_SHELL} style={{ maxWidth: 900, borderBottom: '1px solid var(--edge-soft)' }}>
         {EXPECTED_TRACKS.map((id, index) => (
           <div key={id} className="grid items-center gap-3 px-3"
             style={{ gridTemplateColumns: LANE_GRID, minHeight: 48, borderTop: index === 0 ? 'none' : '1px solid var(--edge-soft)' }}>
             <span className="flex h-8 w-8 items-center justify-center rounded-md"
-              style={{ color: 'var(--muted-3)', background: 'var(--field)', border: '1px solid var(--edge-soft)' }}>
+              style={{ color: 'var(--muted-3)', border: '1px solid var(--edge)' }}>
               <TrackIcon id={id} />
             </span>
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-3)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
@@ -130,7 +132,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
   if (tracks.length === 0) return null
 
   return (
-    <div className={LANE_SHELL} style={{ maxWidth: 900, background: 'var(--panel)', border: '1px solid var(--edge-soft)' }}>
+    <div className={LANE_SHELL} style={{ maxWidth: 900, borderBottom: '1px solid var(--edge-soft)' }}>
       {tracks.map((track, index) => {
         const disabled = track.samples.length === 0
         const isMuted = muted.has(track.id)
@@ -152,7 +154,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
               aria-pressed={isMuted}
               onClick={() => onMuteToggle(track.id)}
               className="relative flex h-8 w-8 items-center justify-center rounded-md"
-              style={{ color: isMuted ? 'var(--muted)' : 'var(--accent)', background: 'var(--field)', border: '1px solid var(--edge-soft)', cursor: disabled ? 'default' : 'pointer' }}>
+              style={{ color: isMuted ? 'var(--muted)' : 'var(--fg)', border: '1px solid var(--line)', cursor: disabled ? 'default' : 'pointer' }}>
               <TrackIcon id={track.id} />
               {isMuted && (
                 <svg className="absolute inset-0 m-auto" width="21" height="21" viewBox="0 0 21 21" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
@@ -161,7 +163,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
               )}
             </button>
 
-            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            <span className="caps" style={{ color: 'var(--fg)', fontSize: 10.5 }}>
               {track.id}
             </span>
 
@@ -177,6 +179,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
               disabled={disabled}
               aria-label={`${track.id} gain`}
               onChange={event => onGainChange(track.id, event.currentTarget.valueAsNumber)}
+              style={{ ['--filled' as string]: `${gain * 50}%` }}
             />
 
             <span style={{ fontSize: 11, color: 'var(--muted-2)', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>

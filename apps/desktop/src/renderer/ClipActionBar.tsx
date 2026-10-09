@@ -17,19 +17,18 @@ export function ClipActionBar({ filePath, onClose, onDelete, middle, backLabel =
   const [copied, setCopied] = useState<string | null>(null)
 
   return (
-    <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--edge-soft)' }}>
-      <div className="flex items-center gap-3">
-        <button onClick={onClose} className="flex items-center gap-1.5 text-sm transition-colors hover:text-white" style={{ color: 'var(--muted-2)' }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M10 12L6 8l4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+    <div className="flex items-center justify-between gap-4 shrink-0 titlebar-drag" style={{ height: 56, padding: '0 20px', borderBottom: '1px solid var(--edge-soft)' }}>
+      <div className="flex items-center gap-4 min-w-0 titlebar-no-drag">
+        <button onClick={onClose} className="btn btn-sm btn-ghost" style={{ paddingLeft: 6 }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M14.5 6l-6 6 6 6" />
           </svg>
           {backLabel}
         </button>
-        {middle != null && <div style={{ width: 1, height: 14, background: 'var(--edge-soft)' }} />}
         {middle}
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0 titlebar-no-drag">
         <button
           draggable
           onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(filePath) }}
@@ -39,29 +38,17 @@ export function ClipActionBar({ filePath, onClose, onDelete, middle, backLabel =
             setTimeout(() => setCopied(null), 1600)
           }}
           title="Click to copy the file, or drag this straight into Discord"
-          className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-          style={{ color: copied ? 'var(--accent)' : 'var(--muted-2)', border: `1px solid ${copied ? 'var(--accent-line)' : 'var(--edge-soft)'}`, cursor: 'grab' }}>
-          {copied ?? 'Copy / Drag'}
+          className="btn btn-sm" style={{ cursor: 'grab' }}>
+          {copied ?? 'Copy / drag'}
         </button>
-        <button onClick={() => window.flash?.showClipInFolder(filePath)}
-          className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-          style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)' }}>
-          Show in Folder
+        <button onClick={() => window.flash?.showClipInFolder(filePath)} className="btn btn-sm">
+          Show in folder
         </button>
         {onDelete && (
-          <button onClick={onDelete}
-            className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-red-500/10"
-            style={{ color: 'var(--alert)', border: '1px solid var(--accent-line)' }}>
+          <button onClick={onDelete} className="btn btn-sm btn-danger">
             Delete
           </button>
         )}
-        <button onClick={onClose} aria-label="Close"
-          className="w-8 h-8 flex items-center justify-center rounded-md transition-all hover:bg-white/5"
-          style={{ color: 'var(--muted-2)' }}>
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <path d="M1 1l12 12M13 1L1 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
-        </button>
       </div>
     </div>
   )

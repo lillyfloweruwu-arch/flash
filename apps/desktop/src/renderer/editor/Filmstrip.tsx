@@ -134,7 +134,7 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
   })
 
   return (
-    <div className="w-full select-none" style={{ maxWidth: 900 }}>
+    <div className="w-full select-none">
       <div
         ref={trackRef}
         className="relative"
@@ -175,7 +175,7 @@ export function Filmstrip({ filePath, durationSec, inSec, outSec, currentSec, ke
       <div className="relative" style={{ height: 7, marginTop: 5 }}>
         {keyframesSec.map(at => (
           <span key={at} className="absolute" title={`keyframe at ${at.toFixed(2)}s`}
-            style={{ left: `${percent(at)}%`, top: 0, width: 1, height: 7, background: 'var(--spark)', opacity: 0.55 }} />
+            style={{ left: `${percent(at)}%`, top: 0, width: 1, height: 7, background: 'var(--fg)', opacity: 0.35 }} />
         ))}
       </div>
     </div>

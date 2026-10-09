@@ -1,143 +1,313 @@
 @import 'tailwindcss';
 
-/* Palettes ported from FlashDomain — see src/shared/themes.ts, which is the
-   source of truth the main process reads for the toast popup. Keep in sync. */
+/* Full-bleed feed world. One clip owns the window; the interface is white
+   glyphs and a soft bottom scrim, and the theme accent appears only where
+   something is live or engaged (recording, starred, selected, progress).
+
+   src/shared/themes.ts is the source of truth the main process reads for the
+   toast popup. Keep the two in sync. */
 
 :root,
 [data-theme='blood'] {
-  --bg: #0c0607;
-  --panel: #1c0e11;
-  --field: #28141a;
-  --edge: #4a2029;
-  --hover: #331a21;
-  --fg: #fff0f1;
-  --muted: #bc9599;
-  --accent: #c1121f;
-  --accent-dim: #780116;
-  --on-accent: #fff0f1;
-  --spark: #ff9e00;
-  --alert: #ff5c8a;
+  --bg: #0a0a0b;
+  --panel: #121316;
+  --field: #1b1d22;
+  --edge: #2a2d34;
+  --hover: #1f2126;
+  --fg: #f2f3f5;
+  --muted: #9aa0ab;
+  --accent: #e8192c;
+  --accent-dim: #8c0f1b;
+  --on-accent: #ffffff;
+  --spark: #ffb020;
+  /* The accent is red on this theme, so errors move to a hot rose that cannot
+     be mistaken for a live state. */
+  --alert: #ff6b8e;
 }
 
 [data-theme='ultraviolet'] {
-  --bg: #09060f;
-  --panel: #15101f;
-  --field: #20182d;
-  --edge: #38294a;
-  --hover: #292037;
-  --fg: #f5f1fa;
-  --muted: #a69bb8;
+  --bg: #0a090d;
+  --panel: #131218;
+  --field: #1d1b24;
+  --edge: #2d2a37;
+  --hover: #201e28;
+  --fg: #f4f2f8;
+  --muted: #a19caf;
   --accent: #b45cff;
-  --accent-dim: #7628c9;
-  --on-accent: #15051f;
-  --spark: #ff4fa3;
+  --accent-dim: #6b2bb3;
+  --on-accent: #12051f;
+  --spark: #ff9ad0;
   --alert: #ff6b6b;
 }
 
 [data-theme='cobalt'] {
-  --bg: #070910;
-  --panel: #101521;
-  --field: #171e2d;
-  --edge: #2b3850;
-  --hover: #202a3b;
-  --fg: #f0f4ff;
-  --muted: #94a2ba;
+  --bg: #090a0d;
+  --panel: #111318;
+  --field: #1a1e25;
+  --edge: #293039;
+  --hover: #1e2229;
+  --fg: #f1f4f8;
+  --muted: #98a2b3;
   --accent: #4d7cfe;
-  --accent-dim: #294dba;
+  --accent-dim: #2647a8;
   --on-accent: #050b1e;
-  --spark: #c45cff;
+  --spark: #ffb020;
   --alert: #ff6b6b;
 }
 
 [data-theme='fuchsia'] {
-  --bg: #0d0710;
-  --panel: #1b111c;
-  --field: #271829;
-  --edge: #452940;
-  --hover: #332032;
-  --fg: #fff1fa;
-  --muted: #bc9bb0;
+  --bg: #0c090b;
+  --panel: #151115;
+  --field: #201a1f;
+  --edge: #33292f;
+  --hover: #221b21;
+  --fg: #fbf2f7;
+  --muted: #ab9ca6;
   --accent: #ff4fa3;
-  --accent-dim: #b01765;
+  --accent-dim: #a51a62;
   --on-accent: #1e0512;
-  --spark: #b45cff;
-  --alert: #e01e37;
+  --spark: #ffb020;
+  /* Coral sits too close to this accent, so errors go deeper red. */
+  --alert: #ff4d5e;
 }
 
 [data-theme='indigo'] {
-  --bg: #080814;
-  --panel: #121223;
-  --field: #1b1b31;
-  --edge: #2f2f52;
-  --hover: #23233f;
-  --fg: #f1f1ff;
-  --muted: #9b9bc0;
+  --bg: #09090d;
+  --panel: #121219;
+  --field: #1b1b25;
+  --edge: #2b2b39;
+  --hover: #1f1f2b;
+  --fg: #f2f2fb;
+  --muted: #9d9db8;
   --accent: #7c74ff;
-  --accent-dim: #463cc4;
+  --accent-dim: #4239b8;
   --on-accent: #070616;
-  --spark: #ff4fa3;
+  --spark: #ff9ad0;
   --alert: #ff6b6b;
 }
 
 [data-theme='bone'] {
-  --bg: #0a0a0c;
-  --panel: #151517;
-  --field: #1f1f23;
-  --edge: #33333a;
-  --hover: #26262b;
-  --fg: #f2f2f5;
-  --muted: #9c9ca6;
-  --accent: #ede9f5;
-  --accent-dim: #6e6e7a;
-  --on-accent: #0a0a0c;
-  --spark: #c9c9d4;
+  /* No hue at all; the only saturated pixels on screen belong to your clips. */
+  --bg: #0a0a0a;
+  --panel: #131313;
+  --field: #1c1c1c;
+  --edge: #2c2c2c;
+  --hover: #202020;
+  --fg: #f2f2f2;
+  --muted: #a0a0a0;
+  --accent: #f0f0f0;
+  --accent-dim: #6a6a6a;
+  --on-accent: #0a0a0a;
+  --spark: #d6d6d6;
   --alert: #ff6b6b;
 }
 
-/* Dimmer text steps derive from --muted so every theme gets them for free. */
+/* Derived steps are mixed against the ground, not against transparency, so
+   their contrast is the same on every surface they sit on. */
 :root {
-  --muted-2: color-mix(in srgb, var(--muted) 70%, transparent);
-  --muted-3: color-mix(in srgb, var(--muted) 48%, transparent);
-  --faint: color-mix(in srgb, var(--muted) 30%, transparent);
-  --edge-soft: color-mix(in srgb, var(--edge) 55%, transparent);
+  --muted-2: color-mix(in srgb, var(--muted) 82%, var(--bg));
+  --muted-3: color-mix(in srgb, var(--muted) 64%, var(--bg));
+  --faint: color-mix(in srgb, var(--muted) 40%, var(--bg));
+  --edge-soft: color-mix(in srgb, var(--edge) 70%, var(--bg));
+  --line: color-mix(in srgb, var(--fg) 30%, transparent);
+  --line-strong: color-mix(in srgb, var(--fg) 70%, transparent);
+  --glass: color-mix(in srgb, var(--fg) 7%, transparent);
   --arrow-face: color-mix(in srgb, var(--panel) 82%, transparent);
-  --accent-wash: color-mix(in srgb, var(--accent) 14%, transparent);
-  --accent-line: color-mix(in srgb, var(--accent) 32%, transparent);
-  /* "Live" green stays green on every theme — it is a status, not decoration. */
+  --accent-wash: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 45%, transparent);
+  --scrim: rgba(4, 4, 6, 0.86);
+  /* "Live" green stays green on every theme; it is a status, not decoration. */
   --ok: #4ade80;
+
+  --font-display: 'Antonio Variable', 'Bahnschrift SemiCondensed', 'Arial Narrow', sans-serif;
+  --font-ui: 'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Noto Sans', Cantarell, Ubuntu, sans-serif;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--edge) transparent;
 }
-
-*::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
+*::-webkit-scrollbar { width: 6px; height: 6px; }
 *::-webkit-scrollbar-track { background: transparent; }
-*::-webkit-scrollbar-thumb {
-  background: var(--edge);
-  border-radius: 2px;
-}
+*::-webkit-scrollbar-thumb { background: var(--edge); border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted-3); }
 
-body {
-  font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+::selection { background: var(--accent-wash); color: var(--fg); }
+
+html, body {
+  font-family: var(--font-ui);
   background: var(--bg);
   color: var(--fg);
+  caret-color: var(--accent);
   overflow: hidden;
   margin: 0;
   padding: 0;
+  -webkit-font-smoothing: antialiased;
 }
+
+:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── Type ──────────────────────────────────────────────────────────────────── */
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  line-height: 0.92;
+  letter-spacing: -0.005em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Small tracked capitals: author lines, labels, buttons, navigation. */
+.caps {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ── Buttons ───────────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease, opacity 140ms ease;
+}
+.btn:hover:not(:disabled) { background: var(--glass); border-color: var(--line-strong); }
+.btn:active:not(:disabled) { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+/* The one filled button on a screen: the thing you came to do. */
+.btn-solid { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.btn-solid:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 86%, var(--bg)); border-color: transparent; }
+
+.btn-sm { height: 28px; padding: 0 12px; font-size: 10px; }
+
+.btn-danger { color: var(--alert); border-color: color-mix(in srgb, var(--alert) 45%, transparent); }
+.btn-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--alert) 12%, transparent); border-color: var(--alert); }
+.btn-danger.btn-solid { background: var(--alert); color: #fff; border-color: var(--alert); }
+
+.btn-ghost { border-color: transparent; }
+
+/* Text-only tab: game filters, sort order, top navigation. */
+.tab {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 0;
+  background: none;
+  border: 0;
+  color: var(--muted-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+.tab:hover { color: var(--muted); }
+.tab[aria-pressed='true'], .tab[aria-current='page'] { color: var(--fg); }
+.tab[aria-pressed='true']::after, .tab[aria-current='page']::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: var(--fg);
+}
+.tab .count { font-size: 10px; letter-spacing: 0.06em; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tab[aria-pressed='true'] .count { color: var(--muted-2); }
+
+/* Feed side rail: one outlined glyph per action, the label under it. */
+.rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 64px;
+  padding: 6px 0;
+  background: none;
+  border: 0;
+  color: var(--fg);
+  cursor: pointer;
+  filter: drop-shadow(0 1px 6px rgba(0, 0, 0, 0.55));
+}
+.rail-btn svg { transition: transform 160ms var(--ease-out); }
+.rail-btn:hover:not(:disabled) svg { transform: scale(1.08); }
+.rail-btn:active:not(:disabled) svg { transform: scale(0.92); }
+.rail-btn span {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--fg) 80%, transparent);
+}
+.rail-btn:disabled { opacity: 0.35; cursor: default; }
+.rail-btn[data-on='true'] { color: var(--accent); }
+.rail-btn.danger:hover { color: var(--alert); }
+
+/* Hairline text field. */
+.field {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--edge);
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 140ms ease;
+}
+.field::placeholder { color: var(--muted-3); }
+.field:hover { border-color: color-mix(in srgb, var(--edge) 50%, var(--muted)); }
+.field:focus { border-color: var(--line-strong); }
+
+.keycap {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Motion ────────────────────────────────────────────────────────────────── */
 
 @keyframes pulse-red {
   0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  50% { opacity: 0.35; }
 }
 
 @keyframes dialog-in {
-  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to   { opacity: 1; transform: none; }
 }
 
@@ -146,46 +316,96 @@ body {
   to   { opacity: 1; }
 }
 
-/* Clip player previous/next. Nearly invisible at rest so the clip stays the
-   subject, and a real 44px target that resolves into a button under the
-   cursor rather than a bare glyph floating in the margin. */
-.nav-arrow {
-  width: 60px;
-  height: 60px;
+/* The snap between feed items: the incoming clip rises from the direction you
+   scrolled and its caption follows a beat later. Short enough that holding
+   the arrow key still feels like flicking. */
+@keyframes feed-from-below { from { transform: translateY(6%); opacity: 0.2; } to { transform: none; opacity: 1; } }
+@keyframes feed-from-above { from { transform: translateY(-6%); opacity: 0.2; } to { transform: none; opacity: 1; } }
+@keyframes caption-in { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+.feed-media[data-dir='down'] { animation: feed-from-below 260ms var(--ease-out); }
+.feed-media[data-dir='up'] { animation: feed-from-above 260ms var(--ease-out); }
+.feed-caption { animation: caption-in 360ms var(--ease-out) both; animation-delay: 40ms; }
+
+/* Starring is the feed's one engaged moment, so it is the one that moves. */
+@keyframes star-pop {
+  0%   { transform: scale(0.6); }
+  55%  { transform: scale(1.28); }
+  100% { transform: scale(1); }
+}
+.star-pop { animation: star-pop 380ms var(--ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-media[data-dir], .feed-caption, .star-pop { animation: none; }
+  .rail-btn svg { transition: none; }
+}
+
+/* Film grain on the bare ground, so the screens without footage share the
+   feed's material instead of reading as flat panels. A static SVG noise
+   tile: painted once, nothing animates. */
+.grain {
+  background-color: var(--bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ── Library tiles ─────────────────────────────────────────────────────────── */
+
+.tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: var(--panel);
+  cursor: pointer;
+  outline: none;
+}
+.tile video, .tile img { transition: transform 420ms var(--ease-out), filter 240ms ease; }
+.tile:hover video, .tile:hover img { transform: scale(1.025); }
+.tile .tile-scrim {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 62%;
+  background: linear-gradient(to top, var(--scrim), rgba(4, 4, 6, 0.4) 55%, transparent);
+  pointer-events: none;
+}
+.tile .tile-tools { opacity: 0; transition: opacity 140ms ease; }
+.tile:hover .tile-tools, .tile:focus-within .tile-tools, .tile[data-selected='true'] .tile-tools { opacity: 1; }
+.tile .tile-static { transition: opacity 140ms ease; }
+.tile:hover .tile-static, .tile:focus-within .tile-static, .tile[data-selected='true'] .tile-static { opacity: 0; }
+.tile[data-selected='true']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+.tile:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--fg);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile video, .tile img { transition: none; }
+  .tile:hover video, .tile:hover img { transform: none; }
+}
+
+.tile-glyph {
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  color: var(--muted-3);
-  background: transparent;
-  border: 1px solid transparent;
-  transition: color 140ms ease, background 140ms ease,
-              border-color 140ms ease, transform 120ms ease;
-}
-.nav-arrow:not(:disabled):hover {
+  border: 0;
+  background: rgba(0, 0, 0, 0.55);
   color: var(--fg);
-  background: var(--arrow-face);
-  border-color: var(--edge-soft);
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
 }
-.nav-arrow:not(:disabled):active {
-  transform: scale(0.92);
-}
-.nav-arrow:disabled {
-  color: var(--faint);
-  cursor: default;
-}
-/* Keyboard users get the same affordance; left and right arrow keys move
-   between clips, so these need to be visibly reachable. */
-.nav-arrow:focus-visible {
-  outline: none;
-  color: var(--fg);
-  background: var(--arrow-face);
-  border-color: var(--accent-line);
-}
-@media (prefers-reduced-motion: reduce) {
-  .nav-arrow { transition: none; }
-  .nav-arrow:not(:disabled):active { transform: none; }
-}
+.tile-glyph:hover { background: rgba(0, 0, 0, 0.8); }
+.tile-glyph[data-on='true'] { color: var(--accent); }
+.tile-glyph.danger:hover { color: var(--alert); }
 
 /* Placeholder lanes while a clip's audio decodes. Decoding walks the whole
    file - a few seconds for a long clip - and showing nothing at all in the
@@ -200,6 +420,10 @@ body {
   background: var(--edge);
   border-radius: 999px;
 }
+@media (prefers-reduced-motion: reduce) {
+  .lane-skeleton { animation: none; opacity: 0.5; }
+}
+
 /* Announced to screen readers, invisible to everyone else. Tailwind v4 does
    not ship this by default. */
 .sr-only {
@@ -213,15 +437,15 @@ body {
   white-space: nowrap;
   border: 0;
 }
-@media (prefers-reduced-motion: reduce) {
-  .lane-skeleton { animation: none; opacity: 0.5; }
-}
+
+/* ── Ranges ────────────────────────────────────────────────────────────────── */
 
 /* Player scrubber. A real range input so keyboard seeking and screen-reader
    values come free; --played is set inline so the filled portion tracks
-   playback without a second element. */
+   playback without a second element. In the feed it runs the full width of
+   the window and thickens under the pointer. */
 .player-scrub {
-  height: 16px;
+  height: 18px;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
@@ -229,30 +453,35 @@ body {
   outline: none;
 }
 .player-scrub::-webkit-slider-runnable-track {
-  height: 4px;
+  height: 3px;
   border-radius: 999px;
   background: linear-gradient(to right,
-    var(--accent) 0 var(--played, 0%),
-    var(--edge) var(--played, 0%) 100%);
+    var(--fg) 0 var(--played, 0%),
+    color-mix(in srgb, var(--fg) 22%, transparent) var(--played, 0%) 100%);
 }
+.player-scrub:hover::-webkit-slider-runnable-track { height: 5px; }
 .player-scrub::-webkit-slider-thumb {
-  width: 12px;
-  height: 12px;
-  margin-top: -4px;
+  width: 13px;
+  height: 13px;
+  margin-top: -5px;
   appearance: none;
   -webkit-appearance: none;
   border-radius: 999px;
-  border: 2px solid var(--panel);
-  background: var(--accent);
+  border: 0;
+  background: var(--fg);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 140ms ease;
 }
-.player-scrub:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px var(--accent-line);
-}
+.player-scrub:hover::-webkit-slider-thumb, .player-scrub:focus-visible::-webkit-slider-thumb { opacity: 1; }
+.player-scrub:hover::-webkit-slider-thumb { margin-top: -4px; }
+.player-scrub:focus-visible { outline: none; }
+.player-scrub:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--line-strong); }
 
-/* Editor audio-lane gain sliders. A real range input, restyled - it keeps the
-   keyboard and screen-reader behaviour a div would throw away. */
+/* Volume, audio-lane gains and settings sliders. */
 .audio-gain-range {
-  width: 112px;
+  width: 100%;
+  max-width: 112px;
   height: 16px;
   appearance: none;
   -webkit-appearance: none;
@@ -261,31 +490,28 @@ body {
   outline: none;
 }
 .audio-gain-range::-webkit-slider-runnable-track {
-  height: 3px;
+  height: 2px;
   border-radius: 999px;
-  background: var(--edge);
+  background: linear-gradient(to right,
+    var(--fg) 0 var(--filled, 0%),
+    var(--edge) var(--filled, 0%) 100%);
 }
 .audio-gain-range::-webkit-slider-thumb {
-  width: 11px;
-  height: 11px;
-  margin-top: -4px;
+  width: 12px;
+  height: 12px;
+  margin-top: -5px;
   appearance: none;
   -webkit-appearance: none;
   border-radius: 999px;
-  border: 2px solid var(--panel);
-  background: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent-line);
+  border: 0;
+  background: var(--fg);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
-.audio-gain-range:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 3px var(--accent-line);
-}
+.audio-gain-range:focus-visible { outline: none; }
+.audio-gain-range:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--line-strong); }
 .audio-gain-range:disabled { cursor: default; }
 .audio-gain-range:disabled::-webkit-slider-thumb { background: var(--muted-3); }
 
 /* Electron title bar drag region */
-.titlebar-drag {
-  -webkit-app-region: drag;
-}
-.titlebar-no-drag {
-  -webkit-app-region: no-drag;
-}
+.titlebar-drag { -webkit-app-region: drag; }
+.titlebar-no-drag { -webkit-app-region: no-drag; }

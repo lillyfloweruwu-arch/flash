@@ -84,35 +84,29 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
     }
   }
 
-  const pickerLift = Math.min(games.length * 28 + 18, 320)
-
   return (
     <div
       draggable={!busy}
       onDragStart={startDrag}
       title="Drag the selected files into Discord"
-      className="absolute flex items-center gap-2 rounded-xl"
+      className="absolute flex items-center gap-2"
       style={{
-        left: 16, right: 16, bottom: 16, zIndex: 40, width: 'max-content', maxWidth: 'calc(100% - 32px)',
-        margin: '0 auto', padding: '9px 10px', cursor: busy ? 'default' : 'grab',
-        color: 'var(--fg)', background: 'var(--panel)', border: '1px solid var(--accent-line)',
-        boxShadow: '0 12px 34px rgba(0,0,0,0.62)', animation: 'dialog-in 0.16s ease-out',
+        left: 16, right: 16, bottom: 20, zIndex: 40, width: 'max-content', maxWidth: 'calc(100% - 32px)',
+        margin: '0 auto', padding: '10px 12px 10px 18px', cursor: busy ? 'default' : 'grab', borderRadius: 10,
+        color: 'var(--fg)', background: 'var(--panel)', border: '1px solid var(--edge)',
+        boxShadow: '0 16px 40px rgba(0,0,0,0.6)', animation: 'dialog-in 0.16s var(--ease-out)',
       }}>
-      <span style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', padding: '0 4px' }}>
+      <span className="display" style={{ fontSize: 22, whiteSpace: 'nowrap', marginRight: 6 }}>
         {items.length} selected
       </span>
-      <button type="button" onClick={onClear} disabled={busy}
-        className="px-2 py-1 rounded-md text-xs transition-all hover:bg-white/5"
-        style={{ color: 'var(--muted-2)', opacity: busy ? 0.5 : 1 }}>
+      <button type="button" onClick={onClear} disabled={busy} className="btn btn-sm btn-ghost">
         Clear
       </button>
-      <div style={{ width: 1, height: 22, background: 'var(--edge-soft)' }} />
-      <button type="button" onClick={onDelete} disabled={busy}
-        className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-red-500/10"
-        style={{ color: 'var(--alert)', border: '1px solid var(--accent-line)', opacity: busy ? 0.5 : 1 }}>
+      <div style={{ width: 1, height: 22, background: 'var(--edge)' }} />
+      <button type="button" onClick={onDelete} disabled={busy} className="btn btn-sm btn-danger">
         Delete
       </button>
-      <span className="flex items-center gap-1.5 px-2" style={{ fontSize: 11, color: 'var(--muted-2)' }}>
+      <span className="flex items-center gap-1.5 px-2" style={{ fontSize: 12, color: 'var(--muted)' }}>
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
           <path d="M2 4h8M2 8h8M4 2v8M8 2v8" stroke="currentColor" strokeWidth="1" opacity="0.65"/>
         </svg>
@@ -120,14 +114,13 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
       </span>
       <div className="relative">
         <button type="button" onClick={() => { setMoveOpen(false); setExportOpen(open => !open) }} disabled={busy}
-          className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-          style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: busy ? 0.5 : 1 }}>
+          className="btn btn-sm" aria-expanded={exportOpen}>
           {exportBusy ? 'Exporting…' : 'Export to size'}
         </button>
         {exportOpen && (
-          <div className="absolute flex items-center gap-2 rounded-lg"
+          <div className="absolute flex items-center gap-2"
             style={{
-              right: 0, bottom: `calc(100% + ${EXPORT_LIMITS.length * 28 + 18}px)`, padding: 8,
+              right: 0, bottom: 'calc(100% + 12px)', padding: 8, borderRadius: 8,
               background: 'var(--panel)', border: '1px solid var(--edge)',
               boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
             }}>
@@ -138,9 +131,7 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
               options={EXPORT_LIMITS}
               width={150}
             />
-            <button type="button" onClick={exportSelected}
-              className="px-3 py-1.5 rounded-md text-xs transition-all hover:brightness-110"
-              style={{ color: 'var(--on-accent)', background: 'var(--accent)' }}>
+            <button type="button" onClick={exportSelected} className="btn btn-sm btn-solid">
               Export
             </button>
           </div>
@@ -148,14 +139,13 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
       </div>
       <div className="relative">
         <button type="button" onClick={() => { setExportOpen(false); setMoveOpen(open => !open) }} disabled={busy || games.length === 0}
-          className="px-3 py-1.5 rounded-md text-xs transition-all hover:bg-white/5"
-          style={{ color: 'var(--muted-2)', border: '1px solid var(--edge-soft)', opacity: busy || games.length === 0 ? 0.5 : 1 }}>
+          className="btn btn-sm" aria-expanded={moveOpen}>
           {moveBusy ? 'Moving…' : 'Move to game'}
         </button>
         {moveOpen && targetGame && (
-          <div className="absolute flex items-center gap-2 rounded-lg"
+          <div className="absolute flex items-center gap-2"
             style={{
-              right: 0, bottom: `calc(100% + ${pickerLift}px)`, padding: 8,
+              right: 0, bottom: 'calc(100% + 12px)', padding: 8, borderRadius: 8,
               background: 'var(--panel)', border: '1px solid var(--edge)',
               boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
             }}>
@@ -166,16 +156,14 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
               options={games.map(game => ({ value: game, label: game }))}
               width={180}
             />
-            <button type="button" onClick={moveSelected}
-              className="px-3 py-1.5 rounded-md text-xs transition-all hover:brightness-110"
-              style={{ color: 'var(--on-accent)', background: 'var(--accent)' }}>
+            <button type="button" onClick={moveSelected} className="btn btn-sm btn-solid">
               Move
             </button>
           </div>
         )}
       </div>
       {note && (
-        <span role="status" style={{ fontSize: 11, color: 'var(--muted-2)', whiteSpace: 'nowrap', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span role="status" style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {note}
         </span>
       )}
