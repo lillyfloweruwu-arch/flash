@@ -31,33 +31,27 @@ namespace {
 struct OwnedAudio { std::vector<float> samples; uint32_t frameCount = 0, channels = 0, sampleRate = 0; int64_t timestampUs = 0; std::string sourceId; };
 struct Quality { uint32_t height = 1080, fps = 60, bitrateKbps = 20000; };
 
-std::mutex g_stateMutex, g_encodeMutex;
-std::shared_ptr<VideoSource> g_screenCapture;
-std::unique_ptr<AudioSource> g_audioCapture;
-std::unique_ptr<Encoder> g_encoder;
-std::unique_ptr<RingBuffer> g_ringBuffer;
-std::deque<OwnedAudio> g_audioBuffer;
-std::vector<EncodedPacket> g_previousVideo;
-std::vector<OwnedAudio> g_previousAudio;
-std::string g_clipsDir, g_currentGame = "Unknown";
-uint32_t g_bufferSeconds = 30, g_displayId = 0, g_encodeWidth = 1920, g_encodeHeight = 1080;
-uint32_t g_previousWidth = 0, g_previousHeight = 0, g_previousFps = 0;
-bool g_awaitingFirstKeyframe = false;
-Quality g_quality;
-bool g_audioGame = true, g_audioMic = true, g_audioOther = true;
-std::string g_pipelineError;
-std::unique_ptr<VoiceTrigger> g_voiceTrigger;
-VoiceStatus g_voiceFallbackStatus{false, "", "Voice recognition is unavailable."};
-
 struct VoiceCommandEvent {
     std::string phrase;
     double rawConfidence = 0.0;
 };
 
 class VoiceCallbackBridge {
+    static void CallJs(Napi::Env env, Napi::Function callback, void*, VoiceCommandEvent* value) {
+        std::unique_ptr<VoiceCommandEvent> event(value);
+        // Aborted queues are drained with no environment/callback. The typed
+        // TSFN still delivers the payload so it can be freed without entering JS.
+        if (!env || !callback) return;
+        callback.Call({
+            Napi::String::New(env, event->phrase),
+            Napi::Number::New(env, event->rawConfidence),
+        });
+    }
+    using Callback = Napi::TypedThreadSafeFunction<void, VoiceCommandEvent, CallJs>;
+
 public:
     VoiceCallbackBridge(Napi::Env env, const Napi::Function& callback)
-        : tsfn_(Napi::ThreadSafeFunction::New(
+        : tsfn_(Callback::New(
               env, callback, "Flash voice command", 0, 1)) {
         // A registered callback should not keep Electron alive on its own.
         tsfn_.Unref(env);
@@ -75,14 +69,7 @@ public:
         if (closed_.load()) return;
         auto* event = new (std::nothrow) VoiceCommandEvent{phrase, rawConfidence};
         if (!event) return;
-        const napi_status status = tsfn_.NonBlockingCall(
-            event, [](Napi::Env env, Napi::Function callback, VoiceCommandEvent* value) {
-                std::unique_ptr<VoiceCommandEvent> event(value);
-                callback.Call({
-                    Napi::String::New(env, event->phrase),
-                    Napi::Number::New(env, event->rawConfidence),
-                });
-            });
+        const napi_status status = tsfn_.NonBlockingCall(event);
         if (status != napi_ok) delete event;
     }
 
@@ -92,22 +79,46 @@ public:
     }
 
 private:
-    Napi::ThreadSafeFunction tsfn_;
+    Callback tsfn_;
     std::mutex mutex_;
     std::atomic<bool> closed_{false};
 };
 
-std::shared_ptr<VoiceCallbackBridge> g_voiceCallback;
-std::shared_ptr<VoiceCallbackBridge> g_portalCallback;
+// All capture state belongs to this Node environment. No thread, COM object or
+// Node-API handle is owned by a process/static destructor.
+struct AddonState {
+std::mutex stateMutex, encodeMutex;
+std::shared_ptr<VideoSource> screenCapture;
+std::unique_ptr<AudioSource> audioCapture;
+std::unique_ptr<Encoder> encoder;
+std::unique_ptr<RingBuffer> ringBuffer;
+std::deque<OwnedAudio> audioBuffer;
+std::vector<EncodedPacket> previousVideo;
+std::vector<OwnedAudio> previousAudio;
+std::string clipsDir, currentGame = "Unknown";
+uint32_t bufferSeconds = 30, displayId = 0, encodeWidth = 1920, encodeHeight = 1080;
+uint32_t previousWidth = 0, previousHeight = 0, previousFps = 0;
+bool awaitingFirstKeyframe = false;
+Quality quality;
+bool audioGame = true, audioMic = true, audioOther = true;
+std::string pipelineError;
+std::unique_ptr<VoiceTrigger> voiceTrigger;
+VoiceStatus voiceFallbackStatus{false, "", "Voice recognition is unavailable."};
+
+bool shuttingDown = false;
+
+std::shared_ptr<VoiceCallbackBridge> voiceCallback;
+std::shared_ptr<VoiceCallbackBridge> portalCallback;
 
 Napi::Value SetPortalRestoreTokenBinding(const Napi::CallbackInfo& info) {
     if (info.Length() < 2 || !info[0].IsString() || !info[1].IsFunction()) {
         Napi::TypeError::New(info.Env(), "Expected a restore token and persistence callback").ThrowAsJavaScriptException();
         return info.Env().Undefined();
     }
-    if (g_portalCallback) g_portalCallback->Close();
-    g_portalCallback = std::make_shared<VoiceCallbackBridge>(info.Env(), info[1].As<Napi::Function>());
-    std::weak_ptr<VoiceCallbackBridge> weak = g_portalCallback;
+    if (portalCallback) portalCallback->Close();
+    portalCallback = std::make_shared<VoiceCallbackBridge>(info.Env(), info[1].As<Napi::Function>());
+    RefreshCleanupHook(info.Env());
+    std::weak_ptr<VoiceCallbackBridge> weak = portalCallback;
     SetPortalRestoreToken(info[0].As<Napi::String>().Utf8Value(), [weak](const std::string& token) {
         if (auto callback = weak.lock()) callback->Dispatch(token, 0);
     });
@@ -117,14 +128,14 @@ Napi::Value SetPortalRestoreTokenBinding(const Napi::CallbackInfo& info) {
 
 void StopCapture() {
     VideoSource* screen; AudioSource* audio;
-    { std::lock_guard lock(g_stateMutex); screen = g_screenCapture.get(); audio = g_audioCapture.get(); }
+    { std::lock_guard lock(stateMutex); screen = screenCapture.get(); audio = audioCapture.get(); }
     if (screen) screen->Stop(); if (audio) audio->Stop();
 }
 
 // Rolling capture timings, surfaced through getStatus(). Cheap to keep, and the
 // difference between "the encoder is slow" and "frames never arrive" is not
 // guessable from the outside.
-std::atomic<int64_t> g_framesDelivered{0}, g_encodeUs{0}, g_intervalUs{0}, g_packetsPushed{0}, g_encodeFailures{0};
+std::atomic<int64_t> framesDelivered{0}, encodeUs{0}, intervalUs{0}, packetsPushed{0}, encodeFailures{0};
 
 // One failed frame is a hiccup worth counting and nothing more. An unbroken
 // run of them is a dead encoder, and that used to be invisible: capture stayed
@@ -132,53 +143,55 @@ std::atomic<int64_t> g_framesDelivered{0}, g_encodeUs{0}, g_intervalUs{0}, g_pac
 // died, and the next hotkey press handed back that old footage as a fresh
 // clip. Two seconds at 60fps is far beyond any transient, so this cannot trip
 // on a working encoder.
-constexpr int kEncoderDeadAfterFrames = 120;
-std::atomic<int> g_encodeFailureStreak{0};
-std::atomic<bool> g_encoderDead{false};
+static constexpr int kEncoderDeadAfterFrames = 120;
+std::atomic<int> encodeFailureStreak{0};
+std::atomic<bool> encoderDead{false};
+
+std::chrono::steady_clock::time_point lastArrival{};
 
 bool StartCaptureThreads() {
     VideoSource* screen; AudioSource* audio;
-    { std::lock_guard lock(g_stateMutex); screen = g_screenCapture.get(); audio = g_audioCapture.get(); }
+    { std::lock_guard lock(stateMutex); screen = screenCapture.get(); audio = audioCapture.get(); }
     if (!screen) return false;
-    bool ok = screen->Start([](const FrameData& frame) {
+    bool ok = screen->Start([this](const FrameData& frame) {
         const auto arrived = std::chrono::steady_clock::now();
-        static auto lastArrival = arrived;
-        g_intervalUs.store(std::chrono::duration_cast<std::chrono::microseconds>(arrived - lastArrival).count());
+        if (lastArrival == std::chrono::steady_clock::time_point{}) lastArrival = arrived;
+        intervalUs.store(std::chrono::duration_cast<std::chrono::microseconds>(arrived - lastArrival).count());
         lastArrival = arrived;
 
         std::vector<EncodedPacket> packets;
         bool ready = false;
-        { std::lock_guard encodeLock(g_encodeMutex);
-          if (!g_encoder || !g_ringBuffer) return;
+        { std::lock_guard encodeLock(encodeMutex);
+          if (!encoder || !ringBuffer) return;
           const auto encodeStart = std::chrono::steady_clock::now();
-          if (!g_encoder->EncodeFrame(frame, packets)) {
-              g_encodeFailures.fetch_add(1);
-              if (g_encodeFailureStreak.fetch_add(1) + 1 >= kEncoderDeadAfterFrames) g_encoderDead.store(true);
-          } else g_encodeFailureStreak.store(0);
-          g_encodeUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
+          if (!encoder->EncodeFrame(frame, packets)) {
+              encodeFailures.fetch_add(1);
+              if (encodeFailureStreak.fetch_add(1) + 1 >= kEncoderDeadAfterFrames) encoderDead.store(true);
+          } else encodeFailureStreak.store(0);
+          encodeUs.store(std::chrono::duration_cast<std::chrono::microseconds>(
               std::chrono::steady_clock::now() - encodeStart).count());
-          g_framesDelivered.fetch_add(1);
-          for (const auto& packet : packets) { g_ringBuffer->Push(packet); g_packetsPushed.fetch_add(1); ready = ready || packet.isKeyframe; }
+          framesDelivered.fetch_add(1);
+          for (const auto& packet : packets) { ringBuffer->Push(packet); packetsPushed.fetch_add(1); ready = ready || packet.isKeyframe; }
         }
-        if (ready) { std::lock_guard lock(g_stateMutex); g_awaitingFirstKeyframe = false; g_previousVideo.clear(); g_previousAudio.clear(); }
+        if (ready) { std::lock_guard lock(stateMutex); awaitingFirstKeyframe = false; previousVideo.clear(); previousAudio.clear(); }
     });
-    if (ok && audio) audio->Start([](const AudioData& value) {
+    if (ok && audio) audio->Start([this](const AudioData& value) {
         if (!value.samples || !value.frameCount || !value.channels) return;
         OwnedAudio owned; owned.frameCount = value.frameCount; owned.channels = value.channels;
         owned.sampleRate = value.sampleRate; owned.timestampUs = value.timestamp_us;
         owned.sourceId = value.sourceId;
         owned.samples.assign(value.samples, value.samples + static_cast<size_t>(value.frameCount) * value.channels);
-        std::lock_guard lock(g_stateMutex); g_audioBuffer.push_back(std::move(owned));
-        const int64_t cutoff = value.timestamp_us - static_cast<int64_t>(g_bufferSeconds) * 1000000;
-        while (!g_audioBuffer.empty() && g_audioBuffer.front().timestampUs < cutoff) g_audioBuffer.pop_front();
+        std::lock_guard lock(stateMutex); audioBuffer.push_back(std::move(owned));
+        const int64_t cutoff = value.timestamp_us - static_cast<int64_t>(bufferSeconds) * 1000000;
+        while (!audioBuffer.empty() && audioBuffer.front().timestampUs < cutoff) audioBuffer.pop_front();
     });
     return ok;
 }
 
 bool BuildPipeline(bool initializeAudio) {
-    g_pipelineError.clear();
-    g_encoderDead.store(false);
-    g_encodeFailureStreak.store(0);
+    pipelineError.clear();
+    encoderDead.store(false);
+    encodeFailureStreak.store(0);
     // Release the previous capture BEFORE building the replacement. DXGI permits
     // only one active output duplication per output per process, and the old
     // VideoSource holds one until it is destroyed — so DuplicateOutput on the
@@ -186,74 +199,83 @@ bool BuildPipeline(bool initializeAudio) {
     // call reports failure. The encoder is released first because on the
     // zero-copy path it holds textures belonging to the old D3D device.
     {
-        std::scoped_lock lock(g_stateMutex, g_encodeMutex);
-        g_encoder.reset();
-        g_screenCapture.reset();
+        std::scoped_lock lock(stateMutex, encodeMutex);
+        encoder.reset();
+        screenCapture.reset();
     }
     const auto displays = ListPlatformDisplays();
-    if (g_displayId >= displays.size()) { g_pipelineError = "display not found"; return false; }
-    const auto& display = displays[g_displayId];
-    const uint32_t outputHeight = (std::min)(g_quality.height, display.height);
+    if (displayId >= displays.size()) { pipelineError = "display not found"; return false; }
+    const auto& display = displays[displayId];
+    const uint32_t outputHeight = (std::min)(quality.height, display.height);
     const uint32_t outputWidth = ComputeEvenWidth(display.width, display.height, outputHeight);
     auto screen = CreateVideoSource();
-    if (!screen->Initialize(g_quality.fps, outputWidth, outputHeight, g_displayId)) { g_pipelineError = "capture initialization failed"; return false; }
-    EncoderConfig config; config.width = outputWidth; config.height = outputHeight; config.fps = g_quality.fps;
-    config.bitrate = g_quality.bitrateKbps * 1000; config.device = screen->HasGpuOutput() ? screen->GetDevice() : nullptr;
-    std::unique_ptr<Encoder> encoder;
-    try { encoder = CreateEncoder(config); }
-    catch (const std::exception& error) { g_pipelineError = error.what(); return false; }
-    if (!encoder) { g_pipelineError = "no H.264 encoder initialized"; return false; }
-    screen->SetGpuOutputEnabled(encoder->IsHardwareAccelerated());
+    if (!screen->Initialize(quality.fps, outputWidth, outputHeight, displayId)) { pipelineError = "capture initialization failed"; return false; }
+    EncoderConfig config; config.width = outputWidth; config.height = outputHeight; config.fps = quality.fps;
+    config.bitrate = quality.bitrateKbps * 1000; config.device = screen->HasGpuOutput() ? screen->GetDevice() : nullptr;
+    std::unique_ptr<Encoder> nextEncoder;
+    try { nextEncoder = CreateEncoder(config); }
+    catch (const std::exception& error) { pipelineError = error.what(); return false; }
+    if (!nextEncoder) { pipelineError = "no H.264 encoder initialized"; return false; }
+    screen->SetGpuOutputEnabled(nextEncoder->IsHardwareAccelerated());
     std::unique_ptr<AudioSource> audio;
     if (initializeAudio) { audio = CreateAudioSource(); audio->Initialize(); }
-    else { std::lock_guard lock(g_stateMutex); audio = std::move(g_audioCapture); }
-    auto ring = std::make_unique<RingBuffer>(g_bufferSeconds, g_quality.fps);
-    std::scoped_lock lock(g_stateMutex, g_encodeMutex);
+    else { std::lock_guard lock(stateMutex); audio = std::move(audioCapture); }
+    auto ring = std::make_unique<RingBuffer>(bufferSeconds, quality.fps);
+    std::scoped_lock lock(stateMutex, encodeMutex);
     // The encoder's DXGI device manager references the capture device. Destroy it
     // before replacing the VideoSource that owns that device.
-    g_encoder.reset(); g_screenCapture.reset();
-    g_screenCapture = std::move(screen); g_audioCapture = std::move(audio); g_encoder = std::move(encoder);
-    g_ringBuffer = std::move(ring); g_audioBuffer.clear(); g_encodeWidth = outputWidth; g_encodeHeight = outputHeight; return true;
+    encoder.reset(); screenCapture.reset();
+    screenCapture = std::move(screen); audioCapture = std::move(audio); encoder = std::move(nextEncoder);
+    ringBuffer = std::move(ring); audioBuffer.clear(); encodeWidth = outputWidth; encodeHeight = outputHeight; return true;
 }
 
-void Cleanup(void*) {
+void Shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    // Stop producers and join their threads before releasing callbacks or the
+    // encoder/device they use. Never hold the capture locks while joining.
     StopCapture();
     SetPortalRestoreToken("", {});
-    if (g_portalCallback) { g_portalCallback->Close(); g_portalCallback.reset(); }
-    if (g_voiceTrigger) {
-        g_voiceTrigger->SetEnabled(false);
-        g_voiceTrigger->SetCallback({});
-        g_voiceTrigger.reset();
+    if (portalCallback) { portalCallback->Close(); portalCallback.reset(); }
+    if (voiceTrigger) {
+        voiceTrigger->SetEnabled(false);
+        voiceTrigger->SetCallback({});
+        voiceTrigger.reset();
     }
-    if (g_voiceCallback) {
-        g_voiceCallback->Close();
-        g_voiceCallback.reset();
+    if (voiceCallback) {
+        voiceCallback->Close();
+        voiceCallback.reset();
     }
-    std::scoped_lock lock(g_stateMutex, g_encodeMutex);
-    g_encoder.reset(); g_audioCapture.reset(); g_screenCapture.reset();
-    g_ringBuffer.reset(); g_audioBuffer.clear();
+    std::scoped_lock lock(stateMutex, encodeMutex);
+    encoder.reset(); screenCapture.reset(); audioCapture.reset();
+    ringBuffer.reset();
+    std::deque<OwnedAudio>().swap(audioBuffer);
+    std::vector<EncodedPacket>().swap(previousVideo);
+    std::vector<OwnedAudio>().swap(previousAudio);
+    clipsDir.clear(); currentGame.clear(); pipelineError.clear();
+    voiceFallbackStatus = {};
 }
 
 Napi::Value Initialize(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env(); StopCapture();
-    if (info.Length() > 1 && info[1].IsNumber()) g_displayId = info[1].As<Napi::Number>().Uint32Value();
-    g_clipsDir = info.Length() && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : (std::filesystem::temp_directory_path() / "Flash" / "Clips").string();
+    if (info.Length() > 1 && info[1].IsNumber()) displayId = info[1].As<Napi::Number>().Uint32Value();
+    clipsDir = info.Length() && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : (std::filesystem::temp_directory_path() / "Flash" / "Clips").string();
     bool ok = BuildPipeline(true); GpuVendor vendor = DetectGpuVendor();
-    std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(env);
-    result.Set("screenCapture", ok); result.Set("audioCapture", g_audioCapture != nullptr);
-    result.Set("encoder", g_encoder ? g_encoder->GetName() : "none"); result.Set("hwAccel", g_encoder && g_encoder->IsHardwareAccelerated());
+    std::lock_guard lock(stateMutex); auto result = Napi::Object::New(env);
+    result.Set("screenCapture", ok); result.Set("audioCapture", audioCapture != nullptr);
+    result.Set("encoder", encoder ? encoder->GetName() : "none"); result.Set("hwAccel", encoder && encoder->IsHardwareAccelerated());
     result.Set("gpu", vendor == GpuVendor::Nvidia ? "nvidia" : vendor == GpuVendor::Amd ? "amd" : vendor == GpuVendor::Intel ? "intel" : "unknown");
-    result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); if (!ok) result.Set("error", g_pipelineError); return result;
+    result.Set("width", encodeWidth); result.Set("height", encodeHeight); if (!ok) result.Set("error", pipelineError); return result;
 }
 
 Napi::Value StartReplayBuffer(const Napi::CallbackInfo& info) {
     // A dead encoder cannot be restarted by starting its threads again, so the
     // watchdog's stop/start only recovers if the pipeline is rebuilt first.
-    if (g_encoderDead.load()) {
+    if (encoderDead.load()) {
         StopCapture();
-        if (!BuildPipeline(false)) { Napi::Error::New(info.Env(), g_pipelineError).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+        if (!BuildPipeline(false)) { Napi::Error::New(info.Env(), pipelineError).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     }
-    { std::lock_guard lock(g_stateMutex); if (!g_screenCapture || !g_encoder || !g_ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (g_screenCapture->IsCapturing()) return Napi::Boolean::New(info.Env(), true); }
+    { std::lock_guard lock(stateMutex); if (!screenCapture || !encoder || !ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (screenCapture->IsCapturing()) return Napi::Boolean::New(info.Env(), true); }
     if (!StartCaptureThreads()) { Napi::Error::New(info.Env(), "failed to start capture thread").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     return Napi::Boolean::New(info.Env(), true);
 }
@@ -263,7 +285,7 @@ Napi::Value SetClipsDir(const Napi::CallbackInfo& info) {
     if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "clips directory must be a non-empty string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     std::string path = info[0].As<Napi::String>().Utf8Value();
     if (path.empty()) { Napi::TypeError::New(info.Env(), "clips directory must be a non-empty string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    std::lock_guard lock(g_stateMutex); g_clipsDir = std::move(path); return info.Env().Undefined();
+    std::lock_guard lock(stateMutex); clipsDir = std::move(path); return info.Env().Undefined();
 }
 
 class SaveClipWorker final : public Napi::AsyncWorker {
@@ -292,14 +314,14 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
     // Refused rather than served: the buffer holds only what was encoded before
     // the encoder stopped, and a clip of something that happened minutes ago is
     // worse than no clip, because it looks like it worked.
-    if (g_encoderDead.load()) { Napi::Error::New(info.Env(), "the video encoder stopped accepting frames").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    { std::lock_guard lock(g_stateMutex); if (!g_ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-      if (g_awaitingFirstKeyframe && !g_previousVideo.empty()) {
-          width = g_previousWidth; height = g_previousHeight; fps = g_previousFps; audio = g_previousAudio;
-          if (windowSeconds > 0.0) { RingBuffer previous(g_bufferSeconds, fps); for (const auto& packet : g_previousVideo) previous.Push(packet); video = previous.Flush(windowSeconds); }
-          else video = g_previousVideo;
+    if (encoderDead.load()) { Napi::Error::New(info.Env(), "the video encoder stopped accepting frames").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    { std::lock_guard lock(stateMutex); if (!ringBuffer) { Napi::Error::New(info.Env(), "capture system is not initialized").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+      if (awaitingFirstKeyframe && !previousVideo.empty()) {
+          width = previousWidth; height = previousHeight; fps = previousFps; audio = previousAudio;
+          if (windowSeconds > 0.0) { RingBuffer previous(bufferSeconds, fps); for (const auto& packet : previousVideo) previous.Push(packet); video = previous.Flush(windowSeconds); }
+          else video = previousVideo;
       }
-      else { video = g_ringBuffer->Flush(windowSeconds); audio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); width = g_encodeWidth; height = g_encodeHeight; fps = g_quality.fps; }
+      else { video = ringBuffer->Flush(windowSeconds); audio.assign(audioBuffer.begin(), audioBuffer.end()); width = encodeWidth; height = encodeHeight; fps = quality.fps; }
       if (video.empty()) { Napi::Error::New(info.Env(), "replay buffer is empty").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
       // Audio outside the video's span has to go, and that is true of a
       // full-buffer save as much as a windowed one. It used to be done only
@@ -316,7 +338,7 @@ Napi::Value SaveClip(const Napi::CallbackInfo& info) {
               return !packet.sampleRate || packet.timestampUs < startUs || packetEndUs > endUs;
           }), audio.end());
       }
-      game = g_currentGame; path = CreateClipMuxer()->GenerateClipPath(g_clipsDir, game); }
+      game = currentGame; path = CreateClipMuxer()->GenerateClipPath(clipsDir, game); }
     auto* worker = new SaveClipWorker(info.Env(), std::move(path), std::move(game), std::move(video), std::move(audio), width, height, fps); auto promise = worker->Promise(); worker->Queue(); return promise;
 }
 
@@ -380,24 +402,24 @@ Napi::Value ListProcessesBinding(const Napi::CallbackInfo& info) {
 }
 
 Napi::Value GetStatus(const Napi::CallbackInfo& info) {
-    std::lock_guard lock(g_stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", g_screenCapture && g_screenCapture->IsCapturing());
-    const bool encoderDead = g_encoderDead.load();
-    result.Set("captureHealthy", !encoderDead && g_screenCapture && g_screenCapture->IsHealthy());
-    result.Set("capturePending", g_screenCapture && g_screenCapture->IsPending());
-    result.Set("captureError", encoderDead ? "the video encoder stopped accepting frames"
-        : (g_screenCapture ? g_screenCapture->GetCaptureError() : g_pipelineError));
-    result.Set("captureBackend", g_screenCapture ? g_screenCapture->GetCaptureBackend() : "none");
-    result.Set("bufferSeconds", g_ringBuffer ? g_ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", g_encoder ? g_encoder->GetName() : "none");
-    result.Set("width", g_encodeWidth); result.Set("height", g_encodeHeight); result.Set("fps", g_quality.fps); result.Set("bitrateKbps", g_quality.bitrateKbps); result.Set("displayId", g_displayId);
-    result.Set("audioMode", g_audioCapture ? g_audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());
-    tracks.Set("game", g_audioGame); tracks.Set("mic", g_audioMic); tracks.Set("other", g_audioOther); result.Set("audioTracks", tracks);
+    std::lock_guard lock(stateMutex); auto result = Napi::Object::New(info.Env()); result.Set("recording", screenCapture && screenCapture->IsCapturing());
+    const bool isEncoderDead = encoderDead.load();
+    result.Set("captureHealthy", !isEncoderDead && screenCapture && screenCapture->IsHealthy());
+    result.Set("capturePending", screenCapture && screenCapture->IsPending());
+    result.Set("captureError", isEncoderDead ? "the video encoder stopped accepting frames"
+        : (screenCapture ? screenCapture->GetCaptureError() : pipelineError));
+    result.Set("captureBackend", screenCapture ? screenCapture->GetCaptureBackend() : "none");
+    result.Set("bufferSeconds", ringBuffer ? ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", encoder ? encoder->GetName() : "none");
+    result.Set("width", encodeWidth); result.Set("height", encodeHeight); result.Set("fps", quality.fps); result.Set("bitrateKbps", quality.bitrateKbps); result.Set("displayId", displayId);
+    result.Set("audioMode", audioCapture ? audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());
+    tracks.Set("game", audioGame); tracks.Set("mic", audioMic); tracks.Set("other", audioOther); result.Set("audioTracks", tracks);
     // Surface why a fallback happened, and each source's own state, so a missing
     // track is diagnosable instead of just silently absent.
-    result.Set("audioError", g_audioCapture ? g_audioCapture->GetProcessError() : "");
+    result.Set("audioError", audioCapture ? audioCapture->GetProcessError() : "");
     auto sources = Napi::Array::New(info.Env());
-    if (g_audioCapture) {
+    if (audioCapture) {
         uint32_t i = 0;
-        for (const auto& source : g_audioCapture->ListSources()) {
+        for (const auto& source : audioCapture->ListSources()) {
             auto entry = Napi::Object::New(info.Env());
             entry.Set("id", source.id); entry.Set("name", source.name); entry.Set("kind", source.kind);
             entry.Set("available", source.available); entry.Set("active", source.active);
@@ -407,11 +429,11 @@ Napi::Value GetStatus(const Napi::CallbackInfo& info) {
         }
     }
     result.Set("audioSources", sources);
-    result.Set("framesDelivered", static_cast<double>(g_framesDelivered.load()));
-    result.Set("lastEncodeMs", g_encodeUs.load() / 1000.0);
-    result.Set("lastIntervalMs", g_intervalUs.load() / 1000.0);
-    result.Set("packetsPushed", static_cast<double>(g_packetsPushed.load()));
-    result.Set("encodeFailures", static_cast<double>(g_encodeFailures.load()));
+    result.Set("framesDelivered", static_cast<double>(framesDelivered.load()));
+    result.Set("lastEncodeMs", encodeUs.load() / 1000.0);
+    result.Set("lastIntervalMs", intervalUs.load() / 1000.0);
+    result.Set("packetsPushed", static_cast<double>(packetsPushed.load()));
+    result.Set("encodeFailures", static_cast<double>(encodeFailures.load()));
     return result;
 }
 
@@ -421,7 +443,7 @@ Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) {
     const auto name = info[0].As<Napi::String>().Utf8Value();
     const uint32_t processId = name.empty() || info.Length() < 2 ? 0 : info[1].As<Napi::Number>().Uint32Value();
     AudioSource* audio; bool game, mic, other;
-    { std::lock_guard lock(g_stateMutex); g_currentGame = name.empty() ? "Unknown" : name; audio = g_audioCapture.get(); game = g_audioGame; mic = g_audioMic; other = g_audioOther; }
+    { std::lock_guard lock(stateMutex); currentGame = name.empty() ? "Unknown" : name; audio = audioCapture.get(); game = audioGame; mic = audioMic; other = audioOther; }
     // PID zero rebuilds the startup loopback sources, so an exited game's audio
     // target cannot linger until another game happens to launch.
     if (audio && (name.empty() || info.Length() > 1)) {
@@ -435,10 +457,10 @@ Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) {
 Napi::Value SetAudioTracks(const Napi::CallbackInfo& info) {
     if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     auto value = info[0].As<Napi::Object>(); if (!value.Get("game").IsBoolean() || !value.Get("mic").IsBoolean() || !value.Get("other").IsBoolean()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    std::lock_guard lock(g_stateMutex); g_audioGame = value.Get("game").As<Napi::Boolean>(); g_audioMic = value.Get("mic").As<Napi::Boolean>(); g_audioOther = value.Get("other").As<Napi::Boolean>();
-    if (g_audioCapture) { g_audioCapture->SetSource("game", g_audioGame, 1.0f); g_audioCapture->SetSource("mic", g_audioMic, 1.0f); g_audioCapture->SetSource("other", g_audioOther, 1.0f); } return info.Env().Undefined();
+    std::lock_guard lock(stateMutex); audioGame = value.Get("game").As<Napi::Boolean>(); audioMic = value.Get("mic").As<Napi::Boolean>(); audioOther = value.Get("other").As<Napi::Boolean>();
+    if (audioCapture) { audioCapture->SetSource("game", audioGame, 1.0f); audioCapture->SetSource("mic", audioMic, 1.0f); audioCapture->SetSource("other", audioOther, 1.0f); } return info.Env().Undefined();
 }
-Napi::Value SetBufferLength(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "buffer length must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t seconds = info[0].As<Napi::Number>().Uint32Value(); if (seconds < 1 || seconds > 600) { Napi::RangeError::New(info.Env(), "buffer length must be between 1 and 600 seconds").ThrowAsJavaScriptException(); return info.Env().Undefined(); } std::lock_guard lock(g_stateMutex); g_bufferSeconds = seconds; if (g_ringBuffer) g_ringBuffer->SetMaxDuration(seconds, g_quality.fps); return info.Env().Undefined(); }
+Napi::Value SetBufferLength(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "buffer length must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t seconds = info[0].As<Napi::Number>().Uint32Value(); if (seconds < 1 || seconds > 600) { Napi::RangeError::New(info.Env(), "buffer length must be between 1 and 600 seconds").ThrowAsJavaScriptException(); return info.Env().Undefined(); } std::lock_guard lock(stateMutex); bufferSeconds = seconds; if (ringBuffer) ringBuffer->SetMaxDuration(seconds, quality.fps); return info.Env().Undefined(); }
 
 Napi::Value SetQuality(const Napi::CallbackInfo& info) {
     if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), "quality must be { height, fps, bitrateKbps }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
@@ -446,15 +468,15 @@ Napi::Value SetQuality(const Napi::CallbackInfo& info) {
     Quality next{value.Get("height").As<Napi::Number>().Uint32Value(), value.Get("fps").As<Napi::Number>().Uint32Value(), value.Get("bitrateKbps").As<Napi::Number>().Uint32Value()};
     // Re-applying the current quality is common (every game change does it) and
     // must not tear the pipeline down and drop frames for nothing.
-    { std::lock_guard lock(g_stateMutex); if (g_ringBuffer && next.height == g_quality.height && next.fps == g_quality.fps && next.bitrateKbps == g_quality.bitrateKbps) return info.Env().Undefined(); }
+    { std::lock_guard lock(stateMutex); if (ringBuffer && next.height == quality.height && next.fps == quality.fps && next.bitrateKbps == quality.bitrateKbps) return info.Env().Undefined(); }
     if (next.height < 240 || next.height > 4320 || next.fps < 1 || next.fps > 240 || next.bitrateKbps < 500 || next.bitrateKbps > 200000) { Napi::RangeError::New(info.Env(), "quality values are out of range").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    bool running; { std::lock_guard lock(g_stateMutex); running = g_screenCapture && g_screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(g_stateMutex); g_previousVideo = g_ringBuffer ? g_ringBuffer->Flush() : std::vector<EncodedPacket>{}; g_previousAudio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); g_previousWidth = g_encodeWidth; g_previousHeight = g_encodeHeight; g_previousFps = g_quality.fps; g_awaitingFirstKeyframe = running && !g_previousVideo.empty(); } Quality previous = g_quality; g_quality = next;
-    if (!BuildPipeline(false)) { g_quality = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to apply quality settings").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    bool running; { std::lock_guard lock(stateMutex); running = screenCapture && screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(stateMutex); previousVideo = ringBuffer ? ringBuffer->Flush() : std::vector<EncodedPacket>{}; previousAudio.assign(audioBuffer.begin(), audioBuffer.end()); previousWidth = encodeWidth; previousHeight = encodeHeight; previousFps = quality.fps; awaitingFirstKeyframe = running && !previousVideo.empty(); } Quality previous = quality; quality = next;
+    if (!BuildPipeline(false)) { quality = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to apply quality settings").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     if (running && !StartCaptureThreads()) { Napi::Error::New(info.Env(), "quality applied but capture restart failed").ThrowAsJavaScriptException(); return info.Env().Undefined(); } return info.Env().Undefined();
 }
 
 Napi::Value ListDisplays(const Napi::CallbackInfo& info) { auto result = Napi::Array::New(info.Env()); uint32_t i = 0; for (const auto& d : ListPlatformDisplays()) { auto value = Napi::Object::New(info.Env()); value.Set("id", d.id); value.Set("name", d.name); value.Set("width", d.width); value.Set("height", d.height); value.Set("isPrimary", d.isPrimary); value.Set("refreshHz", d.refreshHz); value.Set("x", d.x); value.Set("y", d.y); result.Set(i++, value); } return result; }
-Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "display id must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t id = info[0].As<Napi::Number>().Uint32Value(); if (id >= ListPlatformDisplays().size()) { Napi::RangeError::New(info.Env(), "display id does not exist").ThrowAsJavaScriptException(); return info.Env().Undefined(); } bool running; { std::lock_guard lock(g_stateMutex); running = g_screenCapture && g_screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(g_stateMutex); g_previousVideo = g_ringBuffer ? g_ringBuffer->Flush() : std::vector<EncodedPacket>{}; g_previousAudio.assign(g_audioBuffer.begin(), g_audioBuffer.end()); g_previousWidth = g_encodeWidth; g_previousHeight = g_encodeHeight; g_previousFps = g_quality.fps; g_awaitingFirstKeyframe = running && !g_previousVideo.empty(); } uint32_t previous = g_displayId; g_displayId = id; if (!BuildPipeline(false)) { g_displayId = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to switch display").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (running && !StartCaptureThreads()) Napi::Error::New(info.Env(), "display switched but capture restart failed").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+Napi::Value SetDisplay(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "display id must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t id = info[0].As<Napi::Number>().Uint32Value(); if (id >= ListPlatformDisplays().size()) { Napi::RangeError::New(info.Env(), "display id does not exist").ThrowAsJavaScriptException(); return info.Env().Undefined(); } bool running; { std::lock_guard lock(stateMutex); running = screenCapture && screenCapture->IsCapturing(); } StopCapture(); { std::lock_guard lock(stateMutex); previousVideo = ringBuffer ? ringBuffer->Flush() : std::vector<EncodedPacket>{}; previousAudio.assign(audioBuffer.begin(), audioBuffer.end()); previousWidth = encodeWidth; previousHeight = encodeHeight; previousFps = quality.fps; awaitingFirstKeyframe = running && !previousVideo.empty(); } uint32_t previous = displayId; displayId = id; if (!BuildPipeline(false)) { displayId = previous; BuildPipeline(false); if (running) StartCaptureThreads(); Napi::Error::New(info.Env(), "failed to switch display").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (running && !StartCaptureThreads()) Napi::Error::New(info.Env(), "display switched but capture restart failed").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
 
 Napi::Value SetVoiceEnabled(const Napi::CallbackInfo& info) {
     if (!info.Length() || !info[0].IsBoolean()) {
@@ -462,7 +484,7 @@ Napi::Value SetVoiceEnabled(const Napi::CallbackInfo& info) {
             .ThrowAsJavaScriptException();
         return info.Env().Undefined();
     }
-    if (g_voiceTrigger) g_voiceTrigger->SetEnabled(info[0].As<Napi::Boolean>());
+    if (voiceTrigger) voiceTrigger->SetEnabled(info[0].As<Napi::Boolean>());
     return info.Env().Undefined();
 }
 
@@ -484,7 +506,7 @@ Napi::Value SetVoicePhrases(const Napi::CallbackInfo& info) {
         }
         phrases.push_back(value.As<Napi::String>().Utf8Value());
     }
-    const bool compiled = g_voiceTrigger && g_voiceTrigger->SetPhrases(phrases);
+    const bool compiled = voiceTrigger && voiceTrigger->SetPhrases(phrases);
     return Napi::Boolean::New(info.Env(), compiled);
 }
 
@@ -504,15 +526,15 @@ Napi::Value SetVoiceThreshold(const Napi::CallbackInfo& info) {
             .ThrowAsJavaScriptException();
         return info.Env().Undefined();
     }
-    if (g_voiceTrigger) {
-        g_voiceTrigger->SetThreshold(rawFloor, static_cast<uint32_t>(cooldownMs));
+    if (voiceTrigger) {
+        voiceTrigger->SetThreshold(rawFloor, static_cast<uint32_t>(cooldownMs));
     }
     return info.Env().Undefined();
 }
 
 Napi::Value GetVoiceStatus(const Napi::CallbackInfo& info) {
-    const VoiceStatus status = g_voiceTrigger ? g_voiceTrigger->GetStatus()
-                                               : g_voiceFallbackStatus;
+    const VoiceStatus status = voiceTrigger ? voiceTrigger->GetStatus()
+                                               : voiceFallbackStatus;
     auto result = Napi::Object::New(info.Env());
     result.Set("available", status.available);
     result.Set("language", status.language);
@@ -529,20 +551,18 @@ Napi::Value OnVoiceCommand(const Napi::CallbackInfo& info) {
 
     auto replacement = std::make_shared<VoiceCallbackBridge>(
         info.Env(), info[0].As<Napi::Function>());
-    if (g_voiceTrigger) {
-        g_voiceTrigger->SetCallback(
+    RefreshCleanupHook(info.Env());
+    if (voiceTrigger) {
+        voiceTrigger->SetCallback(
             [replacement](const std::string& phrase, double rawConfidence) {
                 replacement->Dispatch(phrase, rawConfidence);
             });
     }
-    auto previous = std::move(g_voiceCallback);
-    g_voiceCallback = std::move(replacement);
+    auto previous = std::move(voiceCallback);
+    voiceCallback = std::move(replacement);
     if (previous) previous->Close();
     return info.Env().Undefined();
 }
-} // namespace
-
-
 // Both of these walk or decode an entire file, so they belong off the UI thread
 // even though neither writes anything.
 class DecodeAudioWorker final : public Napi::AsyncWorker {
@@ -658,7 +678,7 @@ private:
 
 // Preview audio is mono at 22050: enough to judge a mix and draw waveforms, and
 // it keeps a five minute clip near 26MB across three tracks rather than 345MB.
-constexpr uint32_t kPreviewSampleRate = 22050;
+static constexpr uint32_t kPreviewSampleRate = 22050;
 
 Napi::Value DecodeClipAudioBinding(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -761,8 +781,8 @@ Napi::Value SaveScreenshotBinding(const Napi::CallbackInfo& info) {
     }
     std::shared_ptr<VideoSource> capture;
     {
-        std::lock_guard lock(g_stateMutex);
-        capture = g_screenCapture;
+        std::lock_guard lock(stateMutex);
+        capture = screenCapture;
     }
     if (!capture || !capture->IsCapturing()) {
         Napi::Error::New(env, "capture is not running").ThrowAsJavaScriptException();
@@ -775,17 +795,27 @@ Napi::Value SaveScreenshotBinding(const Napi::CallbackInfo& info) {
 }
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
-    napi_add_env_cleanup_hook(env, Cleanup, nullptr);
+    // process.exit() does not run env cleanup hooks in Node. Register a native
+    // exit listener as well; both routes use the same idempotent shutdown.
+    // Keep the state shell alive until env cleanup so later exit listeners
+    // cannot call exported functions through a dangling pointer.
+    auto process = env.Global().Get("process").As<Napi::Object>();
+    process.Get("once").As<Napi::Function>().Call(process, {
+        Napi::String::New(env, "exit"),
+        Napi::Function::New(env, [](const Napi::CallbackInfo& info) {
+            static_cast<AddonState*>(info.Data())->Shutdown();
+        }, "flashCaptureShutdown", this),
+    });
     try {
-        g_voiceTrigger = std::make_unique<VoiceTrigger>();
-        g_voiceFallbackStatus = g_voiceTrigger->GetStatus();
+        voiceTrigger = std::make_unique<VoiceTrigger>();
+        voiceFallbackStatus = voiceTrigger->GetStatus();
     } catch (const std::exception& error) {
-        g_voiceFallbackStatus = {false, "",
+        voiceFallbackStatus = {false, "",
             std::string("Voice recognition is unavailable: ") + error.what()};
     } catch (...) {
-        g_voiceFallbackStatus = {false, "", "Voice recognition is unavailable."};
+        voiceFallbackStatus = {false, "", "Voice recognition is unavailable."};
     }
-    exports.Set("setPortalRestoreToken", Napi::Function::New(env, SetPortalRestoreTokenBinding));
+    exports.Set("setPortalRestoreToken", Napi::Function::New(env, Invoke<&AddonState::SetPortalRestoreTokenBinding>, "SetPortalRestoreTokenBinding", this));
     auto capabilities = Napi::Object::New(env);
 #ifdef _WIN32
     capabilities.Set("smartRender", true);
@@ -794,18 +824,53 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     capabilities.Set("smartRenderError", "Smart render is unsupported on Linux; trim uses keyframe stream copy.");
 #endif
     exports.Set("capabilities", capabilities);
-    exports.Set("initialize", Napi::Function::New(env, Initialize)); exports.Set("startReplayBuffer", Napi::Function::New(env, StartReplayBuffer)); exports.Set("stopReplayBuffer", Napi::Function::New(env, StopReplayBuffer));
-    exports.Set("saveClip", Napi::Function::New(env, SaveClip)); exports.Set("trimClip", Napi::Function::New(env, TrimClipAsync)); exports.Set("getStatus", Napi::Function::New(env, GetStatus)); exports.Set("setCurrentGame", Napi::Function::New(env, SetCurrentGame)); exports.Set("setBufferLength", Napi::Function::New(env, SetBufferLength)); exports.Set("exportClip", Napi::Function::New(env, ExportClipBinding)); exports.Set("setClipsDir", Napi::Function::New(env, SetClipsDir));
-    exports.Set("setQuality", Napi::Function::New(env, SetQuality)); exports.Set("listDisplays", Napi::Function::New(env, ListDisplays)); exports.Set("setDisplay", Napi::Function::New(env, SetDisplay)); exports.Set("setAudioTracks", Napi::Function::New(env, SetAudioTracks));
-    exports.Set("decodeClipAudio", Napi::Function::New(env, DecodeClipAudioBinding));
-    exports.Set("getClipKeyframes", Napi::Function::New(env, GetClipKeyframesBinding));
-    exports.Set("saveScreenshot", Napi::Function::New(env, SaveScreenshotBinding));
-    exports.Set("setVoiceEnabled", Napi::Function::New(env, SetVoiceEnabled));
-    exports.Set("setVoicePhrases", Napi::Function::New(env, SetVoicePhrases));
-    exports.Set("setVoiceThreshold", Napi::Function::New(env, SetVoiceThreshold));
-    exports.Set("getVoiceStatus", Napi::Function::New(env, GetVoiceStatus));
-    exports.Set("onVoiceCommand", Napi::Function::New(env, OnVoiceCommand));
-    exports.Set("listProcesses", Napi::Function::New(env, ListProcessesBinding));
+    exports.Set("initialize", Napi::Function::New(env, Invoke<&AddonState::Initialize>, "Initialize", this)); exports.Set("startReplayBuffer", Napi::Function::New(env, Invoke<&AddonState::StartReplayBuffer>, "StartReplayBuffer", this)); exports.Set("stopReplayBuffer", Napi::Function::New(env, Invoke<&AddonState::StopReplayBuffer>, "StopReplayBuffer", this));
+    exports.Set("saveClip", Napi::Function::New(env, Invoke<&AddonState::SaveClip>, "SaveClip", this)); exports.Set("trimClip", Napi::Function::New(env, Invoke<&AddonState::TrimClipAsync>, "TrimClipAsync", this)); exports.Set("getStatus", Napi::Function::New(env, Invoke<&AddonState::GetStatus>, "GetStatus", this)); exports.Set("setCurrentGame", Napi::Function::New(env, Invoke<&AddonState::SetCurrentGame>, "SetCurrentGame", this)); exports.Set("setBufferLength", Napi::Function::New(env, Invoke<&AddonState::SetBufferLength>, "SetBufferLength", this)); exports.Set("exportClip", Napi::Function::New(env, Invoke<&AddonState::ExportClipBinding>, "ExportClipBinding", this)); exports.Set("setClipsDir", Napi::Function::New(env, Invoke<&AddonState::SetClipsDir>, "SetClipsDir", this));
+    exports.Set("setQuality", Napi::Function::New(env, Invoke<&AddonState::SetQuality>, "SetQuality", this)); exports.Set("listDisplays", Napi::Function::New(env, Invoke<&AddonState::ListDisplays>, "ListDisplays", this)); exports.Set("setDisplay", Napi::Function::New(env, Invoke<&AddonState::SetDisplay>, "SetDisplay", this)); exports.Set("setAudioTracks", Napi::Function::New(env, Invoke<&AddonState::SetAudioTracks>, "SetAudioTracks", this));
+    exports.Set("decodeClipAudio", Napi::Function::New(env, Invoke<&AddonState::DecodeClipAudioBinding>, "DecodeClipAudioBinding", this));
+    exports.Set("getClipKeyframes", Napi::Function::New(env, Invoke<&AddonState::GetClipKeyframesBinding>, "GetClipKeyframesBinding", this));
+    exports.Set("saveScreenshot", Napi::Function::New(env, Invoke<&AddonState::SaveScreenshotBinding>, "SaveScreenshotBinding", this));
+    exports.Set("setVoiceEnabled", Napi::Function::New(env, Invoke<&AddonState::SetVoiceEnabled>, "SetVoiceEnabled", this));
+    exports.Set("setVoicePhrases", Napi::Function::New(env, Invoke<&AddonState::SetVoicePhrases>, "SetVoicePhrases", this));
+    exports.Set("setVoiceThreshold", Napi::Function::New(env, Invoke<&AddonState::SetVoiceThreshold>, "SetVoiceThreshold", this));
+    exports.Set("getVoiceStatus", Napi::Function::New(env, Invoke<&AddonState::GetVoiceStatus>, "GetVoiceStatus", this));
+    exports.Set("onVoiceCommand", Napi::Function::New(env, Invoke<&AddonState::OnVoiceCommand>, "OnVoiceCommand", this));
+    exports.Set("listProcesses", Napi::Function::New(env, Invoke<&AddonState::ListProcessesBinding>, "ListProcessesBinding", this));
     return exports;
+}
+
+static void Cleanup(void* data) {
+    std::unique_ptr<AddonState> state(static_cast<AddonState*>(data));
+    state->Shutdown();
+}
+
+// TSFNs install their own cleanup hooks. Hooks run in reverse registration
+// order, so keep ours ahead of them: stop producers and Abort while the TSFN
+// is still valid, including Worker termination where no JS exit event runs.
+void RefreshCleanupHook(Napi::Env env) {
+    napi_remove_env_cleanup_hook(env, Cleanup, this);
+    napi_add_env_cleanup_hook(env, Cleanup, this);
+}
+
+template <Napi::Value (AddonState::*Method)(const Napi::CallbackInfo&)>
+static Napi::Value Invoke(const Napi::CallbackInfo& info) {
+    auto* state = static_cast<AddonState*>(info.Data());
+    if (state->shuttingDown) {
+        Napi::Error::New(info.Env(), "capture environment is shutting down")
+            .ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    return (state->*Method)(info);
+}
+};
+} // namespace
+
+Napi::Object Init(Napi::Env env, Napi::Object exports) {
+    auto state = std::make_unique<AddonState>();
+    const auto status = napi_add_env_cleanup_hook(env, AddonState::Cleanup, state.get());
+    if (status != napi_ok) throw Napi::Error::New(env, "could not register capture cleanup");
+    // Once registered, the hook owns the state even if initialization throws.
+    auto* owned = state.release();
+    return owned->Init(env, exports);
 }
 NODE_API_MODULE(flash_capture, Init)

@@ -75,7 +75,16 @@ static std::string DeviceName(IMMDevice* device, const char* fallback) {
 #endif
 
 AudioCapture::AudioCapture() = default;
-AudioCapture::~AudioCapture() { Stop(); }
+AudioCapture::~AudioCapture() {
+    Stop();
+#ifdef _WIN32
+    // Initialize and destruction run on the owning environment thread. Release
+    // every WASAPI interface before balancing that thread's COM initialization.
+    sources_.clear();
+    enumerator_.Reset();
+    if (apartmentInitialized_) CoUninitialize();
+#endif
+}
 
 bool AudioCapture::InitializeEndpoint(const std::shared_ptr<Source>& source, int flow) {
 #ifdef _WIN32
@@ -145,7 +154,11 @@ bool AudioCapture::InitializeProcess(const std::shared_ptr<Source>& source, uint
 
 bool AudioCapture::Initialize() {
 #ifdef _WIN32
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (!apartmentInitialized_) {
+        const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (FAILED(apartment) && apartment != RPC_E_CHANGED_MODE) return false;
+        apartmentInitialized_ = SUCCEEDED(apartment);
+    }
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
         __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(enumerator_.GetAddressOf()));
     if (FAILED(hr)) return false;
@@ -207,7 +220,7 @@ void AudioCapture::Stop() {
 
 void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
 #ifdef _WIN32
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     while (capturing_.load() && source->running.load()) {
         if (WaitForSingleObject(source->event, 100) != WAIT_OBJECT_0) continue;
         UINT32 packet = 0; source->capture->GetNextPacketSize(&packet);
@@ -237,7 +250,7 @@ void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
             source->capture->ReleaseBuffer(frames); source->capture->GetNextPacketSize(&packet);
         }
     }
-    CoUninitialize();
+    if (SUCCEEDED(apartment)) CoUninitialize();
 #else
     (void)source;
 #endif

@@ -23,7 +23,5 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   console.log(`buffered before re-apply: ${before.toFixed(1)}s, after 3 re-applies + 3 s: ${after.toFixed(1)}s`)
   const ok = before > 4 && after > before + 2
   console.log(ok ? 'PASS: re-applying settings kept the replay' : 'FAIL: the replay was reset')
-  // Exit normally rather than process.exit(): the addon still crashes in static
-  // teardown on process.exit (see flash-open-defects).
   process.exitCode = ok ? 0 : 1
 })()

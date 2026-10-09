@@ -26,7 +26,6 @@ import { decideAutostart } from '../shared/autostart'
 import { clipPathFromUrl, captureCommand, isLinuxInfrastructure, type CaptureCommand } from '../shared/platform'
 import { linuxAutostartEnabled, setLinuxAutostart, linuxProcessSnapshot } from './linux'
 
-declare const __FLASH_ANTONIO_DATA__: string
 
 if (process.platform === 'linux') {
   app.setDesktopName('flash.desktop')
@@ -448,6 +447,21 @@ function resource(packaged: string, repoRelative: string): string {
     : join(__dirname, '../../../..', repoRelative)
 }
 
+// The toast and overlay are separate windows loaded from data URLs, so they
+// cannot reach the renderer's bundled font; embed it once, read from assets
+// (which ship with the app), and degrade to the fallback stack if it is gone.
+let antonioDataUrl: string | null = null
+function antonioFont(): string {
+  if (antonioDataUrl !== null) return antonioDataUrl
+  try {
+    antonioDataUrl = 'data:font/woff2;base64,' + readFileSync(resource('assets/fonts/antonio.woff2', 'assets/fonts/antonio.woff2')).toString('base64')
+  } catch (error) {
+    console.warn('Could not load the display font for the toast', error)
+    antonioDataUrl = ''
+  }
+  return antonioDataUrl
+}
+
 function loadCaptureAddon(): CaptureAddon | null {
   const addonPath = resource('flash_capture.node', `packages/flash-capture/build/${process.platform === 'win32' ? 'Release/' : ''}flash_capture.node`)
   try { return require(addonPath) as CaptureAddon }
@@ -702,7 +716,9 @@ function onClipSaved(clip: { path: string; duration: number }, game: string) {
   try {
     writeSidecar(clip.path, { duration: clip.duration, game })
   } catch { /* sidecar is an optimisation, not required */ }
-  showClipNotification(clip.duration)
+  // The clip is already on disk; a toast that fails to draw must not turn a
+  // successful save into a reported error.
+  try { showClipNotification(clip.duration) } catch (error) { console.warn('Could not show the clip toast', error) }
   playClipSound()
   mainWindow?.webContents.send('clip-saved-refresh')
 }
@@ -1019,7 +1035,7 @@ function showClipNotification(durationSeconds: number) {
   notification.setAlwaysOnTop(true, 'screen-saver')
   notification.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   notification.setIgnoreMouseEvents(true, { forward: true })
-  const html = toastHtml(settings.theme, __FLASH_ANTONIO_DATA__, durationSeconds)
+  const html = toastHtml(settings.theme, antonioFont(), durationSeconds)
   notification.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   let timer: ReturnType<typeof setTimeout> | undefined
   notification.once('closed', () => {
@@ -1067,7 +1083,7 @@ function createOverlay() {
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
   const overlay = overlayWindow
-  const html = overlayHtml(settings.theme, __FLASH_ANTONIO_DATA__)
+  const html = overlayHtml(settings.theme, antonioFont())
   overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   overlay.once('ready-to-show', () => {
     if (overlay.isDestroyed() || overlayWindow !== overlay) return

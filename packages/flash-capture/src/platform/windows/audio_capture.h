@@ -57,6 +57,7 @@ private:
 
 #ifdef _WIN32
     ComPtr<IMMDeviceEnumerator> enumerator_;
+    bool apartmentInitialized_ = false;
 #endif
 };
 

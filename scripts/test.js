@@ -35,6 +35,7 @@ console.log('Safe integration probes')
 for (const [file, args] of [
   ['sidecars.js', []], ['preload-subscriptions.js', []], ['main-boundaries.js', []], ['deletion-retry.js', []],
   ['export-and-game.js', ['--safe']],
+  ['native-teardown.js', []],
 ]) {
   if (!run(file, process.execPath, ['--experimental-strip-types', join(root, 'scripts/probes', file), ...args], root)) failed++
 }

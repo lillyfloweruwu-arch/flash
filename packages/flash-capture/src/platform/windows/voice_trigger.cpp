@@ -111,8 +111,10 @@ private:
 
     void WorkerMain(std::promise<void> initialized) noexcept {
 #ifdef _WIN32
+        bool apartmentInitialized = false;
         try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            apartmentInitialized = true;
             InitializeRecognizer();
         } catch (const winrt::hresult_error& error) {
             SetUnavailable(WinrtError("Voice recognition is unavailable", error));
@@ -152,7 +154,10 @@ private:
 
 #ifdef _WIN32
         ShutdownRecognizer();
-        winrt::uninit_apartment();
+        // C++/WinRT caches activation factories as well as the explicit
+        // recognizer objects. Release those while COM is still initialized.
+        winrt::clear_factory_cache();
+        if (apartmentInitialized) winrt::uninit_apartment();
 #endif
     }
 
