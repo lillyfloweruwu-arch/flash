@@ -259,7 +259,7 @@ html, body {
 .rail-btn:hover:not(:disabled) svg { transform: scale(1.08); }
 .rail-btn:active:not(:disabled) svg { transform: scale(0.92); }
 .rail-btn span {
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;

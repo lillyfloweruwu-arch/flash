@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-09T04:10:00Z",
+  "title": "Design System: Flash",
+  "extensions": {
+    "colorMeta": {
+      "ground": { "role": "neutral", "displayName": "Ground", "canonical": "#0a0a0b", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "panel": { "role": "neutral", "displayName": "Panel", "canonical": "#121316", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "edge": { "role": "neutral", "displayName": "Edge", "canonical": "#2a2d34", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "edge-soft": { "role": "neutral", "displayName": "Edge Soft", "canonical": "color-mix(in srgb, var(--edge) 70%, var(--bg))", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "bone-white": { "role": "neutral", "displayName": "Bone White", "canonical": "#f2f3f5", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "ash": { "role": "neutral", "displayName": "Ash", "canonical": "#9aa0ab", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#9aa0ab", "#f2f3f5"] },
+      "ash-2": { "role": "neutral", "displayName": "Ash 2", "canonical": "color-mix(in srgb, var(--muted) 82%, var(--bg))", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#80858e", "#9aa0ab"] },
+      "ash-3": { "role": "neutral", "displayName": "Ash 3", "canonical": "color-mix(in srgb, var(--muted) 64%, var(--bg))", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#80858e", "#9aa0ab"] },
+      "ash-faint": { "role": "neutral", "displayName": "Ash Faint", "canonical": "color-mix(in srgb, var(--muted) 40%, var(--bg))", "tonalRamp": ["#0a0a0b", "#121316", "#202228", "#2a2d34", "#44464b", "#666a71", "#80858e", "#9aa0ab"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "color-mix(in srgb, var(--fg) 30%, transparent)" },
+      "hairline-strong": { "role": "neutral", "displayName": "Hairline Strong", "canonical": "color-mix(in srgb, var(--fg) 70%, transparent)" },
+      "glass": { "role": "neutral", "displayName": "Glass", "canonical": "color-mix(in srgb, var(--fg) 7%, transparent)" },
+      "scrim": { "role": "neutral", "displayName": "Scrim", "canonical": "rgba(4, 4, 6, 0.86)" },
+      "flash-red": { "role": "primary", "displayName": "Flash Red", "canonical": "#e8192c", "tonalRamp": ["#2a0508", "#4f0a10", "#7a0f19", "#a81422", "#e8192c", "#f0545f", "#f68d94", "#fbc7ca"], "themeVariants": { "blood": "#e8192c", "ultraviolet": "#b45cff", "cobalt": "#4d7cfe", "fuchsia": "#ff4fa3", "indigo": "#7c74ff", "bone": "#f0f0f0" } },
+      "flash-red-wash": { "role": "primary", "displayName": "Red Wash", "canonical": "color-mix(in srgb, var(--accent) 16%, transparent)" },
+      "flash-red-line": { "role": "primary", "displayName": "Red Line", "canonical": "color-mix(in srgb, var(--accent) 45%, transparent)" },
+      "on-accent": { "role": "primary", "displayName": "On Accent", "canonical": "#ffffff", "themeVariants": { "blood": "#ffffff", "ultraviolet": "#12051f", "cobalt": "#050b1e", "fuchsia": "#1e0512", "indigo": "#070616", "bone": "#0a0a0a" } },
+      "spark": { "role": "secondary", "displayName": "Spark Amber", "canonical": "#ffb020", "tonalRamp": ["#2e1f04", "#5a3d07", "#8a5d0b", "#c4850f", "#ffb020", "#ffc75c", "#ffdc97", "#fff0d3"], "themeVariants": { "blood": "#ffb020", "ultraviolet": "#ff9ad0", "cobalt": "#ffb020", "fuchsia": "#ffb020", "indigo": "#ff9ad0", "bone": "#d6d6d6" } },
+      "alert-rose": { "role": "tertiary", "displayName": "Alert Rose", "canonical": "#ff6b8e", "tonalRamp": ["#33121b", "#5e2132", "#8f324b", "#c74868", "#ff6b8e", "#ff95ae", "#ffbfce", "#ffe8ee"], "themeVariants": { "blood": "#ff6b8e", "ultraviolet": "#ff6b6b", "cobalt": "#ff6b6b", "fuchsia": "#ff4d5e", "indigo": "#ff6b6b", "bone": "#ff6b6b" } },
+      "live-green": { "role": "tertiary", "displayName": "Live Green", "canonical": "#4ade80", "tonalRamp": ["#0b2a17", "#13502b", "#1d7a41", "#2aa85a", "#4ade80", "#7be8a1", "#abf1c3", "#dcf9e6"] }
+    },
+    "typographyMeta": {
+      "display-hero": { "displayName": "Display Hero", "purpose": "The clip title on Watch, low-left on the bottom scrim; empty-state headlines." },
+      "headline": { "displayName": "Headline", "purpose": "Library day headings, the Settings page title." },
+      "title": { "displayName": "Title", "purpose": "Dialog titles, the editor Mix heading; Settings sections at 40px." },
+      "title-sm": { "displayName": "Title Small", "purpose": "Tile headings, editor header, counters, selection count (22 to 26px)." },
+      "body": { "displayName": "Body", "purpose": "Dialog copy, Settings row labels, empty-state explanations (13 to 15px)." },
+      "body-sm": { "displayName": "Body Small", "purpose": "Metadata, timecodes, notes and hints with tabular figures." },
+      "label": { "displayName": "Label", "purpose": "Every button, tab, game name and status: uppercase, tracked 0.14em, never below 10px." }
+    },
+    "shadows": [
+      { "name": "dialog", "value": "0 24px 64px rgba(0,0,0,0.6)", "purpose": "Confirm and identify-game dialogs." },
+      { "name": "float", "value": "0 16px 40px rgba(0,0,0,0.6)", "purpose": "Dropdown menus and the multi-select bar." },
+      { "name": "popover", "value": "0 12px 32px rgba(0,0,0,0.55)", "purpose": "Selection bar popovers." },
+      { "name": "glyph-lift", "value": "drop-shadow(0 1px 6px rgba(0,0,0,0.55))", "purpose": "Filter on rail glyphs so white outlines hold over bright footage." },
+      { "name": "caption-lift", "value": "0 1px 8px rgba(0,0,0,0.8)", "purpose": "Text shadow for small captions over footage." },
+      { "name": "hero-lift", "value": "0 2px 30px rgba(0,0,0,0.45)", "purpose": "Text shadow for the Watch hero title." },
+      { "name": "scrim-bottom", "value": "linear-gradient(to top, rgba(4,4,6,0.95) 0%, var(--scrim) 22%, rgba(4,4,6,0.6) 48%, transparent 100%)", "purpose": "Bottom 62% of Watch under the caption." },
+      { "name": "scrim-top", "value": "linear-gradient(to bottom, rgba(4,4,6,0.78), transparent)", "purpose": "Top 140px of Watch under the floating title bar." },
+      { "name": "grain", "value": "static 160px SVG fractalNoise tile, baseFrequency 0.9, 2 octaves, 5% white", "purpose": "Material on full-screen surfaces without footage." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Default easing for every entrance and glyph response." },
+      { "name": "state", "value": "140ms ease", "purpose": "Colour, border, background and opacity changes on controls." },
+      { "name": "feed-snap", "value": "260ms ease-out, translateY(+/-6%) from 0.2 opacity", "purpose": "The incoming clip rises from the direction you scrolled." },
+      { "name": "caption-in", "value": "360ms ease-out, 40ms delay, translateY(14px) from 0", "purpose": "The caption follows the clip a beat later." },
+      { "name": "star-pop", "value": "380ms ease-out, scale 0.6 to 1.28 to 1", "purpose": "Starring, the feed's one engaged moment that moves." },
+      { "name": "glyph-press", "value": "160ms ease-out, scale 1.08 hover / 0.92 press", "purpose": "Rail glyph response." },
+      { "name": "dialog-in", "value": "160ms ease-out, translateY(8px) scale(0.985) from 0", "purpose": "Dialogs and the selection bar entering." },
+      { "name": "overlay-in", "value": "120ms ease-out fade", "purpose": "Dialog backdrop." },
+      { "name": "tile-zoom", "value": "420ms ease-out, scale 1.025", "purpose": "Library tile footage on hover." },
+      { "name": "rec-pulse", "value": "1.6s ease-in-out infinite, opacity 1 to 0.35", "purpose": "Live REC dot; 0.8s while a clip is saving." },
+      { "name": "lane-shimmer", "value": "1.4s ease-in-out infinite, opacity 0.35 to 0.75", "purpose": "Audio lanes while decoding." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Outline Button",
+      "kind": "button",
+      "refersTo": "button-outline",
+      "description": "Default action: hairline outline, tracked caps label, optional outlined glyph.",
+      "html": "<button class=\"ds-btn\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 8.5A1.5 1.5 0 015.5 7h2.3l1.4-2h5.6l1.4 2h2.3A1.5 1.5 0 0120 8.5v9a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 17.5z\"/><circle cx=\"12\" cy=\"12.8\" r=\"3.4\"/></svg>Grab frame</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 34px; padding: 0 16px; border-radius: 6px; border: 1px solid rgba(242,243,245,0.3); background: transparent; color: #f2f3f5; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; white-space: nowrap; cursor: pointer; transition: background 140ms ease, border-color 140ms ease, color 140ms ease; } .ds-btn:hover { background: rgba(242,243,245,0.07); border-color: rgba(242,243,245,0.7); } .ds-btn:active { background: #f2f3f5; color: #0a0a0b; border-color: #f2f3f5; } .ds-btn:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; }"
+    },
+    {
+      "name": "Solid Button",
+      "kind": "button",
+      "refersTo": "button-solid",
+      "description": "The one filled button in an action group: the thing you came to do.",
+      "html": "<button class=\"ds-btn-solid\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"6.5\" cy=\"6.5\" r=\"2.6\"/><circle cx=\"6.5\" cy=\"17.5\" r=\"2.6\"/><path d=\"M8.6 8.1L20 18M8.6 15.9L20 6\"/></svg>Edit clip</button>",
+      "css": ".ds-btn-solid { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 16px; border-radius: 6px; border: 1px solid #f2f3f5; background: #f2f3f5; color: #0a0a0b; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: background 140ms ease, border-color 140ms ease; } .ds-btn-solid:hover { background: color-mix(in srgb, #f2f3f5 86%, #0a0a0b); border-color: transparent; } .ds-btn-solid:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive action in alert, never in the accent.",
+      "html": "<button class=\"ds-btn-danger\">Delete</button>",
+      "css": ".ds-btn-danger { display: inline-flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid rgba(255,107,142,0.45); background: transparent; color: #ff6b8e; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: background 140ms ease, border-color 140ms ease; } .ds-btn-danger:hover { background: rgba(255,107,142,0.12); border-color: #ff6b8e; } .ds-btn-danger:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; }"
+    },
+    {
+      "name": "Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Text-only tabs for top navigation, filters and sort; current tab is white with a 1px underline.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab\" aria-current=\"page\">Watch</button><button class=\"ds-tab\">Library <span class=\"ds-count\">68</span></button><button class=\"ds-tab\">Settings</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: 24px; } .ds-tab { position: relative; display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 0; background: none; border: 0; color: #666a71; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: color 140ms ease; } .ds-tab:hover { color: #9aa0ab; } .ds-tab[aria-current='page'] { color: #f2f3f5; } .ds-tab[aria-current='page']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: #f2f3f5; } .ds-tab:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; border-radius: 4px; } .ds-count { font-size: 10px; letter-spacing: 0.06em; color: #44464b; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Hairline Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Transparent text field with an edge stroke that strengthens on focus.",
+      "html": "<input class=\"ds-field\" placeholder=\"Search\" />",
+      "css": ".ds-field { height: 34px; padding: 0 12px; border-radius: 6px; border: 1px solid #2a2d34; background: transparent; color: #f2f3f5; caret-color: #e8192c; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 12px; outline: none; transition: border-color 140ms ease; } .ds-field::placeholder { color: #666a71; } .ds-field:hover { border-color: color-mix(in srgb, #2a2d34 50%, #9aa0ab); } .ds-field:focus { border-color: rgba(242,243,245,0.7); }"
+    },
+    {
+      "name": "REC Pill",
+      "kind": "chip",
+      "refersTo": "rec-pill-live",
+      "description": "Replay-buffer state in the title bar; the accent appears only while live.",
+      "html": "<button class=\"ds-rec\" aria-pressed=\"true\"><span class=\"ds-rec-dot\"></span>Rec</button>",
+      "css": ".ds-rec { display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid rgba(232,25,44,0.45); background: rgba(232,25,44,0.16); color: #f2f3f5; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; transition: background 140ms ease, border-color 140ms ease; } .ds-rec:hover { border-color: #e8192c; } .ds-rec:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; } .ds-rec-dot { width: 8px; height: 8px; border-radius: 99px; background: #e8192c; animation: ds-pulse 1.6s ease-in-out infinite; } @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } } @media (prefers-reduced-motion: reduce) { .ds-rec-dot { animation: none; } }"
+    },
+    {
+      "name": "Rail Button",
+      "kind": "custom",
+      "refersTo": "rail-btn",
+      "description": "Watch action rail: one 30px outlined glyph with its label under it; on-state fills in the accent.",
+      "html": "<div class=\"ds-rail-stage\"><button class=\"ds-rail\" aria-pressed=\"true\"><svg width=\"30\" height=\"30\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 3.2l2.7 5.5 6 .9-4.35 4.25 1.03 6-5.38-2.83-5.38 2.83 1.03-6L3.3 9.6l6-.9z\"/></svg><span>Starred</span></button><button class=\"ds-rail\"><svg width=\"30\" height=\"30\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3.5 7.5A1.5 1.5 0 015 6h4.3l2 2.2H19a1.5 1.5 0 011.5 1.5v8.3A1.5 1.5 0 0119 19.5H5A1.5 1.5 0 013.5 18z\"/></svg><span>Folder</span></button></div>",
+      "css": ".ds-rail-stage { display: inline-flex; flex-direction: column; gap: 10px; padding: 16px; background: linear-gradient(135deg, #3a4a5c, #0a0a0b); } .ds-rail { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 64px; padding: 6px 0; background: none; border: 0; color: #f2f3f5; cursor: pointer; filter: drop-shadow(0 1px 6px rgba(0,0,0,0.55)); } .ds-rail svg { transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-rail:hover svg { transform: scale(1.08); } .ds-rail:active svg { transform: scale(0.92); } .ds-rail[aria-pressed='true'] { color: #e8192c; } .ds-rail:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; border-radius: 4px; } .ds-rail span { font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(242,243,245,0.8); }"
+    },
+    {
+      "name": "Library Tile",
+      "kind": "card",
+      "refersTo": "tile",
+      "description": "Square 16:9 contact-sheet tile with a bottom scrim, Antonio heading and tracked game label; selected draws an inset accent border.",
+      "html": "<div class=\"ds-tile\" tabindex=\"0\" data-selected=\"true\"><div class=\"ds-tile-media\"></div><div class=\"ds-tile-scrim\"></div><div class=\"ds-tile-text\"><span class=\"ds-tile-title\">3:19:40 AM</span><span class=\"ds-tile-meta\"><span class=\"ds-tile-game\">Rocket League</span> · 0:15</span></div></div>",
+      "css": ".ds-tile { position: relative; width: 320px; aspect-ratio: 16 / 9; overflow: hidden; background: #121316; cursor: pointer; outline: none; } .ds-tile-media { position: absolute; inset: 0; background: linear-gradient(160deg, #4a6a8a, #2d4a2a 60%, #1a2a1a); transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-tile:hover .ds-tile-media { transform: scale(1.025); } .ds-tile-scrim { position: absolute; inset: auto 0 0 0; height: 62%; background: linear-gradient(to top, rgba(4,4,6,0.86), rgba(4,4,6,0.4) 55%, transparent); } .ds-tile-text { position: absolute; left: 14px; right: 14px; bottom: 12px; display: flex; flex-direction: column; } .ds-tile-title { font-family: 'Antonio Variable', 'Bahnschrift SemiCondensed', 'Arial Narrow', sans-serif; font-weight: 600; font-size: 24px; line-height: 0.92; text-transform: uppercase; color: #f2f3f5; font-variant-numeric: tabular-nums; } .ds-tile-meta { margin-top: 5px; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 11px; color: rgba(242,243,245,0.72); font-variant-numeric: tabular-nums; } .ds-tile-game { font-size: 10px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; } .ds-tile[data-selected='true']::after { content: ''; position: absolute; inset: 0; border: 2px solid #e8192c; pointer-events: none; } .ds-tile:focus-visible::after { content: ''; position: absolute; inset: 0; border: 2px solid #f2f3f5; pointer-events: none; } @media (prefers-reduced-motion: reduce) { .ds-tile:hover .ds-tile-media { transform: none; } }"
+    },
+    {
+      "name": "Toggle",
+      "kind": "custom",
+      "refersTo": "toggle-on",
+      "description": "Switch: hairline outline when off, accent fill with on-accent knob when on.",
+      "html": "<button class=\"ds-toggle\" role=\"switch\" aria-checked=\"true\"><span></span></button>",
+      "css": ".ds-toggle { position: relative; width: 36px; height: 20px; border-radius: 999px; border: 1px solid #e8192c; background: #e8192c; cursor: pointer; transition: background 150ms ease, border-color 150ms ease; } .ds-toggle span { position: absolute; top: 3px; left: 19px; width: 12px; height: 12px; border-radius: 999px; background: #ffffff; transition: left 150ms ease, background 150ms ease; } .ds-toggle[aria-checked='false'] { background: transparent; border-color: rgba(242,243,245,0.3); } .ds-toggle[aria-checked='false'] span { left: 3px; background: #9aa0ab; } .ds-toggle:focus-visible { outline: 2px solid #f2f3f5; outline-offset: 2px; }"
+    },
+    {
+      "name": "Keycap",
+      "kind": "chip",
+      "refersTo": "keycap",
+      "description": "Hotkey display in the title bar, empty states and editor.",
+      "html": "<span class=\"ds-keycap\">Shift+F8</span>",
+      "css": ".ds-keycap { display: inline-flex; align-items: center; height: 22px; padding: 0 7px; border-radius: 4px; border: 1px solid rgba(242,243,245,0.3); color: #9aa0ab; font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif; font-size: 10.5px; font-weight: 600; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Screening Room After Midnight",
+    "overview": "Flash is a dark room with one clip on the wall. The home screen (shown to people as Watch) gives the whole window to the newest clip, footage contain-fitted on pure black, and lays the interface over it as white outlined glyphs and tall condensed capitals sitting on soft gradient scrims. The next clip is one wheel flick, arrow key or J/K away, and the transition is a short rise from the direction you moved. Library and Settings are the same room with the lights half up: near-black ground with a static film-grain tile, the same Antonio capitals for names and dates, the same tracked small caps for every label.\n\nThe system is deliberately quiet so the footage can be loud. Neutrals carry a faint per-theme tint and are tuned per palette; the theme accent is withheld from chrome and only appears where something is live or engaged: the REC dot, a starred clip, a selected tile, an enabled toggle, a chosen dropdown option, trim handles. Density is low on Watch (one item, generous 48px gutters) and higher in Library (a 2px-seam mosaic of 16:9 tiles), but the vocabulary never changes between them.\n\nConfirmed rejections, from PRODUCT.md and the build's own direction: not the dark-dashboard card grid every clipper ships, not an RGB gamer product (no neon glow, no angled HUD chrome), not a generic SaaS dashboard.",
+    "keyCharacteristics": [
+      "Footage is full-bleed and square-cornered; the interface floats over it on gradient scrims, never in boxes.",
+      "Two type voices: Antonio Variable capitals for what is read big (titles, dates, counts), the platform UI face for everything read small.",
+      "Every label, tab and button is 11px uppercase tracked 0.14em.",
+      "One outlined icon family; an \"on\" glyph fills rather than redraws.",
+      "Accent appears only on live or engaged state; six user-selectable palettes share one structure.",
+      "Flat by default; shadows only on things that genuinely float (dialogs, popovers, the selection bar)."
+    ],
+    "rules": [
+      { "name": "The Live-Only Accent Rule", "body": "The theme accent marks something live, selected or engaged, and nothing else; resting chrome, headings, links and decoration are bone white or ash. The stickman logo is the one identity exception. Test: on a paused Watch screen with nothing starred, the only accent pixels are the logo and the REC dot.", "section": "colors" },
+      { "name": "The Error Is Not Live Rule", "body": "Alert is chosen per theme so it can never be read as the accent. Any new theme picks an alert at least as far from its accent as Blood's rose is from its red.", "section": "colors" },
+      { "name": "The Mixed-Against-Ground Rule", "body": "Derived neutral steps are `color-mix` against the ground, not against transparency, so a step's contrast does not depend on what it sits on. Overlay values (hairline, glass, washes) are the exception and are mixed against transparent on purpose.", "section": "colors" },
+      { "name": "The Two Voices Rule", "body": "Antonio is for words read at a distance (titles, dates, counts) and is always uppercase, weight 600, with tabular numerals. Everything read up close is the system face. Never set a paragraph, a button or a form value in Antonio.", "section": "typography" },
+      { "name": "The Tracked Caps Rule", "body": "Labels are 11px, weight 600, tracked 0.14em, uppercase, and go no smaller than 10px. Numbers in metadata use tabular figures so timecodes do not jitter while playing.", "section": "typography" },
+      { "name": "The Seam Not Gutter Rule", "body": "Library tiles touch with a 2px seam and bleed to the window edges, a contact sheet rather than a card grid. Don't add padding, radius or gaps to make them cards.", "section": "layout" },
+      { "name": "The Scrim Not Card Rule", "body": "Text over footage sits on a gradient scrim with a text shadow, never on a filled panel. The only filled shapes over media are small controls: 30px glyph circles at 55% black, the game-mark ring, a button's 35% black fill.", "section": "elevation" },
+      { "name": "The Shadow Means It Floats Rule", "body": "A box shadow says \"this is above the page and will go away\". Nothing that is part of the layout gets one.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do give the current clip the whole window on pure black and layer the interface over it on gradient scrims.",
+      "Do set titles, dates and counts in Antonio Variable, 600, uppercase, tabular numerals, line-height 0.86 to 0.92.",
+      "Do set every label, tab and button in 11px weight-600 uppercase tracked 0.14em, never below 10px.",
+      "Do draw icons from the one outlined family on a 24-unit grid at a 1.6 stroke (1.4 on the 30px rail); show \"on\" by filling the same glyph.",
+      "Do keep the accent for live, selected and engaged state, and define a matching on-accent ink and a distinct alert for every theme.",
+      "Do add new themes to both `src/shared/themes.ts` and `index.css`, with the full token set.",
+      "Do put the static grain on any full-screen surface without footage.",
+      "Do honour `prefers-reduced-motion`: the feed snap, caption rise, star pop, tile zoom and lane shimmer all switch off."
+    ],
+    "donts": [
+      "Don't build a dark-dashboard card grid: no rounded, padded, shadowed cards for clips, stats or settings groups.",
+      "Don't use the accent for headings, links, section rules, resting icons or decorative fills.",
+      "Don't add neon glow, coloured shadows or angled HUD chrome; this must not read as an RGB gamer product.",
+      "Don't put a filled panel behind caption text on footage; use the scrim and a text shadow.",
+      "Don't set body copy, buttons or form values in Antonio, or bundle a second webfont for the UI face.",
+      "Don't give a box shadow to anything that is part of the layout.",
+      "Don't round media; tiles and video stay square-cornered.",
+      "Don't put two solid buttons in the same group; the solid one is the thing you came to do."
+    ]
+  }
+}
