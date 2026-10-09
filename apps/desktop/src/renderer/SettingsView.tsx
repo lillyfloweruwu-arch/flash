@@ -80,6 +80,7 @@ function useClipStill(filePath: string | undefined): string | null {
     const video = document.createElement('video')
     video.muted = true
     video.preload = 'auto'
+    video.crossOrigin = 'anonymous'
     const release = () => { video.removeAttribute('src'); video.load() }
     video.addEventListener('seeked', () => {
       if (cancelled) return

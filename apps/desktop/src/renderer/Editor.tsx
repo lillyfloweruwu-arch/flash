@@ -208,6 +208,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
         <div className="flex-1 min-w-0 flex items-start justify-center min-h-0">
         <video
           ref={videoRef}
+          crossOrigin="anonymous"
           key={clip.filePath}
           src={source}
           muted

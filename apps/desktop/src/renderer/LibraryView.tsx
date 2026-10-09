@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { clipUrl } from '../shared/editor'
 import { clipDisplayTitle } from '../shared/clipTitle'
 import { type Clip, Icon, formatBytes } from './ui'
+import { useThumbnail } from './thumbnails'
 
 export type SortOrder = 'Recent' | 'Longest' | 'Largest'
 
@@ -239,33 +240,24 @@ function ClipTile({ clip, heading, selected, onClick, onToggle, onDelete, onStar
   onStar: () => void
   suspend: boolean
 }) {
-  const [visible, setVisible] = useState(false)
+  const [nearView, setNearView] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const tileRef = useRef<HTMLDivElement>(null)
-  const videoRef = useRef<HTMLVideoElement>(null)
 
-  // Each thumbnail is a real <video> decoding a frame off disk. Mounting one per
-  // clip means a library of 200 spins up 200 decoders at once, so hold the src
-  // back until the tile is actually near the viewport - and give it back once
-  // it leaves. Chromium caps concurrent decodes and paints the excess black.
+  // Only ask for a still once the tile comes near the viewport, so opening a
+  // big library does not queue hundreds of first-time decodes at once. After
+  // that the still is cached for the session and on disk, and paints instantly.
   useEffect(() => {
     const node = tileRef.current
     if (!node) return
     const observer = new IntersectionObserver(
-      ([entry]) => setVisible(entry.isIntersecting),
-      { rootMargin: '300px' },
+      ([entry]) => { if (entry.isIntersecting) { setNearView(true); observer.disconnect() } },
+      { rootMargin: '600px' },
     )
     observer.observe(node)
     return () => observer.disconnect()
   }, [])
-
-  // Hovering a tile plays it, silently, the way a feed previews. Leaving puts
-  // it back on the poster frame.
-  const preview = (on: boolean) => {
-    const video = videoRef.current
-    if (!video) return
-    if (on) video.play().catch(() => { /* not loaded yet */ })
-    else { video.pause(); video.currentTime = 0.5 }
-  }
+  const still = useThumbnail(clip.filePath, clip.kind, nearView)
 
   return (
     <div ref={tileRef}
@@ -278,22 +270,23 @@ function ClipTile({ clip, heading, selected, onClick, onToggle, onDelete, onStar
       draggable
       onDragStart={e => { e.preventDefault(); window.flash?.startClipDrag(clip.filePath) }}
       className="tile"
-      onMouseEnter={() => preview(true)}
-      onMouseLeave={() => preview(false)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       onKeyDown={event => {
         if (event.target !== event.currentTarget) return
         if (event.key === 'Enter') onClick(event as unknown as React.MouseEvent<HTMLDivElement>)
         if (event.key === ' ') { event.preventDefault(); onToggle() }
       }}
       onClick={onClick}>
-      {/* Tiles behind the editor stay in the viewport, so without `suspend`
-          their decoders stay alive underneath and the editor runs out. */}
-      {clip.kind === 'shot' ? (
-        <img src={clipUrl(clip.filePath)} alt="" loading="lazy" draggable={false}
-          className="absolute inset-0 w-full h-full object-cover" style={{ pointerEvents: 'none' }} />
-      ) : visible && !suspend && (
-        <video ref={videoRef} src={`${clipUrl(clip.filePath)}#t=0.5`} preload="metadata" muted loop
-          className="absolute inset-0 w-full h-full object-cover" style={{ pointerEvents: 'none' }} />
+      {/* The still is always there; a live video only exists while the
+          pointer is on the tile, so there is at most one decoder in the grid
+          and nothing to reload when scrolling back. */}
+      {still
+        ? <img src={still} alt="" draggable={false} className="tile-still absolute inset-0 w-full h-full object-cover" style={{ pointerEvents: 'none' }} />
+        : <div className="absolute inset-0 tile-pending" aria-hidden="true" />}
+      {hovered && !suspend && clip.kind !== 'shot' && (
+        <video src={`${clipUrl(clip.filePath)}#t=0.5`} autoPlay muted loop
+          className="tile-live absolute inset-0 w-full h-full object-cover" style={{ pointerEvents: 'none' }} />
       )}
       <div className="tile-scrim" />
 

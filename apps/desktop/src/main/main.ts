@@ -5,11 +5,12 @@ import { join, basename, dirname, extname } from 'path'
 // and range requests (video seeking) fail.
 protocol.registerSchemesAsPrivileged([{
   scheme: 'flash-clip',
-  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true },
+  privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true, corsEnabled: true },
 }])
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs'
 import { Readable } from 'stream'
 import { pathToFileURL } from 'url'
+import { createHash } from 'crypto'
 import { statfs } from 'fs/promises'
 import { toastHtml, overlayHtml, cornerBounds } from '../shared/windowTemplates'
 
@@ -1258,6 +1259,33 @@ function setupIPC() {
     }
   })
   ipcMain.handle('move-clips', (_event, filePaths: string[], game: string) => moveClips(filePaths, game))
+  // Library thumbnails. Each tile used to be a live <video> that was unloaded
+  // whenever it scrolled away, so scrolling back showed black tiles reloading.
+  // A small JPEG is now made once per clip version and kept in userData, keyed
+  // by path, size and mtime so a trimmed or replaced file gets a fresh one.
+  const thumbnailFile = (filePath: string): string | null => {
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return null
+    const info = statSync(filePath)
+    const key = createHash('sha1').update(`${filePath.toLowerCase()}|${info.size}|${info.mtimeMs}`).digest('hex')
+    return join(app.getPath('userData'), 'thumbnails', `${key}.jpg`)
+  }
+  ipcMain.handle('thumbnail-read', (_event, filePath: string) => {
+    try {
+      const file = thumbnailFile(filePath)
+      return file && existsSync(file) ? new Uint8Array(readFileSync(file)) : null
+    } catch { return null }
+  })
+  ipcMain.handle('thumbnail-write', (_event, filePath: string, bytes: Uint8Array) => {
+    try {
+      const file = thumbnailFile(filePath)
+      // A 480px JPEG is ~20-40 KB; anything far larger is not a thumbnail.
+      if (!file || !(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > 1024 * 1024) return false
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, bytes)
+      return true
+    } catch { return false }
+  })
+
   ipcMain.handle('save-clip-frame', (_event, filePath: string, playheadSeconds: number, bytes: Uint8Array) => {
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Frames can only be grabbed from clips' }
@@ -1784,6 +1812,10 @@ function registerClipProtocol() {
         'Content-Type': contentType,
         'Content-Length': String(size === 0 ? 0 : end - start + 1),
         'Accept-Ranges': 'bytes',
+        // Without this every clip is cross-origin to the renderer, so a canvas
+        // that draws a frame is tainted and toBlob throws: library stills and
+        // Grab frame both failed. Only Flash's own pages can reach this scheme.
+        'Access-Control-Allow-Origin': '*',
         ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
       },
     })

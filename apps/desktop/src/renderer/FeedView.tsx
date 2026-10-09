@@ -5,6 +5,7 @@ import { Dropdown } from './Dropdown'
 import { EXPORT_LIMITS } from './SelectionBar'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
+import { thumbnailFor, useThumbnail } from './thumbnails'
 import { usePlaybackVisibility } from './usePlaybackVisibility'
 import { type Clip, GameMark, Icon, RenameTitle, formatBytes, timeAgo } from './ui'
 
@@ -60,6 +61,16 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   useEffect(() => {
     if (clip && clip.filePath !== currentPath) onPathChange(clip.filePath)
   }, [clip, currentPath, onPathChange])
+
+  // The still shows on the first frame while the clip itself opens, so a flick
+  // never lands on black. Neighbours are fetched ahead so the next flick is
+  // covered too.
+  const still = useThumbnail(clip?.filePath, clip?.kind)
+  useEffect(() => {
+    for (const neighbour of [clips[index + 1], clips[index - 1], clips[index + 2]]) {
+      if (neighbour) void thumbnailFor(neighbour.filePath, neighbour.kind)
+    }
+  }, [clips, index])
 
   // A note describes the clip it was made on; moving on clears it.
   useEffect(() => { setNote(null); setCopied(null); setTime(0); setDuration(clip?.durationSec ?? 0) }, [clip?.filePath])
@@ -210,6 +221,8 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
         ) : (
           <video
             ref={videoRef}
+            crossOrigin="anonymous"
+            poster={still ?? undefined}
             src={clipUrl(clip.filePath)}
             autoPlay={visible}
             muted

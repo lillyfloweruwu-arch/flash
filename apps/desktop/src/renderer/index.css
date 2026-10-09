@@ -515,3 +515,14 @@ html, body {
 /* Electron title bar drag region */
 .titlebar-drag { -webkit-app-region: drag; }
 .titlebar-no-drag { -webkit-app-region: no-drag; }
+
+/* Tile stills fade in the one time they are first made; afterwards they are
+   cached and present on the first frame, so the fade never repeats. The live
+   hover video fades in over the still instead of popping. */
+@keyframes tile-fade { from { opacity: 0; } to { opacity: 1; } }
+.tile-still { animation: tile-fade 220ms ease-out; }
+.tile-live { animation: tile-fade 180ms ease-out 120ms both; }
+.tile-pending { background: linear-gradient(110deg, var(--panel) 30%, var(--field) 50%, var(--panel) 70%); background-size: 220% 100%; animation: lane-shimmer 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .tile-still, .tile-live, .tile-pending { animation: none; }
+}
