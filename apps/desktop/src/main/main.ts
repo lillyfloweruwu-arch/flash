@@ -882,7 +882,10 @@ function startGameDetection() {
     const game = detectCurrentGame()
     // Re-arm on a PID change too — relaunching a game keeps the name but the old
     // process tree is gone, and audio would stay bound to a dead PID.
-    if (game?.name !== currentGame || (game && game.pid !== currentGamePid)) {
+    // `game?.name` is undefined when nothing runs and currentGame is null, so
+    // compare against null explicitly - otherwise every idle poll counted as a
+    // change and re-applied capture settings, resetting the replay buffer.
+    if ((game?.name ?? null) !== currentGame || (game && game.pid !== currentGamePid)) {
       currentGame = game?.name ?? null
       currentGamePid = game?.pid ?? 0
       if (game) {

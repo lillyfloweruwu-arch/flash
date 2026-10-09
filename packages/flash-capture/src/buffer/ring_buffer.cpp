@@ -81,13 +81,29 @@ void RingBuffer::Clear() {
 
 void RingBuffer::SetMaxDuration(uint32_t seconds, uint32_t fps) {
     std::lock_guard<std::mutex> lock(mutex_);
+    // The app re-applies settings whenever the detected game changes, and used
+    // to do it every poll while no game ran. Resizing to the same size must
+    // not throw away the replay the user is about to save.
+    if (seconds == maxDurationSeconds_ && fps == fps_ && capacity_ == static_cast<size_t>(seconds) * fps) return;
+
+    // Keep the newest packets that still fit, oldest-first, so changing the
+    // length mid-session shortens or lengthens the history instead of wiping it.
+    const size_t nextCapacity = static_cast<size_t>(seconds) * fps;
+    std::vector<EncodedPacket> next(nextCapacity);
+    const size_t keep = (std::min)(count_, nextCapacity);
+    if (capacity_ > 0 && keep > 0) {
+        const size_t oldest = (count_ < capacity_) ? 0 : writePos_;
+        const size_t skip = count_ - keep;
+        for (size_t i = 0; i < keep; i++)
+            next[i] = std::move(packets_[(oldest + skip + i) % capacity_]);
+    }
+
     maxDurationSeconds_ = seconds;
     fps_ = fps;
-    capacity_ = seconds * fps;
-    packets_.clear();
-    packets_.resize(capacity_);
-    count_ = 0;
-    writePos_ = 0;
+    capacity_ = nextCapacity;
+    packets_ = std::move(next);
+    count_ = keep;
+    writePos_ = capacity_ ? keep % capacity_ : 0;
 }
 
 } // namespace flash

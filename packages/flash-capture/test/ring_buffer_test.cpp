@@ -93,6 +93,30 @@ int main() {
         assert(buffer.GetDurationSeconds() > 0.99f && buffer.GetDurationSeconds() < 1.01f);
     }
 
+    // Re-applying the same length must not clear the replay (the app does it on
+    // every game change), and changing it keeps the newest history that fits.
+    {
+        RingBuffer buffer(kSeconds, kFps);
+        PushFrames(buffer, kSeconds * kFps);
+        buffer.SetMaxDuration(kSeconds, kFps);
+        assert(buffer.GetPacketCount() == kSeconds * kFps);
+
+        const auto before = buffer.Flush();
+        buffer.SetMaxDuration(kSeconds * 2, kFps);
+        assert(buffer.GetPacketCount() == kSeconds * kFps);
+        const auto grown = buffer.Flush();
+        assert(grown.size() == before.size());
+        assert(grown.back().timestamp_us == before.back().timestamp_us);
+
+        buffer.SetMaxDuration(2, kFps);
+        assert(buffer.GetPacketCount() == 2 * kFps);
+        PushFrames(buffer, 10, before.back().timestamp_us + 1000000 / kFps);
+        assert(buffer.GetPacketCount() == 2 * kFps);
+        const auto shrunk = buffer.Flush();
+        for (size_t i = 1; i < shrunk.size(); i++)
+            assert(shrunk[i].timestamp_us > shrunk[i - 1].timestamp_us);
+    }
+
     std::puts("ring_buffer: ok");
     return 0;
 }
