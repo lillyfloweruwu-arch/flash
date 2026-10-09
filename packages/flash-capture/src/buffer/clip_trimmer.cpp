@@ -1,3 +1,4 @@
+#include "media_output.h"
 #include "clip_trimmer.h"
 #include "smart_render.h"
 #include "../color_space.h"
@@ -123,6 +124,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
     if (SamePath(input, output)) throw std::invalid_argument("input and output clips must be different files");
     if (!output.parent_path().empty()) std::filesystem::create_directories(output.parent_path());
 
+    MediaOutput pending(output);
     MfScope mf;
     ComPtr<IMFSourceReader> reader;
     ComPtr<IMFSinkWriter> writer;
@@ -140,9 +142,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         Check(reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE),
             "deselect source streams");
 
-        std::error_code ignored;
-        std::filesystem::remove(output, ignored);
-        const auto wideOutput = ToWide(outputPath);
+        const auto wideOutput = pending.Partial().wstring();
         Check(MFCreateSinkWriterFromURL(wideOutput.c_str(), nullptr, nullptr, &writer),
             "MFCreateSinkWriterFromURL");
         outputOpened = true;
@@ -270,6 +270,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         Check(writer->Finalize(), "IMFSinkWriter::Finalize");
         writer.Reset();
 
+        pending.Publish();
         ClipMetadata metadata{outputPath, "", TrimTimestampSeconds(outputEnd), width, height, fps,
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count()};
@@ -280,7 +281,7 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         reader.Reset();
         if (outputOpened) {
             std::error_code ignored;
-            std::filesystem::remove(output, ignored);
+            std::filesystem::remove(pending.Partial(), ignored);
         }
         throw;
     }

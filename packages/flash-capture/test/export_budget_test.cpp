@@ -49,12 +49,26 @@ int main() {
         assert(plan.width == 0 && plan.height == 0);
     }
 
-    // A very long clip at a tiny ceiling still floors the video bitrate rather
-    // than going to zero or negative.
+    // A budget below the minimum rates cannot be satisfied even at the smallest rung.
     {
         const auto plan = PlanExport(1920, 1080, 60, 600.0, 5ull * 1024 * 1024, 0);
-        assert(plan.videoKbps >= kExportMinVideoKbps);
-        assert(plan.height >= 2);
+        assert(plan.width == 0 && plan.height == 0);
+        assert(PlanExport(1920, 1080, 60, 0.00001, 1, 0).width == 0);
+        const auto floorBytes = static_cast<uint64_t>(std::ceil(428000.0 * 10 / 8 / 0.95));
+        assert(PlanExport(1920, 1080, 60, 10, floorBytes - 1, 0).width == 0);
+        assert(PlanExport(1920, 1080, 60, 10, floorBytes, 0).videoKbps >= kExportMinVideoKbps);
+    }
+    {
+        const ExportPlan previous{1920, 1080, 2000, 128, 60};
+        const auto retry = RetryExportPlan(previous, 1000, 2000);
+        assert(retry.videoKbps == 920 && retry.height == 1080);
+        const auto starved = RetryExportPlan(previous, 100, 2000);
+        assert(starved.videoKbps == kExportMinVideoKbps);
+        assert(starved.height == 720 && starved.width == 1280);
+        assert(starved.audioKbps == previous.audioKbps && starved.fps == previous.fps);
+        assert(RetryExportPlan(previous, 100, 0).width == 0);
+        const ExportPlan smallest{640, 360, 300, 128, 30};
+        assert(RetryExportPlan(smallest, 100, 200).height == 360);
     }
 
     // "Do not downscale for size" is spelled Number.MAX_SAFE_INTEGER by the

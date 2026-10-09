@@ -9,6 +9,8 @@ assert.match(validateClipName('CON') ?? '', /reserved/)
 assert.match(validateClipName('...') ?? '', /only dots/)
 
 assert.equal(resolveClipFilename('Victory', '.mp4', ['Victory.mp4']), 'Victory (2).mp4')
+assert.equal(resolveClipFilename('Victory', '.mp4', ['Victory.mp4.json']), 'Victory (2).mp4')
+assert.equal(resolveClipFilename('Victory', '.png', ['Victory.mp4.json']), 'Victory.png')
 assert.equal(
   resolveClipFilename('Victory', '.mp4', ['Victory.mp4', 'Victory (2).mp4']),
   'Victory (3).mp4',

@@ -9,6 +9,9 @@ code was not enough:
 
 | Probe | What it caught |
 |---|---|
+| `sidecars.js` | Legacy migration preserves stars, corrupt metadata protects clips, and output reservations cannot collide |
+| `export-and-game.js` | Repeated exports and trims coexist, failed exports leave no partials, and game identity survives an in-flight save |
+| `preload-subscriptions.js` | All preload event subscriptions remove their listeners across repeated mounts |
 | `every-native-path.js` | The editor's full-quality save failed for every clip, because it passes `Number.MAX_SAFE_INTEGER` as a size budget and nothing else does |
 | `trim-on-keyframes.js` | Trimming to a keyframe landed a GOP early on half of them |
 | `trim-offsets.js` | The same failures at every request offset, which is what ruled out a rounding miss |
@@ -26,6 +29,9 @@ screen, and several take half a minute each. Run them by hand.
 
     node scripts/probes/every-native-path.js
     node scripts/probes/record-and-save.js
+    node --experimental-strip-types scripts/probes/sidecars.js
+    node --experimental-strip-types scripts/probes/export-and-game.js
+    node scripts/probes/preload-subscriptions.js
 
 Each one records to scratch directories under the system temp folder and deletes
 them on the way out. `display-mode-change.js` changes the display resolution and

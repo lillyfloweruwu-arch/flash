@@ -391,7 +391,23 @@ Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     return result;
 }
 
-Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "game name must be a string").ThrowAsJavaScriptException(); return info.Env().Undefined(); } if (info.Length() > 1 && !info[1].IsNumber()) { Napi::TypeError::New(info.Env(), "game PID must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } AudioCapture* audio; bool game, mic, other; { std::lock_guard lock(g_stateMutex); g_currentGame = info[0].As<Napi::String>().Utf8Value(); audio = g_audioCapture.get(); game = g_audioGame; mic = g_audioMic; other = g_audioOther; } if (audio && info.Length() > 1) { audio->SetGameProcess(info[1].As<Napi::Number>().Uint32Value()); audio->SetSource("game", game, 1.0f); audio->SetSource("mic", mic, 1.0f); audio->SetSource("other", other, 1.0f); } return info.Env().Undefined(); }
+Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "game name must be a string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    if (info.Length() > 1 && !info[1].IsNumber()) { Napi::TypeError::New(info.Env(), "game PID must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    const auto name = info[0].As<Napi::String>().Utf8Value();
+    const uint32_t processId = name.empty() || info.Length() < 2 ? 0 : info[1].As<Napi::Number>().Uint32Value();
+    AudioCapture* audio; bool game, mic, other;
+    { std::lock_guard lock(g_stateMutex); g_currentGame = name.empty() ? "Unknown" : name; audio = g_audioCapture.get(); game = g_audioGame; mic = g_audioMic; other = g_audioOther; }
+    // PID zero rebuilds the startup loopback sources, so an exited game's audio
+    // target cannot linger until another game happens to launch.
+    if (audio && (name.empty() || info.Length() > 1)) {
+        audio->SetGameProcess(processId);
+        audio->SetSource("game", game, 1.0f);
+        audio->SetSource("mic", mic, 1.0f);
+        audio->SetSource("other", other, 1.0f);
+    }
+    return info.Env().Undefined();
+}
 Napi::Value SetAudioTracks(const Napi::CallbackInfo& info) {
     if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     auto value = info[0].As<Napi::Object>(); if (!value.Get("game").IsBoolean() || !value.Get("mic").IsBoolean() || !value.Get("other").IsBoolean()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }

@@ -1,5 +1,6 @@
 #include "clip_exporter.h"
 #include "export_budget.h"
+#include "media_output.h"
 #include "../color_space.h"
 
 #include <algorithm>
@@ -80,8 +81,8 @@ ComPtr<IMFMediaType> MakeType(const GUID& major, const GUID& subtype) {
 } // namespace
 #endif
 
-ExportResult ExportClip(const std::string& inputPath, const std::string& outputPath,
-                        const ExportOptions& options) {
+static ExportResult EncodeClip(const std::string& inputPath, const std::string& outputPath,
+                        const ExportOptions& options, ExportPlan& usedPlan, bool retry) {
     if (inputPath.empty() || outputPath.empty()) throw std::invalid_argument("clip paths must not be empty");
     if (!options.maxBytes) throw std::invalid_argument("maxBytes must be greater than zero");
     if (options.startUs < 0 || (options.endUs && options.endUs <= options.startUs))
@@ -153,8 +154,9 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         if (span <= 0.0) throw std::runtime_error("export range contains no video");
         if (span > kMaxExportSeconds) throw std::runtime_error("clip is too long to export");
 
-        const ExportPlan plan = PlanExport(sourceWidth, sourceHeight, fps, span, options.maxBytes, options.maxHeight);
-        if (!plan.width || !plan.height) throw std::runtime_error("could not plan an export size");
+        const ExportPlan plan = retry ? usedPlan : PlanExport(sourceWidth, sourceHeight, fps, span, options.maxBytes, options.maxHeight);
+        if (!plan.width || !plan.height) throw std::runtime_error("export size budget is too small for the minimum video and audio bitrate");
+        usedPlan = plan;
 
         // Ask the reader for decoded NV12 already scaled to the target size.
         auto videoInput = MakeType(MFMediaType_Video, MFVideoFormat_NV12);
@@ -235,8 +237,6 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         }
         for (float& sample : mix) sample = (std::max)(-1.0f, (std::min)(1.0f, sample));
 
-        std::error_code ignored;
-        std::filesystem::remove(output, ignored);
         ComPtr<IMFAttributes> writerAttributes;
         Check(MFCreateAttributes(&writerAttributes, 1), "MFCreateAttributes(writer)");
         Check(writerAttributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE),
@@ -366,7 +366,7 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         result.durationSeconds = static_cast<double>(lastEnd) / 10000000.0;
         result.width = outWidth;
         result.height = outHeight;
-        result.bytes = std::filesystem::file_size(output, ignored);
+        result.bytes = std::filesystem::file_size(output);
         result.bitrateKbps = result.durationSeconds > 0.0
             ? static_cast<uint32_t>((result.bytes * 8.0) / result.durationSeconds / 1000.0) : 0;
         return result;
@@ -379,6 +379,30 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
         }
         throw;
     }
+#else
+    (void)inputPath; (void)outputPath; (void)options; (void)usedPlan; (void)retry;
+    throw std::runtime_error("clip export is only available on Windows");
+#endif
+}
+
+ExportResult ExportClip(const std::string& inputPath, const std::string& outputPath,
+                        const ExportOptions& options) {
+#ifdef _WIN32
+    if (inputPath.empty() || outputPath.empty()) throw std::invalid_argument("clip paths must not be empty");
+    MediaOutput output(std::filesystem::u8path(outputPath));
+    ExportPlan plan;
+    const auto utf8 = output.Partial().u8string();
+    const std::string temporary(utf8.begin(), utf8.end());
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        auto result = EncodeClip(inputPath, temporary, options, plan, attempt != 0);
+        if (result.bytes <= options.maxBytes) {
+            output.Publish();
+            result.filePath = outputPath;
+            return result;
+        }
+        plan = RetryExportPlan(plan, options.maxBytes, result.bytes);
+    }
+    throw std::runtime_error("export still exceeds the requested size budget after retry");
 #else
     (void)inputPath; (void)outputPath; (void)options;
     throw std::runtime_error("clip export is only available on Windows");

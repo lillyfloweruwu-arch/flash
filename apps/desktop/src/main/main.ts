@@ -13,7 +13,8 @@ import { statfs } from 'fs/promises'
 import { getTheme } from '../shared/themes'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
-import { clipTimestamp, firstFreeName, gameFolderName } from '../shared/clipPath'
+import { clipTimestamp, firstFreeName, gameFolderName, sidecarPath } from '../shared/clipPath'
+import { migrateSidecars, readSidecar, writeSidecar, reserveOutput } from '../shared/clipFiles'
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
 import { decideAutostart } from '../shared/autostart'
@@ -68,18 +69,8 @@ type Settings = typeof DEFAULTS
 let settings: Settings = { ...DEFAULTS }
 let settingsPath = ''
 
-// The generic half of this lives in shared/sanitise.ts, where it has a
-// self-check. Only the enum belongs here.
-function sanitiseSettings(parsed: unknown): Partial<Settings> {
-  const clean = sanitise(DEFAULTS as Record<string, unknown>, parsed) as Record<string, unknown>
-  // overlayPosition is really an enum, and a wrong value crashes rather than
-  // merely looking wrong: overlayBounds reads it as two booleans, and anything
-  // that is not one of these four pins the pill to the wrong screen edge.
-  if (typeof clean.overlayPosition === 'string' &&
-      !['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(clean.overlayPosition)) {
-    delete clean.overlayPosition
-  }
-  return clean as Partial<Settings>
+function sanitiseSettings(parsed: unknown, defaults: Settings = DEFAULTS): Partial<Settings> {
+  return sanitise(defaults, parsed)
 }
 
 function loadSettings() {
@@ -95,6 +86,8 @@ function loadSettings() {
 }
 
 function saveSettings() {
+  settings = { ...DEFAULTS, ...sanitiseSettings(settings) }
+  settings.shortClipSeconds = Math.min(settings.shortClipSeconds, settings.bufferLength)
   // Written to a sibling and renamed over the real file. A direct write that is
   // interrupted (crash, power loss, full disk) leaves valid JSON impossible to
   // parse, loadSettings falls back to DEFAULTS, and every learned game, hotkey
@@ -273,7 +266,7 @@ type CaptureAddon = {
   startReplayBuffer(): boolean
   stopReplayBuffer(): void
   // seconds omitted = the whole buffer, exactly as before.
-  saveClip(seconds?: number): Promise<{ path: string; duration: number }>
+  saveClip(seconds?: number): Promise<{ path: string; duration: number; game: string }>
   saveScreenshot(path: string): Promise<string>
   setClipsDir?(path: string): void
   trimClip?(input: string, output: string, startSeconds: number, endSeconds: number):
@@ -456,12 +449,6 @@ interface ClipInfo {
   starred: boolean
 }
 
-const sidecarPath = (clipPath: string) => clipPath.slice(0, -extname(clipPath).length) + '.json'
-
-function readSidecar(clipPath: string): { duration: number; game: string; starred?: boolean } | null {
-  try { return JSON.parse(readFileSync(sidecarPath(clipPath), 'utf8')) } catch { return null }
-}
-
 function scanClips(): ClipInfo[] {
   const clips: ClipInfo[] = []
   const folder = settings.clipsFolder
@@ -470,12 +457,13 @@ function scanClips(): ClipInfo[] {
   // Scan for MP4 and PNG files in clips folder and game subfolders
   const scanDir = (dir: string, game: string) => {
     try {
+      const protectedPaths = migrateSidecars(dir)
       for (const file of readdirSync(dir)) {
         const filePath = join(dir, file)
         const stat = statSync(filePath)
         if (stat.isDirectory()) {
           scanDir(filePath, file) // subfolder name = game name
-        } else if (file.endsWith('.mp4') || file.endsWith('.png')) {
+        } else if (!file.includes('.partial.') && (file.endsWith('.mp4') || file.endsWith('.png'))) {
           const kind = file.endsWith('.png') ? 'shot' : 'clip'
           const name = basename(file, extname(file))
           // Real duration comes from the sidecar written at save time; fall back to a
@@ -488,14 +476,14 @@ function scanClips(): ClipInfo[] {
           clips.push({
             id: filePath,
             title: name.replace(/_/g, ' ').replace(/-/g, ' '),
-            game: game || 'Unknown',
+            game: sidecar?.game || game || 'Unknown',
             kind,
             duration: kind === 'shot' ? '—' : `${minutes}:${String(seconds).padStart(2, '0')}`,
             durationSec: estimatedSec,
             filePath,
             size: stat.size,
             createdAt: stat.birthtimeMs,
-            starred: sidecar?.starred === true,
+            starred: protectedPaths.has(filePath) || sidecar?.starred === true,
           })
         }
       }
@@ -511,7 +499,10 @@ function scanClips(): ClipInfo[] {
 function deleteClip(filePath: string): boolean {
   // Only delete inside the clips folder — filePath comes from the renderer.
   if (!isInsideClips(filePath)) return false
-  try { unlinkSync(filePath) } catch { return false }
+  try {
+    if (migrateSidecars(dirname(filePath)).has(filePath)) return false
+    unlinkSync(filePath)
+  } catch { return false }
   try { unlinkSync(sidecarPath(filePath)) } catch { /* no sidecar */ }
   return true
 }
@@ -527,6 +518,7 @@ function renameClip(filePath: string, requestedName: string): { filePath?: strin
 
   const folder = dirname(filePath)
   const originalFilename = basename(filePath)
+  if (migrateSidecars(dirname(filePath)).has(filePath)) return { error: 'Could not migrate clip metadata' }
   const originalSidecar = sidecarPath(filePath)
   const originalSidecarFilename = basename(originalSidecar)
   let existing: string[]
@@ -588,9 +580,12 @@ function moveClipToGame(filePath: string, requestedGame: string): { filePath?: s
 
   const originalName = basename(filePath).slice(0, -sourceExtension.length)
   const target = join(targetFolder, resolveClipFilename(originalName, sourceExtension, existing))
+  if (migrateSidecars(dirname(filePath)).has(filePath)) return { error: 'Could not migrate clip metadata' }
   const originalSidecar = sidecarPath(filePath)
   const targetSidecar = sidecarPath(target)
   const hasSidecar = existsSync(originalSidecar)
+  const metadata = readSidecar(filePath)
+  if (metadata?.unreadable) return { error: 'Could not read clip metadata' }
 
   try {
     renameSync(filePath, target)
@@ -605,6 +600,12 @@ function moveClipToGame(filePath: string, requestedGame: string): { filePath?: s
         }
         throw error
       }
+    }
+    try { writeSidecar(target, { ...metadata, game }) }
+    catch (error) {
+      if (hasSidecar) renameSync(targetSidecar, originalSidecar)
+      renameSync(target, filePath)
+      throw error
     }
     return { filePath: target }
   } catch (error: any) {
@@ -658,10 +659,9 @@ async function checkDiskSpace(): Promise<string | null> {
 }
 
 // Both the hotkey and the renderer's save button land here.
-function onClipSaved(clip: { path: string; duration: number }) {
+function onClipSaved(clip: { path: string; duration: number }, game: string) {
   try {
-    writeFileSync(sidecarPath(clip.path),
-      JSON.stringify({ duration: clip.duration, game: currentGame ?? 'Unknown' }))
+    writeSidecar(clip.path, { duration: clip.duration, game })
   } catch { /* sidecar is an optimisation, not required */ }
   showClipNotification(clip.duration)
   playClipSound()
@@ -698,6 +698,7 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
     }
   } catch { /* fall through and let the save attempt report the failure */ }
 
+  const requestedGame = currentGame ?? 'Unknown'
   const diskError = await checkDiskSpace()
   if (diskError) {
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: diskError })
@@ -714,7 +715,7 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
     const clip = typeof seconds === 'number' && seconds > 0
       ? await captureAddon.saveClip(seconds)
       : await captureAddon.saveClip()
-    onClipSaved(clip)
+    onClipSaved(clip, requestedGame)
     mainWindow?.webContents.send('clip-save-state', { saving: false })
     updateOverlay()
     return { path: clip.path, duration: clip.duration }
@@ -744,12 +745,14 @@ async function runSaveScreenshot(): Promise<void> {
   try {
     if (!captureAddon) throw new Error('Capture engine not available')
 
-    const folder = join(settings.clipsFolder, gameFolderName(currentGame ?? ''))
+    const game = currentGame ?? 'Unknown'
+    const folder = join(settings.clipsFolder, gameFolderName(game))
     mkdirSync(folder, { recursive: true })
     const filename = firstFreeName(clipTimestamp(new Date()), '.png', readdirSync(folder))
     screenshotPath = join(folder, filename)
 
     await captureAddon.saveScreenshot(screenshotPath)
+    writeSidecar(screenshotPath, { duration: 0, game })
     clipboard.writeImage(nativeImage.createFromPath(screenshotPath))
     playClipSound()
     // Without this the PNG lands on disk and the open library never shows it:
@@ -892,7 +895,11 @@ function startGameDetection() {
         applyCaptureSettings(game.name)
         try { captureAddon?.setCurrentGame(game.name, game.pid) }
         catch (error) { console.warn('Could not target game audio', error) }
-      } else applyCaptureSettings(null)
+      } else {
+        applyCaptureSettings(null)
+        try { captureAddon?.setCurrentGame('', 0) }
+        catch (error) { console.warn('Could not clear game audio target', error) }
+      }
       mainWindow?.webContents.send('game-detected', currentGame)
       // Unrecognised but plausible: ask rather than filing clips under a guess.
       // Asked once per executable — declining records it as "not a game".
@@ -1182,7 +1189,10 @@ function setupIPC() {
   })
 
   ipcMain.handle('capture-set-buffer-length', (_event, seconds: number) => {
-    settings.bufferLength = seconds
+    const changed = sanitiseSettings({ bufferLength: seconds }, settings)
+    if (changed.bufferLength === undefined) return
+    settings.bufferLength = changed.bufferLength
+    settings.shortClipSeconds = Math.min(settings.shortClipSeconds, settings.bufferLength)
     saveSettings()
     applyCaptureSettings()
   })
@@ -1200,9 +1210,11 @@ function setupIPC() {
   // everything from the auto-delete timer.
   ipcMain.handle('set-clip-starred', (_event, filePath: string, starred: boolean) => {
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
-    const sidecar = readSidecar(filePath) ?? { duration: 0, game: 'Unknown' }
+    if (migrateSidecars(dirname(filePath)).has(filePath)) return { error: 'Could not migrate clip metadata' }
+    const sidecar = readSidecar(filePath) ?? {}
+    if (sidecar.unreadable) return { error: 'Could not read clip metadata' }
     try {
-      writeFileSync(sidecarPath(filePath), JSON.stringify({ ...sidecar, starred: starred === true }))
+      writeSidecar(filePath, { ...sidecar, starred: starred === true })
       return { starred: starred === true }
     } catch (error: any) {
       return { error: error?.message || 'Could not update this clip' }
@@ -1227,8 +1239,12 @@ function setupIPC() {
       const pad = (value: number, length = 2) => String(value).padStart(length, '0')
       const timestamp = `${pad(hours)}-${pad(minutes)}-${pad(seconds)}.${pad(milliseconds, 3)}`
       const stem = `${basename(filePath, extname(filePath))} - ${timestamp}`
-      const output = join(folder, firstFreeName(stem, '.png', readdirSync(folder)))
-      writeFileSync(output, bytes)
+      const reservation = reserveOutput(join(folder, `${stem}.png`))
+      const output = reservation.path
+      try {
+        writeFileSync(output, bytes, { flag: 'wx' })
+        writeSidecar(output, { duration: 0, game: readSidecar(filePath)?.game ?? basename(folder) })
+      } finally { reservation.release() }
       mainWindow?.webContents.send('clip-saved-refresh')
       return { path: output }
     } catch (error: any) {
@@ -1251,19 +1267,23 @@ function setupIPC() {
     if (!captureAddon?.trimClip) return { error: 'This build cannot trim clips' }
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (!(end > start)) return { error: 'End must be after start' }
-    const output = filePath.replace(/\.mp4$/i, ` - trim ${Date.now()}.mp4`)
+    if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Only clips can be processed' }
+    let reservation: ReturnType<typeof reserveOutput> | undefined
+    const requested = filePath.replace(/\.mp4$/i, ' - trim.mp4')
     try {
+      reservation = reserveOutput(requested)
+      const output = reservation.path
       const result = await captureAddon.trimClip(filePath, output, start, end)
       try {
-        writeFileSync(sidecarPath(result.path), JSON.stringify({
-          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
-        }))
+        writeSidecar(result.path, {
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? basename(dirname(filePath)),
+        })
       } catch { /* sidecar is an optimisation */ }
       mainWindow?.webContents.send('clip-saved-refresh')
       return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
     } catch (error: any) {
       return { error: error?.message || 'Trim failed' }
-    }
+    } finally { reservation?.release() }
   })
 
   // The editor's Save. Which native path it takes depends entirely on what was
@@ -1280,8 +1300,12 @@ function setupIPC() {
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     if (!(options.endSeconds > options.startSeconds)) return { error: 'End must be after start' }
 
-    const output = filePath.replace(/\.mp4$/i, ` - edit ${Date.now()}.mp4`)
+    if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Only clips can be processed' }
+    let reservation: ReturnType<typeof reserveOutput> | undefined
+    const requested = filePath.replace(/\.mp4$/i, ' - edit.mp4')
     try {
+      reservation = reserveOutput(requested)
+      const output = reservation.path
       let result: { path: string; duration: number; actualStartSeconds?: number }
       if (options.reEncode) {
         if (!captureAddon?.exportClip) return { error: 'This build cannot re-encode clips' }
@@ -1299,15 +1323,15 @@ function setupIPC() {
         result = await captureAddon.trimClip(filePath, output, options.startSeconds, options.endSeconds)
       }
       try {
-        writeFileSync(sidecarPath(result.path), JSON.stringify({
-          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
-        }))
+        writeSidecar(result.path, {
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? basename(dirname(filePath)),
+        })
       } catch { /* sidecar is an optimisation */ }
       mainWindow?.webContents.send('clip-saved-refresh')
       return { path: result.path, duration: result.duration, actualStartSeconds: result.actualStartSeconds }
     } catch (error: any) {
       return { error: error?.message || 'Save failed' }
-    }
+    } finally { reservation?.release() }
   })
 
   // Read-only, but both walk or decode the whole file, so the addon runs them
@@ -1338,19 +1362,23 @@ function setupIPC() {
     if (!captureAddon?.exportClip) return { error: 'This build cannot export clips' }
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
     const mb = Math.round(maxBytes / (1024 * 1024))
-    const output = filePath.replace(/\.mp4$/i, ` - ${mb}MB.mp4`)
+    if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Only clips can be processed' }
+    let reservation: ReturnType<typeof reserveOutput> | undefined
+    const requested = filePath.replace(/\.mp4$/i, ` - ${mb}MB.mp4`)
     try {
+      reservation = reserveOutput(requested)
+      const output = reservation.path
       const result = await captureAddon.exportClip(filePath, output, { maxBytes })
       try {
-        writeFileSync(sidecarPath(result.path), JSON.stringify({
-          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? 'Unknown',
-        }))
+        writeSidecar(result.path, {
+          duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? basename(dirname(filePath)),
+        })
       } catch { /* sidecar is an optimisation */ }
       mainWindow?.webContents.send('clip-saved-refresh')
       return result
     } catch (error: any) {
       return { error: error?.message || 'Export failed' }
-    }
+    } finally { reservation?.release() }
   })
 
   ipcMain.handle('open-clips-folder', () => {
@@ -1398,10 +1426,9 @@ function setupIPC() {
     // pick-clips-folder, where the user picks the folder in an OS dialog.
     // sanitiseSettings runs here too — a bad value from the renderer crashes
     // exactly like a bad value from the file.
-    const { clipsFolder: _ignored, ...rest } = partial
     // Everything below keys off `changed`, not the raw request: a value the
     // sanitiser dropped must not trigger the side effect that applies it.
-    const changed = sanitiseSettings(rest)
+    const { clipsFolder: _ignored, ...changed } = sanitiseSettings(partial, settings)
     Object.assign(settings, changed)
     // A short clip longer than the buffer it is cut from cannot exist: the save
     // returns the whole buffer and the UI goes on claiming the longer number.

@@ -1,4 +1,10 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+
+function subscribe<T extends unknown[]>(channel: string, callback: (...args: T) => void): () => void {
+  const listener = (_event: IpcRendererEvent, ...args: T) => callback(...args)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
 
 export interface ClipInfo {
   id: string
@@ -53,7 +59,7 @@ contextBridge.exposeInMainWorld('flash', {
   toggleRecording: () => ipcRenderer.send('toggle-recording'),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
   onRecordingState: (callback: (state: boolean) => void) => {
-    ipcRenderer.on('recording-state', (_event, state) => callback(state))
+    return subscribe('recording-state', callback)
   },
   hasCaptureAddon: () => ipcRenderer.invoke('has-capture-addon'),
 
@@ -90,10 +96,10 @@ contextBridge.exposeInMainWorld('flash', {
   decodeClipAudio: (filePath: string) => ipcRenderer.invoke('decode-clip-audio', filePath),
   getClipKeyframes: (filePath: string) => ipcRenderer.invoke('get-clip-keyframes', filePath),
   onHotkeyClip: (callback: () => void) => {
-    ipcRenderer.on('hotkey-clip', () => callback())
+    return subscribe('hotkey-clip', callback)
   },
   onClipSavedRefresh: (callback: () => void) => {
-    ipcRenderer.on('clip-saved-refresh', () => callback())
+    return subscribe('clip-saved-refresh', callback)
   },
 
   // Settings
@@ -105,7 +111,7 @@ contextBridge.exposeInMainWorld('flash', {
   forgetGame: (exe: string) => ipcRenderer.invoke('forget-game', exe),
   identifyGame: (exe: string, name: string | null) => ipcRenderer.invoke('identify-game', exe, name),
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => {
-    ipcRenderer.on('identify-game', (_event, request) => callback(request))
+    return subscribe('identify-game', callback)
   },
   setSettings: (partial: Partial<Settings>) => ipcRenderer.invoke('set-settings', partial),
   getVoiceStatus: () => ipcRenderer.invoke('voice-status'),
@@ -113,18 +119,18 @@ contextBridge.exposeInMainWorld('flash', {
 
   // Navigation
   onNavigate: (callback: (page: string) => void) => {
-    ipcRenderer.on('navigate', (_event, page) => callback(page))
+    return subscribe('navigate', callback)
   },
 
   // Sound
   onPlayClipSound: (callback: (soundPath: string) => void) => {
-    ipcRenderer.on('play-clip-sound', (_event, soundPath: string) => callback(soundPath))
+    return subscribe('play-clip-sound', callback)
   },
 
   // Game detection
   getCurrentGame: () => ipcRenderer.invoke('get-current-game'),
   onGameDetected: (callback: (game: string | null) => void) => {
-    ipcRenderer.on('game-detected', (_event, game) => callback(game))
+    return subscribe('game-detected', callback)
   },
 
   // Capture engine
@@ -136,7 +142,7 @@ contextBridge.exposeInMainWorld('flash', {
     setBufferLength: (seconds: number) => ipcRenderer.invoke('capture-set-buffer-length', seconds),
     listDisplays: () => ipcRenderer.invoke('list-displays'),
     onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => {
-      ipcRenderer.on('clip-save-state', (_event, state) => callback(state))
+      return subscribe('clip-save-state', callback)
     },
   },
 })
@@ -147,7 +153,7 @@ export type FlashAPI = {
   close: () => void
   toggleRecording: () => void
   getRecordingState: () => Promise<boolean>
-  onRecordingState: (callback: (state: boolean) => void) => void
+  onRecordingState: (callback: (state: boolean) => void) => () => void
   hasCaptureAddon: () => Promise<boolean>
   getClips: () => Promise<ClipInfo[]>
   getStorage: () => Promise<{ used: number; clips: number }>
@@ -177,8 +183,8 @@ export type FlashAPI = {
     Promise<{ sampleRate: number; tracks: { id: string; samples: Float32Array }[]; error?: string }>
   getClipKeyframes: (filePath: string) =>
     Promise<{ keyframesSec: number[]; durationSeconds: number; bitrateKbps: number; error?: string }>
-  onHotkeyClip: (callback: () => void) => void
-  onClipSavedRefresh: (callback: () => void) => void
+  onHotkeyClip: (callback: () => void) => () => void
+  onClipSavedRefresh: (callback: () => void) => () => void
   getSettings: () => Promise<Settings>
   getHotkeyStatus: () => Promise<{
     hotkey: string
@@ -193,14 +199,14 @@ export type FlashAPI = {
   getLearnedGames: () => Promise<Record<string, string>>
   forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
-  onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => void
+  onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => () => void
   setSettings: (partial: Partial<Settings>) => Promise<Settings>
   getVoiceStatus: () => Promise<{ available: boolean; language: string; error: string }>
   pickClipsFolder: () => Promise<string | null>
-  onNavigate: (callback: (page: string) => void) => void
-  onPlayClipSound: (callback: (soundPath: string) => void) => void
+  onNavigate: (callback: (page: string) => void) => () => void
+  onPlayClipSound: (callback: (soundPath: string) => void) => () => void
   getCurrentGame: () => Promise<string | null>
-  onGameDetected: (callback: (game: string | null) => void) => void
+  onGameDetected: (callback: (game: string | null) => void) => () => void
   capture: {
     startReplayBuffer: () => Promise<boolean>
     stopReplayBuffer: () => Promise<void>
@@ -218,7 +224,7 @@ export type FlashAPI = {
     }>
     setBufferLength: (seconds: number) => Promise<void>
     listDisplays: () => Promise<Display[]>
-    onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => void
+    onSaveState: (callback: (state: { saving: boolean; error?: string }) => void) => () => void
   }
 }
 

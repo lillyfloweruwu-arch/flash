@@ -411,33 +411,35 @@ export default function App() {
   useEffect(() => {
     if (!window.flash) return
 
-    window.flash.onRecordingState(setIsRecording)
-    window.flash.onNavigate((target: string) => setView(target === 'Settings' ? 'Settings' : target === 'Feed' ? 'Feed' : 'Library'))
+    const unsubscribe: (() => void)[] = []
+    unsubscribe.push(window.flash.onRecordingState(setIsRecording))
+    unsubscribe.push(window.flash.onNavigate((target: string) => setView(target === 'Settings' ? 'Settings' : target === 'Feed' ? 'Feed' : 'Library')))
     window.flash.getRecordingState().then(setIsRecording)
     window.flash.getSettings().then(setSettings)
     window.flash.getVoiceStatus().then(setVoiceStatus)
     window.flash.getHotkeyStatus().then(setHotkeysRegistered)
     window.flash.getAutostart().then(setAutostart)
     window.flash.capture.listDisplays().then(setDisplays)
-    window.flash.capture.onSaveState(setSaveState)
-    window.flash.onIdentifyGame(setIdentifyRequest)
+    unsubscribe.push(window.flash.capture.onSaveState(setSaveState))
+    unsubscribe.push(window.flash.onIdentifyGame(setIdentifyRequest))
     window.flash.getLearnedGames().then(setLearnedGames)
     window.flash.hasCaptureAddon().then(setCaptureAvailable)
     window.flash.capture.getStatus().then(s => { setEncoder(s.encoder); if (s.captureBackend) setCaptureBackend(s.captureBackend) })
-    window.flash.onGameDetected(setDetectedGame)
+    unsubscribe.push(window.flash.onGameDetected(setDetectedGame))
     window.flash.getCurrentGame().then(setDetectedGame)
-    window.flash.onClipSavedRefresh(() => refreshClips())
+    unsubscribe.push(window.flash.onClipSavedRefresh(() => refreshClips()))
 
     // Served over flash-clip, not file://. A renderer page on
     // http://localhost:5173 cannot load file:// media, so in development the
     // sound silently never played - and the empty catch below hid it.
-    window.flash.onPlayClipSound((soundPath: string) => {
+    unsubscribe.push(window.flash.onPlayClipSound((soundPath: string) => {
       const audio = new Audio(clipUrl(soundPath))
       audio.volume = 0.7
       audio.play().catch(error => console.warn('Could not play the clip sound', error))
-    })
+    }))
 
     refreshClips()
+    return () => { unsubscribe.forEach(remove => remove()) }
   }, [refreshClips])
 
   const emptyHint = !captureAvailable

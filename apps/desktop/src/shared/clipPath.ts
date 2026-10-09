@@ -12,6 +12,8 @@
 
 const FORBIDDEN = /[<>:"/\\|?*]/g
 
+export const sidecarPath = (filePath: string): string => `${filePath}.json`
+
 // Local time, not UTC: the timestamp is what the player saw on their own clock,
 // and a clip recorded at 9pm should not be named 02-00-00.
 export function clipTimestamp(when: Date): string {
@@ -42,6 +44,6 @@ export function firstFreeName(stem: string, extension: string, taken: readonly s
   const used = new Set(taken.map(name => name.toLowerCase()))
   for (let counter = 1; ; counter++) {
     const candidate = numberedName(stem, counter, extension)
-    if (!used.has(candidate.toLowerCase())) return candidate
+    if (!used.has(candidate.toLowerCase()) && !used.has(sidecarPath(candidate).toLowerCase())) return candidate
   }
 }

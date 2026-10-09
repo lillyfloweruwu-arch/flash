@@ -17,7 +17,9 @@ export function resolveClipFilename(name: string, extension: string, existingFil
   while (true) {
     const suffix = counter === 1 ? '' : ` (${counter})`
     const basename = `${name}${suffix}`
-    if (!existing.has(`${basename}${extension}`.toLowerCase()) && !existing.has(`${basename}.json`.toLowerCase())) {
+    if (!existing.has(`${basename}${extension}`.toLowerCase()) &&
+        !existing.has(`${basename}${extension}.json`.toLowerCase()) &&
+        !existing.has(`${basename}.json`.toLowerCase())) {
       return `${basename}${extension}`
     }
     counter++

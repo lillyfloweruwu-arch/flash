@@ -1,7 +1,7 @@
 // Self-check for clip and screenshot naming. Run with:
 //   node --experimental-strip-types src/shared/clipPath.test.ts
 import { strict as assert } from 'node:assert'
-import { clipTimestamp, gameFolderName, numberedName, firstFreeName } from './clipPath.ts'
+import { clipTimestamp, gameFolderName, numberedName, firstFreeName, sidecarPath } from './clipPath.ts'
 
 // Local time, zero padded, in the exact shape the native writer produces.
 assert.equal(clipTimestamp(new Date(2026, 7, 13, 9, 5, 3)), '2026-08-13_09-05-03')
@@ -24,6 +24,9 @@ assert.equal(firstFreeName('shot', '.png', ['shot.png', 'shot_2.png']), 'shot_3.
 // Windows paths are case insensitive, so a differently cased existing file is
 // still a collision. Getting this wrong overwrites a real screenshot.
 assert.equal(firstFreeName('shot', '.png', ['SHOT.PNG']), 'shot_2.png')
+assert.equal(firstFreeName('shot', '.png', ['shot.png.json']), 'shot_2.png')
+assert.equal(sidecarPath('round.mp4'), 'round.mp4.json')
+assert.equal(sidecarPath('round.png'), 'round.png.json')
 // A gap left by a deleted file is reused: the counter returns the first free
 // name rather than the highest plus one, which is what the native writer's
 // loop does too.

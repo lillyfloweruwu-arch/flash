@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
 
 namespace flash {
 
@@ -40,13 +41,16 @@ inline ExportPlan PlanExport(uint32_t sourceWidth, uint32_t sourceHeight, uint32
                              double durationSeconds, uint64_t maxBytes, uint32_t maxHeight) {
     ExportPlan plan;
     plan.audioKbps = kExportAudioKbps;
-    if (!sourceWidth || !sourceHeight || durationSeconds <= 0.0 || !maxBytes) return plan;
+    if (!sourceWidth || !sourceHeight || !std::isfinite(durationSeconds) || durationSeconds <= 0.0 || !maxBytes) return plan;
 
     // Leave headroom for container overhead: the ceiling is a hard limit, and an
     // export that lands one byte over is a failed export.
     const double totalKbits = (static_cast<double>(maxBytes) * 8.0 * 0.95) / 1000.0;
-    double videoKbps = totalKbits / durationSeconds - plan.audioKbps;
-    if (videoKbps < kExportMinVideoKbps) videoKbps = kExportMinVideoKbps;
+    // Even a sub-frame range needs one frame. Refuse budgets below the minimum
+    // video/audio rates instead of encoding a file that cannot possibly fit.
+    const double shortestOutput = (std::max)(durationSeconds, 1.0 / (fps ? fps : 30));
+    double videoKbps = totalKbits / shortestOutput - plan.audioKbps;
+    if (videoKbps < kExportMinVideoKbps) return plan;
     if (videoKbps > kExportMaxVideoKbps) videoKbps = kExportMaxVideoKbps;
 
     const uint32_t ceiling = maxHeight ? (std::min)(maxHeight, sourceHeight) : sourceHeight;
@@ -85,6 +89,24 @@ inline ExportPlan PlanExport(uint32_t sourceWidth, uint32_t sourceHeight, uint32
     plan.height = height & ~1u;
     if (!plan.height) plan.height = 2;
     plan.videoKbps = static_cast<uint32_t>(videoKbps);
+    return plan;
+}
+
+inline ExportPlan RetryExportPlan(const ExportPlan& previous, uint64_t budget, uint64_t actual) {
+    ExportPlan plan = previous;
+    if (!actual || !budget) return {};
+    const double bitrate = previous.videoKbps * (static_cast<double>(budget) / actual) * 0.92;
+    if (bitrate < kExportMinVideoKbps) {
+        for (uint32_t height : {2160u, 1440u, 1080u, 720u, 480u, 360u}) {
+            if (height >= previous.height) continue;
+            plan.height = height;
+            plan.width = (std::max)(2u, static_cast<uint32_t>(
+                static_cast<uint64_t>(previous.width) * height / previous.height) & ~1u);
+            break;
+        }
+    }
+    plan.videoKbps = static_cast<uint32_t>((std::max)(static_cast<double>(kExportMinVideoKbps),
+        (std::min)(bitrate, static_cast<double>(kExportMaxVideoKbps))));
     return plan;
 }
 
