@@ -13,6 +13,7 @@
   },
   "build": {
     "appId": "com.flash.clipper",
+    "afterPack": "build-hooks/after-pack.cjs",
     "productName": "Flash",
     "directories": {
       "output": "../../release",
