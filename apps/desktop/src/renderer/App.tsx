@@ -1,3 +1,4 @@
+import { usePlaybackVisibility } from './usePlaybackVisibility'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { DEFAULT_THEME } from '../shared/themes'
 import { clipUrl, matchesQuery } from '../shared/editor'
@@ -153,6 +154,7 @@ function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, de
 // ── Root App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
+  usePlaybackVisibility()
   const [view, setView] = useState<View>('Feed')
   const [gameFilter, setGameFilter] = useState('All')
   const [starredOnly, setStarredOnly] = useState(false)
@@ -327,7 +329,7 @@ export default function App() {
     setSettings(updated)
     if (partial.clipsFolder) refreshClips()
     // A rebind can fail if another program already owns the key.
-    if (partial.hotkey) {
+    if (partial.hotkey !== undefined || partial.hotkeyShort !== undefined || partial.screenshotHotkey !== undefined) {
       const status = await window.flash.getHotkeyStatus()
       setHotkeysRegistered(status)
     }

@@ -2,10 +2,13 @@
 
 Small programs that drive the real capture addon and measure what it does.
 
-`pnpm test` proves the pure logic. These prove the parts that only fail against
-real hardware, a real desktop and real arguments — which is where most of this
-app's bugs have actually been. Every one of them was written because reading the
-code was not enough:
+`pnpm test` runs pure checks and safe integrations: sidecars, preload subscriptions,
+main-process boundary injections, a temporary Windows deny-delete handle, native
+publication fixtures, and `export-and-game.js --safe`. The safe export mode checks
+output refusal and failure cleanup without initializing capture; it skips cleanly
+when the addon is absent. The Windows lock test skips on other platforms.
+
+The remaining probes exercise real hardware and the desktop:
 
 | Probe | What it caught |
 |---|---|
@@ -24,8 +27,10 @@ code was not enough:
 | `audio-under-load.js` | A timestamp defect that is real in the code and does not show up in the output |
 | `process-list-vs-tasklist.js` | That the native process list agrees with `tasklist` on 330 of 332 processes |
 
-They are not part of `pnpm test`: they need a live desktop, they record the
-screen, and several take half a minute each. Run them by hand.
+Live recording and the native screenshot probe are skipped by default. Set
+`FLASH_HARDWARE_TESTS=1` to include the capture/export, screenshot and idle-reset
+regression gates, or run them individually. They record the screen and can take
+half a minute. The idle-reset probe must remain in the reviewer acceptance gate.
 
     node scripts/probes/every-native-path.js
     node scripts/probes/record-and-save.js
@@ -48,3 +53,18 @@ Require `./addon`, which finds the built addon relative to the probe and says
 how to build it if it is missing. Print numbers rather than verdicts wherever
 the number is the interesting part — "drift 0.0000s" survives being pasted into
 a commit message, "ok" does not.
+
+## Renderer and package acceptance
+
+Run `apps/desktop/node_modules/electron/dist/electron.exe scripts/probes/renderer-controls.js`
+on Windows for the isolated Chromium keyboard/layout checks. It mounts the actual
+React controls, uses native key events, checks a 900?600 viewport and 150% zoom,
+and loads all six toast/overlay themes with the bundled font and reduced motion.
+It does not start the Flash application or capture engine. It requires an Electron
+installation that Windows permits renderer sandbox processes to read.
+
+`main-boundaries.js` exercises the actual save/protocol/window functions with
+injected service failures; this is not evidence of packaged seeking, real focus
+retention or clipboard paste. The reviewer still owns the fresh Windows package,
+hidden Watch/Editor audio, autostart, sleep/resume, global shortcuts, tray and DPI,
+Explorer/chat drag, clipboard paste, multi-monitor placement and clean shutdown.

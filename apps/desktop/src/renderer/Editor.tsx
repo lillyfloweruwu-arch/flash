@@ -58,8 +58,15 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   }, [clip.filePath])
 
   useEffect(() => {
-    setGains(Object.fromEntries(audioTracks.map(track => [track.id, 1])))
+    setGains({})
     setMutedTracks(new Set())
+  }, [clip.filePath])
+
+  useEffect(() => {
+    // Hiding the app releases decoded samples, not the user's mix edits.
+    // Reappearing tracks only need defaults for lanes we have not seen yet.
+    if (!audioTracks.length) return
+    setGains(current => ({ ...Object.fromEntries(audioTracks.map(track => [track.id, 1])), ...current }))
   }, [audioTracks])
 
   const liveGains = useMemo(() => Object.fromEntries(

@@ -13,7 +13,7 @@ const nativeDir = join(root, `packages/flash-capture/build${process.platform ===
 
 const run = (label, file, args, cwd) => {
   try {
-    execFileSync(file, args, { cwd, stdio: 'pipe' })
+    execFileSync(file, args, { cwd, stdio: 'inherit' })
     console.log(`  pass  ${label}`)
     return true
   } catch (error) {
@@ -31,25 +31,35 @@ for (const file of readdirSync(shared).filter(name => name.endsWith('.test.ts'))
   if (!run(file, process.execPath, ['--experimental-strip-types', join(shared, file)], shared)) failed++
 }
 
+console.log('Safe integration probes')
+for (const [file, args] of [
+  ['sidecars.js', []], ['preload-subscriptions.js', []], ['main-boundaries.js', []], ['deletion-retry.js', []],
+  ['export-and-game.js', ['--safe']],
+]) {
+  if (!run(file, process.execPath, ['--experimental-strip-types', join(root, 'scripts/probes', file), ...args], root)) failed++
+}
+
+if (process.env.FLASH_HARDWARE_TESTS === '1') {
+  for (const file of ['export-and-game.js', 'reapply-settings.js']) {
+    if (!run(file, process.execPath, ['--experimental-strip-types', join(root, 'scripts/probes', file)], root)) failed++
+  }
+} else {
+  console.log('  skip  live capture/export and idle-reset probes (set FLASH_HARDWARE_TESTS=1)')
+}
+
 console.log('Native self-checks')
 if (!existsSync(nativeDir)) {
   console.log('  skip  capture addon not built (pnpm --filter @flash/capture run build)')
 } else {
-  // Rebuild first. The binaries are excluded from the default target, so
-  // without this a test run grades whatever was compiled last — which is how a
-  // suite ends up green against code that no longer exists.
-  // Run the CLI's entry script through node rather than the .cmd shim: Node
-  // refuses to execFile a .cmd without a shell, and the failure comes back with
-  // an empty message.
+  // Reuse the configured build tree. CMake.js is needed to configure the addon,
+  // but rediscovering Visual Studio on every test run is unnecessary. Inherit
+  // output so native failures and integration probe measurements stay visible.
   const capture = join(root, 'packages/flash-capture')
   try {
-    execFileSync(process.execPath,
-      [join(capture, 'node_modules/cmake-js/bin/cmake-js'), 'build', '--target', 'flash_tests'],
-      { cwd: capture, stdio: 'pipe' })
+    execFileSync('cmake', ['--build', 'build', '--config', 'Release', '--target', 'flash_tests'],
+      { cwd: capture, stdio: 'inherit' })
   } catch (error) {
-    console.log('  FAIL  building the self-checks')
-    console.log(`${error.stdout ?? ''}${error.stderr ?? ''}`.trim().split('\n').slice(-12)
-      .map(line => `        ${line}`).join('\n'))
+    console.log(`  FAIL  building the self-checks: ${error.message}`)
     failed++
   }
 
@@ -57,6 +67,10 @@ if (!existsSync(nativeDir)) {
     .filter(name => name.startsWith('flash_') && name.endsWith(process.platform === 'win32' ? '_test.exe' : '_test'))
   if (!tests.length) { console.log('  FAIL  no test binaries built'); failed++ }
   for (const exe of tests) {
+    if (exe === 'flash_screenshot_test.exe' && process.env.FLASH_HARDWARE_TESTS !== '1') {
+      console.log('  skip  flash_screenshot_test.exe (live desktop; set FLASH_HARDWARE_TESTS=1)')
+      continue
+    }
     if (!run(exe, join(nativeDir, exe), [], nativeDir)) failed++
   }
 }

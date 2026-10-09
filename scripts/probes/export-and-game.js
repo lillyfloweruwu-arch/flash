@@ -1,6 +1,12 @@
 // Records a short source, changes games during a save, then exports twice.
 // Run with node --experimental-strip-types scripts/probes/export-and-game.js.
-const addon = require('./addon')
+const safe = process.argv.includes('--safe')
+const addonPath = require('node:path').join(__dirname, '../../packages/flash-capture/build', process.platform === 'win32' ? 'Release' : '', 'flash_capture.node')
+if (safe && !require('node:fs').existsSync(addonPath)) {
+  console.log('SKIP: safe native export checks require a built addon')
+  process.exit(0)
+}
+const addon = require(addonPath)
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path')
 const { createHash } = require('node:crypto')
@@ -10,6 +16,28 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
   const { reserveOutput, writeSidecar, readSidecar } = await import('../../apps/desktop/src/shared/clipFiles.ts')
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flash-export-game-'))
   try {
+    if (safe) {
+      // No screen, audio, encoder or capture initialization is needed to check
+      // native output refusal and cleanup against a deliberately invalid input.
+      const input = path.join(dir, 'invalid.mp4')
+      const existing = path.join(dir, 'existing.mp4')
+      fs.writeFileSync(input, 'invalid media fixture')
+      fs.writeFileSync(existing, 'keep original output')
+      const before = fs.readFileSync(existing)
+      await assert.rejects(addon.exportClip(input, existing, { maxBytes: 1000000 }))
+      await assert.rejects(addon.trimClip(input, existing, 0, 1))
+      assert.deepEqual(fs.readFileSync(existing), before)
+      for (const operation of ['export', 'trim']) {
+        const output = path.join(dir, `${operation}.mp4`)
+        await assert.rejects(operation === 'export'
+          ? addon.exportClip(input, output, { maxBytes: 1000000 })
+          : addon.trimClip(input, output, 0, 1))
+        assert.equal(fs.existsSync(output), false)
+      }
+      assert.equal(fs.readdirSync(dir).some(name => name.includes('.partial.')), false)
+      console.log('PASS: safe native export/trim preserve existing bytes and failed outputs leave no partials')
+      return
+    }
     const initialized = addon.initialize(dir, 0)
     assert.equal(initialized.error, undefined)
     const startupMode = addon.getStatus().audioMode

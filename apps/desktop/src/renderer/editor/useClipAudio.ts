@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { LiveMixTrack } from './useLiveMix'
+import { createDecodeQueue } from '../../shared/decodeQueue'
+import { usePlaybackVisibility } from '../usePlaybackVisibility'
+
+const requestDecode = createDecodeQueue((path: string) => window.flash.decodeClipAudio(path))
 
 // Decodes a clip's audio tracks separately, for anything that needs to hear
 // more than track one.
@@ -10,30 +14,38 @@ import type { LiveMixTrack } from './useLiveMix'
 // even though the mic track is right there. Both the player and the editor
 // therefore mix natively rather than leaning on the element.
 export function useClipAudio(filePath: string) {
+  const visible = usePlaybackVisibility()
   const [tracks, setTracks] = useState<LiveMixTrack[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     setTracks([])
-    setLoading(true)
+    setLoading(!!filePath && visible)
+    if (!filePath || !visible) return
+    let release: (() => void) | undefined
+    // A short dwell avoids starting a native decode for clips flicked past.
+    const timer = setTimeout(() => {
+      const request = requestDecode(filePath)
+      release = request.release
+      request.promise.then(result => {
+        if (cancelled) return
+        setLoading(false)
+        if (!result) return
+        if (result.error) {
+          console.error(`Could not decode audio for ${filePath}: ${result.error}`)
+          return
+        }
+        setTracks(result.tracks.map(track => ({ ...track, sampleRate: result.sampleRate })))
+      }).catch(error => {
+        if (cancelled) return
+        setLoading(false)
+        console.error(`Could not decode audio for ${filePath}`, error)
+      })
 
-    window.flash?.decodeClipAudio(filePath).then(result => {
-      if (cancelled) return
-      setLoading(false)
-      if (result.error) {
-        console.error(`Could not decode audio for ${filePath}: ${result.error}`)
-        return
-      }
-      setTracks(result.tracks.map(track => ({ ...track, sampleRate: result.sampleRate })))
-    }).catch(error => {
-      if (cancelled) return
-      setLoading(false)
-      console.error(`Could not decode audio for ${filePath}`, error)
-    })
-
-    return () => { cancelled = true }
-  }, [filePath])
+    }, 120)
+    return () => { cancelled = true; clearTimeout(timer); release?.() }
+  }, [filePath, visible])
 
   return { tracks, loading }
 }

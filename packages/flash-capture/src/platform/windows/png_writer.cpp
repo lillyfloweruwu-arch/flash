@@ -1,4 +1,5 @@
 #include "png_writer.h"
+#include "media_output.h"
 
 #include <limits>
 #include <stdexcept>
@@ -57,6 +58,7 @@ void WritePng(const std::string& path, const uint8_t* pixels,
     if (bufferSize > (std::numeric_limits<UINT>::max)())
         throw std::invalid_argument("PNG pixel buffer is too large for WIC");
 
+    MediaOutput output(Utf8Path(path));
     ComScope com;
     ComPtr<IWICImagingFactory> factory;
     Check(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
@@ -64,7 +66,7 @@ void WritePng(const std::string& path, const uint8_t* pixels,
 
     ComPtr<IWICStream> stream;
     Check(factory->CreateStream(&stream), "failed to create WIC output stream");
-    const std::wstring widePath = Utf8Path(path);
+    const std::wstring widePath = output.Partial().wstring();
     Check(stream->InitializeFromFilename(widePath.c_str(), GENERIC_WRITE),
         "screenshot path is not writable");
 
@@ -90,6 +92,12 @@ void WritePng(const std::string& path, const uint8_t* pixels,
         const_cast<BYTE*>(pixels)), "failed to write PNG pixels");
     Check(frame->Commit(), "failed to commit PNG frame");
     Check(encoder->Commit(), "failed to commit PNG file");
+    // WIC retains the output stream until every encoder interface is released.
+    frame.Reset();
+    options.Reset();
+    encoder.Reset();
+    stream.Reset();
+    output.Publish();
 #else
     (void)path; (void)pixels; (void)width; (void)height; (void)stride;
     throw std::runtime_error("PNG writing is only supported on Windows");

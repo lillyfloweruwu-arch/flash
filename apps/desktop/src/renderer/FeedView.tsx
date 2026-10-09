@@ -5,6 +5,7 @@ import { Dropdown } from './Dropdown'
 import { EXPORT_LIMITS } from './SelectionBar'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
+import { usePlaybackVisibility } from './usePlaybackVisibility'
 import { type Clip, GameMark, Icon, RenameTitle, formatBytes, timeAgo } from './ui'
 
 // The home screen. One clip owns the whole window; the next one is a single
@@ -34,6 +35,7 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   // re-scans underneath - a rename, a save landing, a filter narrowing - and a
   // stored index quietly slides onto a different clip. If the file vanishes,
   // hold the position it had rather than jumping to the top.
+  const visible = usePlaybackVisibility()
   const lastIndex = useRef(0)
   const found = clips.findIndex(entry => entry.filePath === currentPath)
   const index = clips.length === 0 ? -1
@@ -91,6 +93,7 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
       const target = event.target
       if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return
       if (event.ctrlKey || event.metaKey || event.altKey) return
@@ -208,7 +211,7 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
           <video
             ref={videoRef}
             src={clipUrl(clip.filePath)}
-            autoPlay
+            autoPlay={visible}
             muted
             loop
             className="absolute inset-0 w-full h-full"

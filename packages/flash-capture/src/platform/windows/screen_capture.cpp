@@ -216,7 +216,7 @@ std::vector<DisplayInfo> ScreenCapture::ListDisplays() {
                 EnumDisplaySettingsW(desc.DeviceName, ENUM_CURRENT_SETTINGS, &mode)
                     ? mode.dmDisplayFrequency : 0;
             displays.push_back({id++, name, static_cast<uint32_t>(r.right - r.left),
-                static_cast<uint32_t>(r.bottom - r.top), r.left == 0 && r.top == 0, refreshHz});
+                static_cast<uint32_t>(r.bottom - r.top), r.left == 0 && r.top == 0, refreshHz, r.left, r.top});
         }
     }
 #endif

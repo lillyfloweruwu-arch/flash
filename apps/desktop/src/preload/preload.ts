@@ -56,6 +56,9 @@ contextBridge.exposeInMainWorld('flash', {
   maximize: () => ipcRenderer.send('window-maximize'),
   close: () => ipcRenderer.send('window-close'),
 
+  getPlaybackVisibility: () => ipcRenderer.invoke('playback-visibility'),
+  onPlaybackVisibility: (callback: (visible: boolean) => void) => subscribe('playback-visibility', callback),
+
   // Recording
   toggleRecording: () => ipcRenderer.send('toggle-recording'),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
@@ -150,6 +153,8 @@ contextBridge.exposeInMainWorld('flash', {
 
 export type FlashAPI = {
   platform: string
+  getPlaybackVisibility: () => Promise<boolean>
+  onPlaybackVisibility: (callback: (visible: boolean) => void) => () => void
   minimize: () => void
   maximize: () => void
   close: () => void

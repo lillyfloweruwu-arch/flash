@@ -147,6 +147,11 @@ flash_add_test(flash_audio_decode_test test/audio_decode_test.cpp)
 flash_add_test(flash_smart_render_test test/smart_render_test.cpp)
 flash_add_test(flash_voice_trigger_test test/voice_trigger_test.cpp)
 if(WIN32)
+  flash_add_test(flash_media_output_test
+    test/media_output_test.cpp
+    src/platform/windows/png_writer.cpp
+    src/platform/windows/clip_writer.cpp
+  )
   flash_add_test(flash_screenshot_test
     test/screenshot_test.cpp
     src/platform/windows/screen_capture.cpp

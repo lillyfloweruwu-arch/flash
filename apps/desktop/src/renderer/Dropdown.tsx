@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export type DropdownOption<T> = { value: T; label: string; hint?: string }
 
@@ -18,6 +19,10 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
   // 'joined' butts against the button on its left, the pair reading as one control.
   variant?: 'plain' | 'joined'
 }) {
+  const id = useId()
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [maxHeight, setMaxHeight] = useState(300)
+  const [anchor, setAnchor] = useState({ left: 0, top: 0, bottom: 0, width })
   const [open, setOpen] = useState(false)
   // Opens upward when there is not room below, which is most of the time in
   // the feed, where the control sits near the bottom of the window.
@@ -29,15 +34,13 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
   useEffect(() => {
     if (!open) return
     setActive(Math.max(0, options.findIndex(option => option.value === value)))
-    const rect = rootRef.current?.getBoundingClientRect()
-    if (rect) setUpward(window.innerHeight - rect.bottom < options.length * 30 + 16)
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) setOpen(false)
     }
     // Capture phase: the clip player and editor both listen for Escape and
     // would close underneath this popup otherwise.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopPropagation(); setOpen(false) }
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); rootRef.current?.querySelector('button')?.focus() }
     }
     window.addEventListener('pointerdown', onPointerDown)
     window.addEventListener('keydown', onKey, true)
@@ -47,14 +50,51 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
     }
   }, [open, options, value])
 
+  // The settings scroller would clip an absolute popup, so place the menu
+  // in the document and keep its bounds tied to the trigger.
+  useLayoutEffect(() => {
+    if (!open) return
+    const position = () => {
+      const rect = rootRef.current?.getBoundingClientRect()
+      if (!rect) return
+      if (!rect.width || !rect.height || rect.bottom <= 0 || rect.top >= window.innerHeight) { setOpen(false); return }
+      const above = rect.top - 14
+      const below = window.innerHeight - rect.bottom - 14
+      const up = below < Math.min(320, options.length * 32 + 8) && above > below
+      setUpward(up)
+      setAnchor({ left: Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)), top: rect.bottom + 6, bottom: window.innerHeight - rect.top + 6, width: rect.width })
+      setMaxHeight(Math.max(0, Math.min(320, up ? above : below)))
+    }
+    position()
+    const observer = new ResizeObserver(position)
+    if (rootRef.current) observer.observe(rootRef.current)
+    window.addEventListener('resize', position)
+    window.addEventListener('scroll', position, true)
+    return () => { observer.disconnect(); window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true) }
+  }, [open, options.length])
+
+  useLayoutEffect(() => {
+    if (!open) return
+    const menu = menuRef.current
+    const option = menu?.children[active] as HTMLElement | undefined
+    if (!menu || !option) return
+    if (option.offsetTop < menu.scrollTop) menu.scrollTop = option.offsetTop
+    else if (option.offsetTop + option.offsetHeight > menu.scrollTop + menu.clientHeight) {
+      menu.scrollTop = option.offsetTop + option.offsetHeight - menu.clientHeight
+    }
+  }, [active, open, maxHeight])
+
   const choose = (index: number) => {
     const option = options[index]
     if (option) onChange(option.value)
     setOpen(false)
+    rootRef.current?.querySelector('button')?.focus()
   }
 
   const onButtonKey = (event: React.KeyboardEvent) => {
-    if (!open && (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
+    if (['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Enter', ' ', 'Escape'].includes(event.key)) event.stopPropagation()
+    if (event.key === 'Tab') setOpen(false)
+    if (!open && (event.key === 'ArrowUp' || event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault(); setOpen(true); return
     }
     if (!open) return
@@ -66,14 +106,15 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
   }
 
   return (
-    <div ref={rootRef} className="relative shrink-0" style={{ width }}>
+    <div ref={rootRef} onKeyDown={onButtonKey} onWheel={event => { if (open) event.stopPropagation() }} className="relative shrink-0" style={{ width }}>
       <button
         type="button"
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? `${id}-list` : undefined}
+        aria-activedescendant={open ? `${id}-option-${active}` : undefined}
         onClick={() => setOpen(o => !o)}
-        onKeyDown={onButtonKey}
         className="w-full flex items-center gap-2 transition-colors hover:bg-white/5"
         style={{
           fontSize: 12, color: 'var(--fg)', background: 'transparent',
@@ -90,12 +131,13 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
         </svg>
       </button>
 
-      {open && (
-        <div role="listbox" aria-activedescendant={`dropdown-option-${active}`}
-          className="absolute z-50 overflow-hidden"
+      {open && createPortal(
+        <div ref={menuRef} id={`${id}-list`} role="listbox"
           style={{
-            ...(upward ? { bottom: 'calc(100% + 6px)' } : { top: 'calc(100% + 6px)' }),
-            left: 0, minWidth: '100%', width: 'max-content', borderRadius: 8, padding: 4,
+            position: 'fixed', zIndex: 110,
+            ...(upward ? { bottom: anchor.bottom } : { top: anchor.top }),
+            maxHeight, overflowY: 'auto', overscrollBehavior: 'contain',
+            left: anchor.left, width: anchor.width, maxWidth: 'calc(100vw - 16px)', borderRadius: 8, padding: 4,
             background: 'var(--panel)', border: '1px solid var(--edge)',
             boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
           }}>
@@ -104,7 +146,8 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
             return (
               <button
                 key={String(option.value)}
-                id={`dropdown-option-${index}`}
+                id={`${id}-option-${index}`}
+                tabIndex={-1}
                 role="option"
                 aria-selected={isSelected}
                 type="button"
@@ -124,7 +167,7 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
               </button>
             )
           })}
-        </div>
+        </div>, document.body
       )}
     </div>
   )

@@ -27,6 +27,8 @@ struct DisplayInfo {
     // Asking for more just records duplicates at a higher bitrate, so the app
     // needs this to say so rather than letting the setting quietly lie.
     uint32_t refreshHz;
+    int32_t x = 0;
+    int32_t y = 0;
 };
 
 using FrameCallback = std::function<void(const FrameData& frame)>;

@@ -3,6 +3,8 @@
 // Imported by both the main process (toast popup) and the renderer, so it lives
 // outside src/main and src/renderer. Keep in sync with renderer/index.css.
 
+export const WINDOW_TOKENS = { control: 6, popover: 8, dialog: 10, tracking: '0.14em' } as const
+
 export interface Theme {
   label: string
   bg: string

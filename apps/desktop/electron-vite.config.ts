@@ -1,9 +1,16 @@
 import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import { readFileSync } from 'fs'
 
 export default defineConfig({
   main: {
+    // Inline the 26 KB local font because notification windows use data URLs and
+    // the package deliberately excludes node_modules.
+    define: {
+      __FLASH_ANTONIO_DATA__: JSON.stringify('data:font/woff2;base64,' + readFileSync(
+        resolve(__dirname, 'node_modules/@fontsource-variable/antonio/files/antonio-latin-wght-normal.woff2')).toString('base64')),
+    },
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/main/main.ts'),

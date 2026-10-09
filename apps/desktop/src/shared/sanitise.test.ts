@@ -102,3 +102,14 @@ assert.deepEqual(sanitise(settings, { perGame: {
   good: { quality: '4K 60fps', bufferLength: 300 }, mixed: { bufferLength: 15 }, bad: {}, null: {}, array: {},
 } })
 console.log('settings sanitise self-check passed')
+
+const collections = { displayId: 0, learnedGames: {}, ignoredGames: [] }
+for (const displayId of [-1, 0.5, 2 ** 32, NaN, Infinity, '1', null]) {
+  assert.deepEqual(sanitise(collections, { displayId }), {})
+}
+assert.equal(sanitise(collections, { displayId: 2 }).displayId, 2)
+assert.deepEqual(sanitise(collections, {
+  learnedGames: { 'game.exe': '  Game  ', broken: 123, blank: '', nested: {} },
+  ignoredGames: ['ignore.exe', null, {}, 42, '', 'ignore.exe'],
+}), { learnedGames: { 'game.exe': 'Game' }, ignoredGames: ['ignore.exe'] })
+console.log('PASS: display IDs and learned/ignored collection contents validated')

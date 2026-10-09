@@ -1,6 +1,7 @@
 #include "../../core/clip_writer.h"
 #include "../../core/audio_tracks.h"
 #include "color_space.h"
+#include "media_output.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -23,15 +24,6 @@ ClipWriter::ClipWriter() = default;
 ClipWriter::~ClipWriter() = default;
 
 #ifdef _WIN32
-static std::wstring ToWide(const std::string& value) {
-    if (value.empty()) return {};
-    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    if (!count) throw std::runtime_error("clip path is not valid UTF-8");
-    std::wstring result(count, L'\0');
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), count);
-    return result;
-}
-
 static void Check(HRESULT hr, const char* operation) {
     if (FAILED(hr)) throw std::runtime_error(std::string(operation) + " failed (HRESULT " + std::to_string(static_cast<unsigned long>(hr)) + ")");
 }
@@ -72,8 +64,9 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
 #ifdef _WIN32
     Check(MFStartup(MF_VERSION, MFSTARTUP_FULL), "MFStartup");
     struct Shutdown { ~Shutdown() { MFShutdown(); } } shutdown;
+    MediaOutput output(path);
     ComPtr<IMFSinkWriter> writer;
-    std::wstring widePath = ToWide(outputPath);
+    std::wstring widePath = output.Partial().wstring();
     try {
         Check(MFCreateSinkWriterFromURL(widePath.c_str(), nullptr, nullptr, &writer), "MFCreateSinkWriterFromURL");
 
@@ -254,10 +247,11 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         Check(writer->Finalize(), "IMFSinkWriter::Finalize");
     } catch (...) {
         writer.Reset();
-        std::error_code ignored;
-        std::filesystem::remove(path, ignored);
+
         throw;
     }
+    writer.Reset();
+    output.Publish();
     return meta;
 #else
     (void)audioPackets;

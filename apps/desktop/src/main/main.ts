@@ -11,6 +11,10 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, ren
 import { Readable } from 'stream'
 import { pathToFileURL } from 'url'
 import { statfs } from 'fs/promises'
+import { toastHtml, overlayHtml, cornerBounds } from '../shared/windowTemplates'
+
+import { byteRange } from '../shared/byteRange'
+import { createClipDeletion } from '../shared/clipDeletion'
 import { getTheme } from '../shared/themes'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
@@ -21,6 +25,8 @@ import { sanitise } from '../shared/sanitise'
 import { decideAutostart } from '../shared/autostart'
 import { clipPathFromUrl, captureCommand, isLinuxInfrastructure, type CaptureCommand } from '../shared/platform'
 import { linuxAutostartEnabled, setLinuxAutostart, linuxProcessSnapshot } from './linux'
+
+declare const __FLASH_ANTONIO_DATA__: string
 
 if (process.platform === 'linux') {
   app.setDesktopName('flash.desktop')
@@ -357,6 +363,8 @@ export interface Display {
   height: number
   isPrimary: boolean
   refreshHz?: number
+  x?: number
+  y?: number
 }
 
 let captureAddon: CaptureAddon | null = null
@@ -518,29 +526,26 @@ function scanClips(): ClipInfo[] {
   return clips
 }
 
-async function deleteClip(filePath: string): Promise<boolean> {
-  // Only delete inside the clips folder — filePath comes from the renderer.
-  if (!isInsideClips(filePath)) return false
-  try {
+const clipDeletion = createClipDeletion({
+  allowed: (filePath, intent) => {
+    if (!isInsideClips(filePath) || !existsSync(filePath)) return false
     if (migrateSidecars(dirname(filePath)).has(filePath)) return false
-  } catch { return false }
-  // The Watch screen starts decoding a clip's audio the moment it appears, and
-  // Media Foundation holds the file without delete sharing while it reads. A
-  // delete in that window failed with EBUSY and the clip silently stayed, so
-  // retry briefly before giving up.
-  for (let attempt = 0; ; attempt++) {
-    try { unlinkSync(filePath); break }
-    catch (error: any) {
-      const busy = error?.code === 'EBUSY' || error?.code === 'EPERM'
-      if (!busy || attempt >= 10) { console.warn(`Could not delete ${filePath}`, error); return false }
-      await new Promise(resolve => setTimeout(resolve, 200))
-    }
-  }
-  try { unlinkSync(sidecarPath(filePath)) } catch { /* no sidecar */ }
-  return true
+    const metadata = readSidecar(filePath)
+    if (metadata?.unreadable) return false
+    if (intent === 'manual') return true
+    return !!settings.autoDeleteDays && !metadata?.starred &&
+      statSync(filePath).birthtimeMs < Date.now() - settings.autoDeleteDays * 86400000
+  },
+  unlink: unlinkSync,
+  cleanup: filePath => { try { unlinkSync(sidecarPath(filePath)) } catch { /* No sidecar remains to remove. */ } },
+})
+
+function deleteClip(filePath: string, intent: 'manual' | 'prune' = 'manual'): Promise<boolean> {
+  return clipDeletion.remove(filePath, intent)
 }
 
 function renameClip(filePath: string, requestedName: string): { filePath?: string; error?: string } {
+  if (clipDeletion.busy(filePath)) return { error: 'This clip is being deleted. Try again shortly.' }
   const name = requestedName.trim()
   const validationError = validateClipName(name)
   if (validationError) return { error: validationError }
@@ -591,6 +596,7 @@ function renameClip(filePath: string, requestedName: string): { filePath?: strin
 }
 
 function moveClipToGame(filePath: string, requestedGame: string): { filePath?: string; error?: string } {
+  if (clipDeletion.busy(filePath)) return { error: 'This clip is being deleted. Try again shortly.' }
   const game = requestedGame.trim()
   const validationError = validateClipName(game)
   if (validationError) return { error: validationError }
@@ -672,7 +678,7 @@ function pruneOldClips() {
   // A starred clip is the one the user said they wanted to keep, which makes it
   // exactly the wrong thing for a background timer to delete.
   for (const clip of scanClips()) {
-    if (clip.createdAt < cutoff && !clip.starred) void deleteClip(clip.filePath)
+    if (clip.createdAt < cutoff && !clip.starred) void deleteClip(clip.filePath, 'prune')
   }
 }
 
@@ -731,7 +737,6 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
     }
   } catch { /* fall through and let the save attempt report the failure */ }
 
-  const requestedGame = currentGame ?? 'Unknown'
   const diskError = await checkDiskSpace()
   if (diskError) {
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: diskError })
@@ -748,15 +753,15 @@ async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?
     const clip = typeof seconds === 'number' && seconds > 0
       ? await captureAddon.saveClip(seconds)
       : await captureAddon.saveClip()
-    onClipSaved(clip, requestedGame)
+    onClipSaved(clip, clip.game)
     mainWindow?.webContents.send('clip-save-state', { saving: false })
-    updateOverlay()
+    updateOverlay(false)
     return { path: clip.path, duration: clip.duration }
   } catch (error: any) {
     const message = error?.message || 'Failed to save clip'
     console.error('Failed to save clip', error)
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
-    updateOverlay()
+    updateOverlay(false)
     return { error: message }
   }
 }
@@ -785,19 +790,18 @@ async function runSaveScreenshot(): Promise<void> {
     screenshotPath = join(folder, filename)
 
     await captureAddon.saveScreenshot(screenshotPath)
-    writeSidecar(screenshotPath, { duration: 0, game })
-    // Electron 44's clipboard is the async W3C-style one: an item per write.
-    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([readFileSync(screenshotPath)], { type: 'image/png' }) })])
+    try { writeSidecar(screenshotPath, { duration: 0, game }) }
+    catch (error) { console.warn('Screenshot saved without metadata', error) }
     playClipSound()
-    // Without this the PNG lands on disk and the open library never shows it:
-    // nothing else rescans, so a screenshot looks like it silently failed.
     mainWindow?.webContents.send('clip-saved-refresh')
-  } catch (error: any) {
-    if (screenshotPath) {
-      try {
-        if (existsSync(screenshotPath) && statSync(screenshotPath).size === 0) unlinkSync(screenshotPath)
-      } catch { /* the original save error is more useful */ }
+    // Clipboard failure must not hide a successfully published screenshot.
+    try {
+      await clipboard.write([new ClipboardItem({ 'image/png': new Blob([readFileSync(screenshotPath)], { type: 'image/png' }) })])
+    } catch (error) {
+      console.warn('Screenshot saved, but clipboard copy failed', error)
+      mainWindow?.webContents.send('clip-save-state', { saving: false, error: 'Screenshot saved to library, but could not copy it to the clipboard.' })
     }
+  } catch (error: any) {
     const message = error?.message || 'Failed to save screenshot'
     console.error('Failed to save screenshot', error)
     mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
@@ -968,76 +972,66 @@ function stopGameDetection() {
 
 // ── Notification Popup ────────────────────────────────────────────────────────
 
+function availableDisplay(requested: number): number {
+  try {
+    const displays = captureAddon?.listDisplays?.() ?? []
+    return displays.find(display => display.id === requested)?.id ?? displays.find(display => display.isPrimary)?.id ?? displays[0]?.id ?? 0
+  } catch { return 0 }
+}
+
+function recoverDisplay() {
+  const next = availableDisplay(settings.displayId)
+  if (next === settings.displayId) return
+  try {
+    captureAddon?.setDisplay?.(next)
+    settings.displayId = next
+    saveSettings()
+  } catch (error) { console.warn('Could not recover capture display', error) }
+}
+
+function captureDisplay() {
+  try {
+    const selected = captureAddon?.listDisplays?.().find(display => display.id === settings.displayId)
+    if (process.platform === 'win32' && selected?.x !== undefined && selected.y !== undefined) {
+      // Native DXGI uses physical pixels; Electron window bounds use DIPs.
+      const centre = screen.screenToDipPoint({ x: selected.x + Math.floor(selected.width / 2), y: selected.y + Math.floor(selected.height / 2) })
+      return screen.getDisplayNearestPoint(centre)
+    }
+  } catch { /* A disconnected display falls back to the primary display. */ }
+  return screen.getPrimaryDisplay()
+}
+
 function showClipNotification(durationSeconds: number) {
   if (!settings.notifications) return
-
-  const display = screen.getPrimaryDisplay()
-  const { x, y } = display.workArea
 
   if (notificationWindow && !notificationWindow.isDestroyed()) {
     notificationWindow.close()
   }
 
-  notificationWindow = new BrowserWindow({
-    width: 280, height: 72,
-    x: x + 16, y: y + 16,
+  const notification = new BrowserWindow({
+    ...cornerBounds(captureDisplay().workArea, settings.overlayPosition, 280, 72),
     frame: false, transparent: true, alwaysOnTop: true,
     skipTaskbar: true, resizable: false, focusable: false, show: false,
     type: 'toolbar', hasShadow: false,
   })
 
-  // Default alwaysOnTop is the 'floating' level, which loses to fullscreen games.
-  // 'screen-saver' is the highest level Windows exposes to a normal window and
-  // clears borderless-fullscreen. True exclusive-fullscreen DirectX still owns
-  // the display and needs the swapchain overlay to draw over it.
-  notificationWindow.setAlwaysOnTop(true, 'screen-saver')
-  notificationWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  notificationWindow.setIgnoreMouseEvents(true, { forward: true })
-
-  const minutes = Math.floor(durationSeconds / 60)
-  const seconds = durationSeconds % 60
-  const durationStr = `${minutes}:${String(seconds).padStart(2, '0')}`
-
-  const t = getTheme(settings.theme)
-  const html = `<!DOCTYPE html><html><head><style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; background: transparent; overflow: hidden; }
-    .toast { display: flex; align-items: center; gap: 12px; padding: 14px 18px;
-      background: ${t.panel}eb; border: 1px solid ${t.edge};
-      border-radius: 12px; backdrop-filter: blur(16px);
-      animation: slideIn 0.3s ease-out, fadeOut 0.4s ease-in 2.6s forwards; }
-    .icon { width: 36px; height: 36px; border-radius: 8px; background: ${t.accent}26;
-      display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .icon svg { color: ${t.accent}; }
-    .text h3 { font-size: 13px; font-weight: 600; color: ${t.fg}; margin-bottom: 2px; }
-    .text p { font-size: 11px; color: ${t.muted}; }
-    .text .dur { color: ${t.accent}; font-weight: 500; }
-    @keyframes slideIn { from { transform: translateX(-20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
-    @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
-  </style></head><body>
-    <div class="toast">
-      <div class="icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <circle cx="14" cy="3.5" r="2"/><line x1="14" y1="5.5" x2="12" y2="11"/>
-        <line x1="12" y1="8" x2="8.5" y2="6.5"/><line x1="12" y1="8" x2="16" y2="6"/>
-        <line x1="12" y1="11" x2="9" y2="16"/><line x1="9" y1="16" x2="7" y2="14"/>
-        <line x1="12" y1="11" x2="15" y2="15.5"/><line x1="15" y1="15.5" x2="18" y2="17"/>
-      </svg></div>
-      <div class="text"><h3>Clipped!</h3><p><span class="dur">${durationStr}</span> saved to library</p></div>
-    </div>
-  </body></html>`
-
-  notificationWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  // showInactive: show() would steal focus from the game the user is playing.
-  notificationWindow.once('ready-to-show', () => {
-    notificationWindow?.showInactive()
-    notificationWindow?.setAlwaysOnTop(true, 'screen-saver')
+  notificationWindow = notification
+  notification.setAlwaysOnTop(true, 'screen-saver')
+  notification.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  notification.setIgnoreMouseEvents(true, { forward: true })
+  const html = toastHtml(settings.theme, __FLASH_ANTONIO_DATA__, durationSeconds)
+  notification.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  notification.once('closed', () => {
+    if (timer) clearTimeout(timer)
+    if (notificationWindow === notification) notificationWindow = null
   })
-  setTimeout(() => {
-    if (notificationWindow && !notificationWindow.isDestroyed()) {
-      notificationWindow.close()
-      notificationWindow = null
-    }
-  }, 3200)
+  // Each callback owns its window, so an older toast cannot close a newer one.
+  notification.once('ready-to-show', () => {
+    if (notification.isDestroyed()) return
+    notification.showInactive()
+    timer = setTimeout(() => { if (!notification.isDestroyed()) notification.close() }, 3200)
+  })
 }
 
 function playClipSound() {
@@ -1055,16 +1049,10 @@ function playClipSound() {
 // true exclusive-fullscreen — borderless and windowed are fine.
 let overlayWindow: BrowserWindow | null = null
 
+let overlaySaving = false
+
 function overlayBounds() {
-  const display = screen.getPrimaryDisplay().workArea
-  const [w, h, pad] = [188, 40, 16]
-  const right = settings.overlayPosition.endsWith('right')
-  const bottom = settings.overlayPosition.startsWith('bottom')
-  return {
-    width: w, height: h,
-    x: right ? display.x + display.width - w - pad : display.x + pad,
-    y: bottom ? display.y + display.height - h - pad : display.y + pad,
-  }
+  return cornerBounds(captureDisplay().workArea, settings.overlayPosition, 240, 40)
 }
 
 function createOverlay() {
@@ -1078,34 +1066,14 @@ function createOverlay() {
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   overlayWindow.setIgnoreMouseEvents(true, { forward: true })
 
-  const t = getTheme(settings.theme)
-  const html = `<!DOCTYPE html><html><head><style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{font-family:'Segoe UI Variable Display','Segoe UI',system-ui,sans-serif;background:transparent;overflow:hidden}
-    .pill{display:flex;align-items:center;gap:9px;padding:10px 14px;border-radius:10px;
-      background:${t.panel}e0;border:1px solid ${t.edge};backdrop-filter:blur(12px);
-      opacity:0;transition:opacity .25s ease}
-    .pill.on{opacity:1}
-    .dot{width:7px;height:7px;border-radius:50%;background:${t.accent};flex-shrink:0}
-    .dot.live{animation:blink 1.4s ease-in-out infinite}
-    .dot.idle{background:${t.muted}}
-    .label{font-size:11px;font-weight:600;color:${t.fg};letter-spacing:.02em}
-    .game{font-size:11px;color:${t.muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    @keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
-  </style></head><body>
-    <div class="pill" id="pill"><div class="dot" id="dot"></div>
-      <span class="label" id="label">REC</span><span class="game" id="game"></span></div>
-    <script>
-      window.setState = (s) => {
-        document.getElementById('pill').className = 'pill' + (s.visible ? ' on' : '')
-        document.getElementById('dot').className = 'dot ' + (s.recording ? 'live' : 'idle')
-        document.getElementById('label').textContent = s.saving ? 'SAVING' : s.recording ? 'REC' : 'IDLE'
-        document.getElementById('game').textContent = s.game || ''
-      }
-    </script>
-  </body></html>`
-  overlayWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
-  overlayWindow.once('ready-to-show', () => { overlayWindow?.showInactive(); updateOverlay() })
+  const overlay = overlayWindow
+  const html = overlayHtml(settings.theme, __FLASH_ANTONIO_DATA__)
+  overlay.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  overlay.once('ready-to-show', () => {
+    if (overlay.isDestroyed() || overlayWindow !== overlay) return
+    overlay.showInactive()
+    updateOverlay()
+  })
 }
 
 function destroyOverlay() {
@@ -1113,13 +1081,14 @@ function destroyOverlay() {
   overlayWindow = null
 }
 
-function updateOverlay(saving = false) {
+function updateOverlay(saving?: boolean) {
+  if (saving !== undefined) overlaySaving = saving
   if (!settings.overlay) { destroyOverlay(); return }
   if (!overlayWindow || overlayWindow.isDestroyed()) { createOverlay(); return }
   overlayWindow.setBounds(overlayBounds())
   overlayWindow.setAlwaysOnTop(true, 'screen-saver')
   // Only worth showing while a game is up — a permanent desktop badge is clutter.
-  const state = { visible: !!currentGame || saving, recording: isRecording, game: currentGame, saving }
+  const state = { visible: !!currentGame || overlaySaving, recording: isRecording, game: currentGame, saving: overlaySaving }
   overlayWindow.webContents.executeJavaScript(`window.setState(${JSON.stringify(state)})`).catch(() => {})
 }
 
@@ -1140,12 +1109,10 @@ function updateTrayMenu() {
     { label: isRecording ? 'Stop Replay Buffer' : 'Start Replay Buffer', click: () => {
       if (isRecording) {
         captureAddon?.stopReplayBuffer()
-        isRecording = false
+        setRecordingState(false)
       } else {
-        isRecording = captureAddon?.startReplayBuffer() ?? false
+        setRecordingState(captureAddon?.startReplayBuffer() ?? false)
       }
-      mainWindow?.webContents.send('recording-state', isRecording)
-      updateTrayMenu()
     }},
     { type: 'separator' },
     { label: 'Open Clips Folder', click: () => shell.openPath(settings.clipsFolder) },
@@ -1184,6 +1151,13 @@ function createWindow() {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
 
+  const publishVisibility = () => mainWindow?.webContents.send('playback-visibility', playbackVisible())
+  mainWindow.on('show', publishVisibility)
+  mainWindow.on('hide', publishVisibility)
+  mainWindow.on('minimize', publishVisibility)
+  mainWindow.on('restore', publishVisibility)
+  mainWindow.webContents.on('did-finish-load', publishVisibility)
+
   mainWindow.on('close', (event) => {
     if (!(app as any).isQuitting) {
       event.preventDefault()
@@ -1194,27 +1168,29 @@ function createWindow() {
 
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 
+function playbackVisible(): boolean {
+  return !!mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()
+}
+
 function setupIPC() {
+  ipcMain.handle('playback-visibility', playbackVisible)
   // ── Capture ──
   ipcMain.handle('capture-start-replay', () => {
     if (!captureAddon) return false
     try {
       const started = captureAddon.startReplayBuffer()
-      isRecording = started
-      updateTrayMenu()
-      mainWindow?.webContents.send('recording-state', isRecording)
+      setRecordingState(started)
       return started
     } catch (error) {
       console.error('Failed to start replay buffer', error)
+      setRecordingState(false)
       return false
     }
   })
 
   ipcMain.handle('capture-stop-replay', () => {
     try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
-    isRecording = false
-    updateTrayMenu()
-    mainWindow?.webContents.send('recording-state', isRecording)
+    setRecordingState(false)
   })
 
   ipcMain.handle('capture-save-clip', (_event, seconds?: number) => saveClipNow(seconds))
@@ -1479,6 +1455,8 @@ function setupIPC() {
     // Everything below keys off `changed`, not the raw request: a value the
     // sanitiser dropped must not trigger the side effect that applies it.
     const { clipsFolder: _ignored, ...changed } = sanitiseSettings(partial, settings)
+    const previousDisplay = settings.displayId
+    if (changed.displayId !== undefined) changed.displayId = availableDisplay(changed.displayId)
     Object.assign(settings, changed)
     // A short clip longer than the buffer it is cut from cannot exist: the save
     // returns the whole buffer and the UI goes on claiming the longer number.
@@ -1498,7 +1476,10 @@ function setupIPC() {
     if (changed.voiceRawFloor !== undefined || changed.voiceCooldownMs !== undefined) applyVoiceThreshold()
     if (changed.voiceEnabled !== undefined) applyVoiceEnabled()
     if (changed.displayId !== undefined) {
-      try { captureAddon?.setDisplay?.(changed.displayId) } catch (error) { console.warn('Could not switch display', error) }
+      try { captureAddon?.setDisplay?.(changed.displayId) }
+      catch (error) { settings.displayId = previousDisplay; saveSettings(); console.warn('Could not switch display', error) }
+      checkCaptureHealth()
+      updateOverlay()
     }
     return { ...settings }
   })
@@ -1558,12 +1539,10 @@ function setupIPC() {
   ipcMain.on('toggle-recording', () => {
     if (isRecording) {
       try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
-      isRecording = false
+      setRecordingState(false)
     } else {
-      isRecording = captureAddon?.startReplayBuffer() ?? false
+      setRecordingState(captureAddon?.startReplayBuffer() ?? false)
     }
-    mainWindow?.webContents.send('recording-state', isRecording)
-    updateTrayMenu()
   })
 
   ipcMain.handle('get-recording-state', () => isRecording)
@@ -1591,50 +1570,52 @@ let restartAttempts = 0
 let lastRestart = 0
 
 function startCaptureWatchdog() {
-  watchdogTimer = setInterval(() => {
-    if (!captureAddon || !isRecording) return
-    let status: ReturnType<CaptureAddon['getStatus']>
-    try { status = captureAddon.getStatus() } catch { return }
-    if (status.capturePending) return
+  watchdogTimer = setInterval(checkCaptureHealth, 5000)
+}
 
-    // captureHealthy is the engine's own view; recording is the thread state.
-    // Either going false while we believe we are recording means capture died.
-    const dead = status.recording === false || status.captureHealthy === false
-    if (!dead) { restartAttempts = 0; return }
+function checkCaptureHealth() {
+  if (!captureAddon || !isRecording) return
+  let status: ReturnType<CaptureAddon['getStatus']>
+  try { status = captureAddon.getStatus() } catch { return }
+  if (status.capturePending) return
 
-    const reason = status.captureError || 'capture stopped unexpectedly'
-    console.warn('Capture watchdog:', reason)
-    // A portal denial is a user decision. Retrying automatically would reopen
-    // the permission dialog repeatedly; the REC action is the explicit retry.
-    if (process.platform === 'linux') {
-      captureAddon.stopReplayBuffer()
-      setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
+  // captureHealthy is the engine's own view; recording is the thread state.
+  // Either going false while we believe we are recording means capture died.
+  const dead = status.recording === false || status.captureHealthy === false
+  if (!dead) { restartAttempts = 0; return }
+
+  const reason = status.captureError || 'capture stopped unexpectedly'
+  console.warn('Capture watchdog:', reason)
+  // A portal denial is a user decision. Retrying automatically would reopen
+  // the permission dialog repeatedly; the REC action is the explicit retry.
+  if (process.platform === 'linux') {
+    captureAddon.stopReplayBuffer()
+    setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
+    return
+  }
+
+  // Cap restarts so a genuinely broken machine does not become a restart loop.
+  const now = Date.now()
+  if (now - lastRestart > 60_000) restartAttempts = 0
+  if (restartAttempts >= 3) {
+    setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
+    return
+  }
+  restartAttempts++
+  lastRestart = now
+
+  try {
+    captureAddon.stopReplayBuffer()
+    const restarted = captureAddon.startReplayBuffer()
+    if (restarted) {
+      console.log('Capture watchdog: replay buffer restarted')
+      setRecordingState(true)
       return
     }
-
-    // Cap restarts so a genuinely broken machine does not become a restart loop.
-    const now = Date.now()
-    if (now - lastRestart > 60_000) restartAttempts = 0
-    if (restartAttempts >= 3) {
-      setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
-      return
-    }
-    restartAttempts++
-    lastRestart = now
-
-    try {
-      captureAddon.stopReplayBuffer()
-      const restarted = captureAddon.startReplayBuffer()
-      if (restarted) {
-        console.log('Capture watchdog: replay buffer restarted')
-        setRecordingState(true)
-        return
-      }
-    } catch (error) {
-      console.warn('Capture watchdog: restart failed', error)
-    }
-    setRecordingState(false, `Capture stopped: ${reason}`)
-  }, 5000)
+  } catch (error) {
+    console.warn('Capture watchdog: restart failed', error)
+  }
+  setRecordingState(false, `Capture stopped: ${reason}`)
 }
 
 // One place that fixes the flag, the tray, the overlay and the renderer together,
@@ -1776,34 +1757,18 @@ function registerClipProtocol() {
     const asWeb = (start: number, end: number) =>
       Readable.toWeb(createReadStream(normalised, { start, end })) as unknown as ReadableStream<Uint8Array>
 
-    const range = request.headers.get('Range')
-    const match = range ? /bytes=(\d*)-(\d*)/.exec(range) : null
-    if (!match) {
-      return new Response(asWeb(0, size - 1), {
-        status: 200,
-        headers: {
-          'Content-Type': contentType,
-          'Content-Length': String(size),
-          'Accept-Ranges': 'bytes',
-        },
-      })
+    const range = byteRange(request.headers.get('Range'), size)
+    if (range.status === 416) {
+      return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' } })
     }
-
-    const start = match[1] ? Number(match[1]) : 0
-    const end = match[2] ? Math.min(Number(match[2]), size - 1) : size - 1
-    if (!(start >= 0 && start <= end && end < size)) {
-      return new Response('range not satisfiable', {
-        status: 416,
-        headers: { 'Content-Range': `bytes */${size}` },
-      })
-    }
-    return new Response(asWeb(start, end), {
-      status: 206,
+    const { start, end, status } = range
+    return new Response(size === 0 ? null : asWeb(start, end), {
+      status,
       headers: {
         'Content-Type': contentType,
-        'Content-Range': `bytes ${start}-${end}/${size}`,
-        'Content-Length': String(end - start + 1),
+        'Content-Length': String(size === 0 ? 0 : end - start + 1),
         'Accept-Ranges': 'bytes',
+        ...(status === 206 ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {}),
       },
     })
   })
@@ -1826,6 +1791,8 @@ app.on('ready', () => {
       settings.portalRestoreToken = token
       saveSettings()
     })
+    settings.displayId = availableDisplay(settings.displayId)
+    saveSettings()
     const status = captureAddon.initialize(settings.clipsFolder, settings.displayId)
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
@@ -1835,7 +1802,7 @@ app.on('ready', () => {
     // to replay-buffer state. Once enabled it listens for the lifetime of Flash.
     initializeVoiceActivation()
     try {
-      isRecording = captureAddon.startReplayBuffer()
+      setRecordingState(captureAddon.startReplayBuffer())
       if (isRecording) console.log('Replay buffer started automatically')
       else console.warn('Replay buffer failed to start')
     } catch (error) {
@@ -1865,9 +1832,9 @@ app.on('ready', () => {
 
   // Resume and display changes are the two events that reliably invalidate DXGI
   // duplication. Nudge the watchdog immediately rather than waiting up to 5s.
-  powerMonitor.on('resume', () => { restartAttempts = 0; console.log('System resumed — rechecking capture') })
-  screen.on('display-metrics-changed', () => { restartAttempts = 0 })
-  screen.on('display-removed', () => { restartAttempts = 0 })
+  powerMonitor.on('resume', () => { restartAttempts = 0; checkCaptureHealth(); console.log('System resumed — rechecking capture') })
+  screen.on('display-metrics-changed', () => { restartAttempts = 0; recoverDisplay(); checkCaptureHealth(); updateOverlay() })
+  screen.on('display-removed', () => { restartAttempts = 0; recoverDisplay(); checkCaptureHealth(); updateOverlay() })
 })
 
 app.on('window-all-closed', () => { /* live in tray */ })

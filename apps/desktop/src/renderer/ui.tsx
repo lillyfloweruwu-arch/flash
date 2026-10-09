@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 // Pieces shared by the feed, the library and settings: formatting helpers, the
 // one icon family, and the small controls every screen draws the same way.
@@ -210,11 +210,36 @@ function DialogFrame({ label, onBackdrop, width = 400, children }: {
   width?: number
   children: React.ReactNode
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const dialog = dialogRef.current!
+    const focusable = () => Array.from(dialog.querySelectorAll<HTMLElement>(
+      'button:not(:disabled), input:not(:disabled), [tabindex="0"]'))
+    focusable()[0]?.focus()
+    const contain = (event: FocusEvent) => {
+      if (!dialog.contains(event.target as Node)) focusable()[0]?.focus()
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      event.preventDefault()
+      const controls = focusable()
+      const index = controls.indexOf(document.activeElement as HTMLElement)
+      controls[(index + (event.shiftKey ? controls.length - 1 : 1)) % controls.length]?.focus()
+    }
+    document.addEventListener('focusin', contain)
+    dialog.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('focusin', contain)
+      dialog.removeEventListener('keydown', onKey)
+      if (previous?.isConnected) previous.focus()
+    }
+  }, [])
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center"
       style={{ background: 'rgba(4,4,6,0.72)', animation: 'overlay-in 0.12s ease-out' }}
       onClick={onBackdrop}>
-      <div role="dialog" aria-modal="true" aria-label={label}
+      <div ref={dialogRef} onKeyDown={event => event.stopPropagation()} role="dialog" aria-modal="true" aria-label={label}
         onClick={e => e.stopPropagation()}
         style={{
           width, padding: 28, background: 'var(--panel)', borderRadius: 10,
@@ -236,12 +261,17 @@ export interface ConfirmRequest {
 }
 
 export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; onClose: () => void }) {
-  const accept = useCallback(() => { request.onConfirm(); onClose() }, [request, onClose])
+  const accepted = useRef(false)
+  const accept = useCallback(() => {
+    if (accepted.current) return
+    accepted.current = true
+    request.onConfirm()
+    onClose()
+  }, [request, onClose])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
-      if (e.key === 'Enter') { e.stopPropagation(); accept() }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
     }
     // Capture phase: the feed also listens for Escape and would leave
     // underneath the dialog otherwise.
@@ -258,7 +288,7 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; o
         <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 24 }}>{request.body}</p>
       )}
       <div className="flex justify-end gap-2">
-        <button autoFocus onClick={onClose} className="btn">Cancel</button>
+        <button onClick={onClose} className="btn">Cancel</button>
         <button onClick={accept} className={`btn btn-solid ${request.destructive ? 'btn-danger' : ''}`}>
           {request.confirmLabel ?? 'Confirm'}
         </button>

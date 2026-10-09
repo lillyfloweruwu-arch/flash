@@ -17,6 +17,7 @@ runInNewContext(source, {
 })
 assert.equal(api.platform, process.platform)
 const methods = [
+  [api, 'onPlaybackVisibility', 'playback-visibility'],
   [api, 'onRecordingState', 'recording-state'], [api, 'onHotkeyClip', 'hotkey-clip'],
   [api, 'onClipSavedRefresh', 'clip-saved-refresh'], [api, 'onIdentifyGame', 'identify-game'],
   [api, 'onNavigate', 'navigate'], [api, 'onPlayClipSound', 'play-clip-sound'],
@@ -36,4 +37,4 @@ for (const [owner, method, channel] of methods) {
   }
   assert.equal(calls, 2)
 }
-console.log('PASS: all 8 preload subscriptions clean up across repeated mounts')
+console.log('PASS: all 9 preload subscriptions clean up across repeated mounts')

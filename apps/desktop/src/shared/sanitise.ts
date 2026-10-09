@@ -25,6 +25,18 @@ export function sanitise<T extends Record<string, unknown>>(defaults: T, parsed:
     const value = source[key]
     if (value === undefined) continue
 
+    if (key === 'displayId' && (!Number.isInteger(value) || (value as number) < 0 || (value as number) > 0xffffffff)) continue
+    if (key === 'learnedGames') {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        clean[key] = Object.fromEntries(Object.entries(value).filter(([exe, name]) =>
+          exe.trim() && typeof name === 'string' && name.trim()).map(([exe, name]) => [exe, (name as string).trim()]))
+      }
+      continue
+    }
+    if (key === 'ignoredGames') {
+      if (Array.isArray(value)) clean[key] = [...new Set(value.filter(exe => typeof exe === 'string' && exe.trim()))]
+      continue
+    }
     if (key === 'perGame') {
       if (value && typeof value === 'object' && !Array.isArray(value)) {
         clean[key] = Object.fromEntries(Object.entries(value).map(([game, fields]) => [game,

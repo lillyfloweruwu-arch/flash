@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
+import { usePlaybackVisibility } from '../usePlaybackVisibility'
 
 export type LiveMixTrack = {
   id: string
@@ -19,6 +20,7 @@ export function useLiveMix(
   // sound down.
   master = 1,
 ): { ready: boolean } {
+  const visible = usePlaybackVisibility()
   const [ready, setReady] = useState(false)
   const gainsRef = useRef(gains)
   const gainNodesRef = useRef(new Map<string, GainNode>())
@@ -45,7 +47,8 @@ export function useLiveMix(
     setReady(false)
     gainNodesRef.current = new Map()
 
-    if (!video || audibleTracks.length === 0) {
+    if (!visible) video?.pause()
+    if (!visible || !video || audibleTracks.length === 0) {
       setReady(tracks.length > 0)
       return
     }
@@ -126,7 +129,7 @@ export function useLiveMix(
     }
 
     const onPlay = () => { void startSources() }
-    const onPause = () => discardSources()
+    const onPause = () => { discardSources(); void context.suspend().catch(() => {}) }
     const onSeeking = () => discardSources()
     const onSeeked = () => {
       if (!video.paused && !video.ended) void startSources()
@@ -144,6 +147,7 @@ export function useLiveMix(
     video.addEventListener('ratechange', onRateChange)
     video.addEventListener('ended', onEnded)
 
+    if (video.paused) void context.suspend().catch(() => {})
     setReady(true)
     if (!video.paused && !video.ended) void startSources()
 
@@ -163,7 +167,7 @@ export function useLiveMix(
         console.error('Could not close the clip editor audio context', error)
       })
     }
-  }, [videoRef, tracks])
+  }, [videoRef, tracks, visible])
 
   return { ready }
 }
