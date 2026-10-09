@@ -64,6 +64,11 @@ typography:
     fontSize: "11px"
     fontWeight: 600
     letterSpacing: "0.14em"
+  label-small:
+    fontFamily: "'Segoe UI Variable Text', 'Segoe UI', system-ui, 'Noto Sans', Cantarell, Ubuntu, sans-serif"
+    fontSize: "10px"
+    fontWeight: 600
+    letterSpacing: "0.14em"
 rounded:
   keycap: "4px"
   control: "6px"
