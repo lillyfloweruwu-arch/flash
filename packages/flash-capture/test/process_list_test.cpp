@@ -2,7 +2,7 @@
 // which is the one thing about the machine that is guaranteed to be true, and
 // then reports what it could read about everything else — permissions and
 // window ownership are facts about the machine, not defects.
-#include "../src/process_list.h"
+#include "../src/core/process_list.h"
 
 #include <cassert>
 #include <chrono>

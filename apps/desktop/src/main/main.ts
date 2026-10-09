@@ -19,6 +19,12 @@ import { migrateSidecars, readSidecar, writeSidecar, reserveOutput } from '../sh
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
 import { decideAutostart } from '../shared/autostart'
+import { clipPathFromUrl, captureCommand, isLinuxInfrastructure, type CaptureCommand } from '../shared/platform'
+import { linuxAutostartEnabled, setLinuxAutostart, linuxProcessSnapshot } from './linux'
+
+if (process.platform === 'linux') {
+  app.setDesktopName('flash.desktop')
+}
 
 // ── Settings (JSON file, no native deps) ─────────────────────────────────────
 
@@ -45,7 +51,8 @@ const DEFAULTS = {
   voiceRawFloor: 0.30,
   voiceCooldownMs: 3000,
   displayId: 0,
-  overlay: true,
+  overlay: !(process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland'),
+  portalRestoreToken: '',
   overlayPosition: 'top-left' as 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
   quality: '1080p 60fps',
   bufferLength: 30,
@@ -122,7 +129,7 @@ function applyThemeIcons() {
   tray?.setImage(image.resize({ width: 16, height: 16 }))
   mainWindow?.setIcon(image)
 
-  if (!app.isPackaged || !existsSync(ico)) return
+  if (process.platform !== 'win32' || !app.isPackaged || !existsSync(ico)) return
   const shortcuts = [
     join(app.getPath('desktop'), 'Flash.lnk'),
     join(app.getPath('appData'), 'Microsoft/Windows/Start Menu/Programs/Flash.lnk'),
@@ -198,6 +205,7 @@ function loginItemArgs(): string[] {
 // Flash off in Task Manager's Startup tab, and a toggle that reported our own
 // saved boolean would sit there claiming to be on.
 function autostartState(): { enabled: boolean; managedByWindows: boolean } {
+  if (process.platform === 'linux') return { enabled: linuxAutostartEnabled(), managedByWindows: false }
   if (process.platform !== 'win32' || !app.isPackaged) return { enabled: false, managedByWindows: false }
   try {
     const state = app.getLoginItemSettings({ path: app.getPath('exe'), args: loginItemArgs() })
@@ -214,7 +222,14 @@ function autostartState(): { enabled: boolean; managedByWindows: boolean } {
 }
 
 function setAutostart(enabled: boolean): { enabled: boolean; managedByWindows: boolean; error?: string } {
-  if (process.platform !== 'win32') return { enabled: false, managedByWindows: false, error: 'Only Windows has a startup list' }
+  if (process.platform === 'linux') {
+    if (!app.isPackaged) return { ...autostartState(), error: 'Autostart requires a packaged build.' }
+    try {
+      setLinuxAutostart(enabled, process.env.APPIMAGE || app.getPath('exe'))
+      return autostartState()
+    } catch (error: any) { return { ...autostartState(), error: error?.message || 'Could not update autostart.' } }
+  }
+  if (process.platform !== 'win32') return { enabled: false, managedByWindows: false, error: 'Autostart is unavailable on this platform.' }
   // A development run would register electron.exe in the user's Run key, which
   // is somebody else's mess to clean up.
   if (!app.isPackaged) return { enabled: false, managedByWindows: false, error: 'Only an installed build can start with Windows' }
@@ -263,6 +278,7 @@ function applyInstallerAutostartRequest() {
 // ── Capture Addon ────────────────────────────────────────────────────────────
 
 type CaptureAddon = {
+  setPortalRestoreToken?(token: string, callback: (token: string) => void): void
   initialize(clipsDir: string, displayId?: number): { error?: string }
   startReplayBuffer(): boolean
   stopReplayBuffer(): void
@@ -288,6 +304,7 @@ type CaptureAddon = {
     bufferSeconds: number
     encoder: string
     captureHealthy?: boolean
+    capturePending?: boolean
     captureError?: string
     // Which screen-capture backend is actually running. Desktop Duplication
     // cannot see a fullscreen game; knowing which one is in use turns a black
@@ -317,6 +334,9 @@ interface VoiceStatus {
 }
 
 interface ProcessEntry {
+  parentPid?: number
+  cmdline?: string
+  steamAppId?: string
   pid: number
   exe: string
   path: string
@@ -399,6 +419,7 @@ function initializeVoiceActivation() {
 }
 
 function readVoiceStatus(): VoiceStatus {
+  if (process.platform === 'linux') return { available: false, language: '', error: 'Voice activation is not available on Linux. Use a hotkey or a compositor shortcut.' }
   if (!captureAddon) {
     return { available: false, language: '', error: 'Capture engine not available.' }
   }
@@ -420,7 +441,7 @@ function resource(packaged: string, repoRelative: string): string {
 }
 
 function loadCaptureAddon(): CaptureAddon | null {
-  const addonPath = resource('flash_capture.node', 'packages/flash-capture/build/Release/flash_capture.node')
+  const addonPath = resource('flash_capture.node', `packages/flash-capture/build/${process.platform === 'win32' ? 'Release/' : ''}flash_capture.node`)
   try { return require(addonPath) as CaptureAddon }
   catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
 }
@@ -841,15 +862,19 @@ type DetectedGame = { name: string; pid: number; exe: string; unknown?: boolean 
 // in 21ms. For an app whose whole argument is that it is lighter than Medal,
 // that was the wrong number to leave in the background.
 function snapshot(): ProcessSnapshot | null {
-  try { return captureAddon?.listProcesses?.() ?? null }
-  catch (error) { console.warn('Could not list processes', error); return null }
+  try { if (captureAddon?.listProcesses) return captureAddon.listProcesses() }
+  catch (error) { console.warn('Could not list native processes', error) }
+  try { return process.platform === 'linux' ? linuxProcessSnapshot() : null }
+  catch (error) { console.warn('Could not read /proc', error); return null }
 }
 
 // Tier 1 + 2: the bundled database and anything the user has already named.
 function detectKnownGame(processes: ProcessEntry[], foregroundPid: number): DetectedGame | null {
   const learned = learnedGames()
+  const linux = process.platform === 'linux'
   const matches: DetectedGame[] = []
   for (const process of processes) {
+    if (linux && isLinuxInfrastructure(process.exe)) continue
     const name = GAME_DB[process.exe.toLowerCase()] ?? learned[process.exe.toLowerCase()]
     if (name) matches.push({ name, pid: process.pid, exe: process.exe })
   }
@@ -889,7 +914,14 @@ function detectUnknownGame(processes: ProcessEntry[]): DetectedGame | null {
 function detectCurrentGame(): DetectedGame | null {
   const current = snapshot()
   if (!current) return null
-  return detectKnownGame(current.processes, current.foregroundPid) ?? detectUnknownGame(current.processes)
+  const known = detectKnownGame(current.processes, current.foregroundPid)
+  if (known) return known
+  if (process.platform === 'linux') {
+    const game = current.processes.filter(p => p.steamAppId && !isLinuxInfrastructure(p.exe) && !ignoredExecutables.has(p.exe.toLowerCase()))
+      .sort((a, b) => b.workingSet - a.workingSet)[0]
+    return game ? { name: `Steam ${game.steamAppId}`, pid: game.pid, exe: game.exe } : null
+  }
+  return detectUnknownGame(current.processes)
 }
 
 function startGameDetection() {
@@ -1471,9 +1503,9 @@ function setupIPC() {
     return { ...settings }
   })
   ipcMain.handle('hotkey-status', () => ({ hotkey: settings.hotkey, ...hotkeyStatus }))
-  ipcMain.handle('autostart-status', () => ({ ...autostartState(), supported: process.platform === 'win32' && app.isPackaged }))
+  ipcMain.handle('autostart-status', () => ({ ...autostartState(), supported: process.platform === 'linux' || (process.platform === 'win32' && app.isPackaged) }))
   ipcMain.handle('set-autostart', (_event, enabled: boolean) => ({
-    ...setAutostart(enabled === true), supported: process.platform === 'win32' && app.isPackaged,
+    ...setAutostart(enabled === true), supported: process.platform === 'linux' || (process.platform === 'win32' && app.isPackaged),
   }))
   ipcMain.handle('get-learned-games', () => ({ ...learnedGames() }))
   ipcMain.handle('forget-game', (_event, exe: string) => {
@@ -1563,6 +1595,7 @@ function startCaptureWatchdog() {
     if (!captureAddon || !isRecording) return
     let status: ReturnType<CaptureAddon['getStatus']>
     try { status = captureAddon.getStatus() } catch { return }
+    if (status.capturePending) return
 
     // captureHealthy is the engine's own view; recording is the thread state.
     // Either going false while we believe we are recording means capture died.
@@ -1571,6 +1604,13 @@ function startCaptureWatchdog() {
 
     const reason = status.captureError || 'capture stopped unexpectedly'
     console.warn('Capture watchdog:', reason)
+    // A portal denial is a user decision. Retrying automatically would reopen
+    // the permission dialog repeatedly; the REC action is the explicit retry.
+    if (process.platform === 'linux') {
+      captureAddon.stopReplayBuffer()
+      setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
+      return
+    }
 
     // Cap restarts so a genuinely broken machine does not become a restart loop.
     const now = Date.now()
@@ -1663,10 +1703,22 @@ function registerHotkeys(): boolean {
 // natural thing a user does — and without this it starts a SECOND instance with
 // its own capture thread, encoder and settings writer, whose hotkey registration
 // then fails, leaving the window you are looking at unable to clip.
-if (!app.requestSingleInstanceLock()) {
+let commandsReady = false
+const pendingCommands: CaptureCommand[] = []
+function dispatchCaptureCommand(command: CaptureCommand) {
+  if (!commandsReady) { pendingCommands.push(command); return }
+  if (command === 'screenshot') void saveScreenshotNow()
+  else void saveClipNow(command === 'short' ? settings.shortClipSeconds : undefined)
+}
+
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv) => {
+    const command = captureCommand(argv)
+    if (command) { dispatchCaptureCommand(command); return }
+    if (!app.isReady()) return
     if (!mainWindow) createWindow()
     // Windows launching a second copy at login, while Flash is already open, is
     // not a request to come to the front. Clicking the shortcut is.
@@ -1695,7 +1747,7 @@ function registerClipProtocol() {
     try {
       // The URL carries a "local" host purely so Chromium does not treat the
       // drive letter as one. Everything after it is the path.
-      target = decodeURIComponent(new URL(request.url).pathname).replace(/^\//, '')
+      target = clipPathFromUrl(request.url, process.platform)
     } catch {
       return new Response('bad request', { status: 400 })
     }
@@ -1703,7 +1755,7 @@ function registerClipProtocol() {
     // assets. The notification sound lives in the second, and it is served over
     // this scheme for the same reason clips are - a renderer on
     // http://localhost:5173 cannot load file:// media at all.
-    const normalised = target.replace(/\//g, '\\')
+    const normalised = target
     const assetRoot = resource('assets', 'assets')
     const allowed = isInsideClips(normalised) || isInsideRoot(assetRoot, normalised)
     if (!allowed) {
@@ -1758,6 +1810,7 @@ function registerClipProtocol() {
 }
 
 app.on('ready', () => {
+  if (!primaryInstance) return
   registerClipProtocol()
   loadSettings()
   const clipsFolderError = ensureClipsFolder()
@@ -1769,6 +1822,10 @@ app.on('ready', () => {
 
   captureAddon = loadCaptureAddon()
   if (captureAddon) {
+    captureAddon.setPortalRestoreToken?.(settings.portalRestoreToken, token => {
+      settings.portalRestoreToken = token
+      saveSettings()
+    })
     const status = captureAddon.initialize(settings.clipsFolder, settings.displayId)
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
@@ -1801,6 +1858,10 @@ app.on('ready', () => {
   registerHotkeys()
   startGameDetection()
   startCaptureWatchdog()
+  commandsReady = true
+  const initialCommand = captureCommand(process.argv)
+  if (initialCommand) pendingCommands.push(initialCommand)
+  for (const command of pendingCommands.splice(0)) dispatchCaptureCommand(command)
 
   // Resume and display changes are the two events that reliably invalidate DXGI
   // duplication. Nudge the watchdog immediately rather than waiting up to 5s.

@@ -370,11 +370,11 @@ export function SettingsView({ previewClip, settings, onChange, storage, encoder
               <Toggle label="Record audio" on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
             </Row>
             {autostart.supported && (
-              <Row label="Start with Windows"
+              <Row label={window.flash.platform === 'win32' ? 'Start with Windows' : 'Start with your computer'}
                 hint={autostart.managedByWindows
                   ? <span style={{ color: 'var(--alert)' }}>Turned off in Windows. Re-enable Flash under Startup apps in Task Manager.</span>
                   : autostart.error ? <span style={{ color: 'var(--alert)' }}>{autostart.error}</span> : undefined}>
-                <Toggle label="Start with Windows" on={autostart.enabled} onChange={onToggleAutostart} />
+                <Toggle label={window.flash.platform === 'win32' ? 'Start with Windows' : 'Start with your computer'} on={autostart.enabled} onChange={onToggleAutostart} />
               </Row>
             )}
             <Row label="Encoder">
@@ -410,7 +410,7 @@ export function SettingsView({ previewClip, settings, onChange, storage, encoder
                   <Toggle label="Listen for voice commands" on={settings.voiceEnabled}
                     onChange={() => onChange({ voiceEnabled: !settings.voiceEnabled })} />
                 </Row>
-                <Row label="Listening device"><Status tone="plain">Windows default input</Status></Row>
+                <Row label="Listening device"><Status tone="plain">{window.flash.platform === 'win32' ? 'Windows default input' : 'System default input'}</Status></Row>
                 <Row label="Speech language"><Status tone="plain">{voiceStatus.language}</Status></Row>
                 <Row label="Custom full-clip phrase"
                   hint={customPhraseTooShort

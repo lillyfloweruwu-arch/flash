@@ -1,0 +1,60 @@
+name: Build and self-check
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '24.19.0'
+      - uses: pnpm/action-setup@v4.1.0
+        with:
+          version: '11.20.0'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flash/capture run build
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      PKG_CONFIG_PATH: ${{ github.workspace }}/build/linux-media/lib/pkgconfig
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/linux-media/lib
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: '24.19.0'
+      - uses: pnpm/action-setup@v4.1.0
+        with:
+          version: '11.20.0'
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libpipewire-0.3-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libglib2.0-dev libva-dev libopenh264-dev nasm zlib1g-dev patchelf libfuse2
+      - run: bash scripts/build-linux-media.sh
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @flash/capture run build
+      - name: Build and run portable native checks
+        run: |
+          cmake --build packages/flash-capture/build --target flash_tests
+          ctest --test-dir packages/flash-capture/build --output-on-failure
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - name: Package LGPL-only AppImage
+        run: |
+          patchelf --set-rpath '$ORIGIN/linux-media' packages/flash-capture/build/flash_capture.node
+          pnpm --filter @flash/desktop exec electron-builder --linux AppImage --publish never
+      - uses: actions/upload-artifact@v4.6.2
+        with:
+          name: Flash-Linux-L1-untested
+          path: release/*.AppImage
+          if-no-files-found: error

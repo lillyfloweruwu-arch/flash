@@ -107,6 +107,7 @@ export function clampRange(inSec: number, outSec: number, durationSec: number, m
 // encodeURI leaves '#', '?' and '&' alone: a clip named "round#2.mp4" is then
 // requested as "round" with "2.mp4" as a URL fragment, and plays as missing.
 export function clipUrl(filePath: string): string {
-  const path = filePath.replace(/\\/g, '/').split('/').map(encodeURIComponent).join('/')
-  return 'flash-clip://local/' + path
+  const windows = /^[a-z]:[\\/]/i.test(filePath) || filePath.startsWith('\\\\')
+  const path = (windows ? filePath.replace(/\\/g, '/') : filePath).split('/').map(encodeURIComponent).join('/')
+  return 'flash-clip://local' + (windows ? '/' : '') + path
 }

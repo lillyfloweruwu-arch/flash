@@ -1,4 +1,4 @@
-#include "../src/buffer/clip_trimmer.h"
+#include "../src/core/clip_trimmer.h"
 #include <cassert>
 #include <iostream>
 

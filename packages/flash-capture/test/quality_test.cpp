@@ -1,4 +1,4 @@
-#include "../src/quality.h"
+#include "../src/core/quality.h"
 #include <cassert>
 int main() {
     assert(flash::ComputeEvenWidth(1920, 1080, 1080) == 1920);

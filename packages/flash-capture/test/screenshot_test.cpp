@@ -1,4 +1,4 @@
-#include "../src/capture/screen_capture.h"
+#include "../src/platform/windows/screen_capture.h"
 
 #include <Windows.h>
 #include <wincodec.h>

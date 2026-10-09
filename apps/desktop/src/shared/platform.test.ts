@@ -1,0 +1,32 @@
+import { strict as assert } from 'node:assert'
+import { clipUrl } from './editor.ts'
+import { isInsideRoot } from './clipsRoot.ts'
+import { autostartDesktopEntry, captureCommand, clipPathFromUrl, isLinuxInfrastructure, linuxConfigHome, steamAppId, linuxGameExecutable } from './platform.ts'
+
+for (const path of ['/home/me/Videos/Flash/é #?%.mp4', '/home/me/a\\b.mp4']) assert.equal(clipPathFromUrl(clipUrl(path), 'linux'), path)
+assert.equal(clipPathFromUrl(clipUrl('C:\\Clips\\a #.mp4'), 'win32'), 'C:\\Clips\\a #.mp4')
+assert.equal(isInsideRoot('/home/me/Flash', '/home/me/flash/a.mp4', 'linux'), false)
+assert.equal(isInsideRoot('/home/me/Flash', '/home/me/flash/a.mp4', 'darwin'), true)
+assert.equal(isInsideRoot('/home/me/Flash', '/home/me/Flash/../secret', 'linux'), false)
+assert.equal(isInsideRoot('/home/me/Flash', '/home/me/Flash-old/a', 'linux'), false)
+assert.equal(isInsideRoot('/home/me/Flash', 'home/me/Flash/a', 'linux'), false)
+assert.throws(() => clipPathFromUrl('flash-clip://evil/etc/passwd', 'linux'))
+assert.throws(() => clipPathFromUrl('flash-clip://local/%00', 'linux'))
+assert.equal(linuxConfigHome('/home/me', '/tmp/config'), '/tmp/config')
+assert.equal(linuxConfigHome('/home/me', 'relative'), '/home/me/.config')
+assert.match(autostartDesktopEntry('/opt/Flash App/Flash'), /Exec="\/opt\/Flash App\/Flash" --autostart/)
+assert.match(autostartDesktopEntry('/opt/100%/Flash'), /100%%/)
+assert.throws(() => autostartDesktopEntry('/tmp/Flash\nHidden=true'))
+assert.equal(captureCommand(['flash', '--save-short']), 'short')
+assert.equal(captureCommand(['flash', '--save-clip']), 'clip')
+assert.equal(captureCommand(['flash', '--screenshot']), 'screenshot')
+assert.equal(captureCommand(['flash', '--autostart']), null)
+for (const exe of ['wine64', 'wineserver', 'proton', 'steam', 'steamwebhelper.exe']) assert.equal(isLinuxInfrastructure(exe), true)
+assert.equal(isLinuxInfrastructure('game.exe'), false)
+assert.equal(linuxGameExecutable('wine64-preloader', 'wine64\0Z:\\games\\Game.exe\0'), 'Game.exe')
+assert.equal(linuxGameExecutable('wine64', 'wine64\0C:\\steamwebhelper.exe\0'), 'wine64')
+assert.equal(steamAppId('USER=a\0SteamAppId=1234\0', ''), '1234')
+assert.equal(steamAppId('STEAM_COMPAT_APP_ID=5678\0', ''), '5678')
+assert.equal(steamAppId('', '/steam/steamapps/compatdata/42/pfx/game.exe'), '42')
+assert.equal(steamAppId('SteamAppId=0\0', ''), '')
+console.log('platform adapters self-check passed')

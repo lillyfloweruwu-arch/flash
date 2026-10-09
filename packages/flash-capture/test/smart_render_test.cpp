@@ -1,4 +1,4 @@
-#include "../src/buffer/smart_render.h"
+#include "../src/core/smart_render.h"
 #include <cassert>
 
 int main() {

@@ -1,6 +1,6 @@
 // Self-check for the share-copy size budget. Pure arithmetic — no Media
 // Foundation, so it runs anywhere and fails loudly if the sizing logic breaks.
-#include "../src/buffer/export_budget.h"
+#include "../src/core/export_budget.h"
 #include <cassert>
 #include <cstdio>
 

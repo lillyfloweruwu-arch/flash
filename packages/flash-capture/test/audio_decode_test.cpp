@@ -1,4 +1,4 @@
-#include "../src/buffer/audio_decode.h"
+#include "../src/core/audio_decode.h"
 #include <cassert>
 #include <cmath>
 

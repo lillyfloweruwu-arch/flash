@@ -11,9 +11,11 @@ const ipcRenderer = new EventEmitter()
 const source = stripTypeScriptTypes(readFileSync(join(__dirname, '../../apps/desktop/src/preload/preload.ts'), 'utf8'))
   .replace(/^import .* from 'electron'\r?\n/m, '')
 runInNewContext(source, {
+  process: { platform: process.platform },
   ipcRenderer,
   contextBridge: { exposeInMainWorld(_name, value) { api = value } },
 })
+assert.equal(api.platform, process.platform)
 const methods = [
   [api, 'onRecordingState', 'recording-state'], [api, 'onHotkeyClip', 'hotkey-clip'],
   [api, 'onClipSavedRefresh', 'clip-saved-refresh'], [api, 'onIdentifyGame', 'identify-game'],

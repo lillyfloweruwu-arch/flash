@@ -1,4 +1,4 @@
-#include "../src/buffer/audio_tracks.h"
+#include "../src/core/audio_tracks.h"
 #include <iostream>
 
 int main() {

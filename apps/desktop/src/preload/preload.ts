@@ -50,6 +50,7 @@ export interface Settings {
 }
 
 contextBridge.exposeInMainWorld('flash', {
+  platform: process.platform,
   // Window controls
   minimize: () => ipcRenderer.send('window-minimize'),
   maximize: () => ipcRenderer.send('window-maximize'),
@@ -148,6 +149,7 @@ contextBridge.exposeInMainWorld('flash', {
 })
 
 export type FlashAPI = {
+  platform: string
   minimize: () => void
   maximize: () => void
   close: () => void

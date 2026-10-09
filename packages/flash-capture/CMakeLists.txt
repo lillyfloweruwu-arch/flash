@@ -27,24 +27,38 @@ if(WIN32)
 endif()
 
 # Source files
-set(CAPTURE_SOURCES
-  src/binding.cpp
-  src/process_list.cpp
-  src/capture/screen_capture.cpp
-  src/capture/png_writer.cpp
-  src/capture/wgc_source.cpp
-  src/capture/audio_capture.cpp
-  src/capture/voice_trigger.cpp
-  src/encoding/encoder_factory.cpp
-  src/encoding/mf_hardware_encoder.cpp
-  src/encoding/software_encoder.cpp
-  src/buffer/ring_buffer.cpp
-  src/buffer/clip_writer.cpp
-  src/buffer/clip_exporter.cpp
-  src/buffer/clip_trimmer.cpp
-  src/buffer/smart_render.cpp
-  src/buffer/audio_decode.cpp
-)
+if(WIN32)
+  set(CAPTURE_SOURCES
+    src/platform/windows/factory.cpp
+    src/binding.cpp
+    src/platform/windows/process_list.cpp
+    src/platform/windows/screen_capture.cpp
+    src/platform/windows/png_writer.cpp
+    src/platform/windows/wgc_source.cpp
+    src/platform/windows/audio_capture.cpp
+    src/platform/windows/voice_trigger.cpp
+    src/platform/windows/encoder_factory.cpp
+    src/platform/windows/mf_hardware_encoder.cpp
+    src/platform/windows/software_encoder.cpp
+    src/core/ring_buffer.cpp
+    src/platform/windows/clip_writer.cpp
+    src/platform/windows/clip_exporter.cpp
+    src/platform/windows/clip_trimmer.cpp
+    src/platform/windows/smart_render.cpp
+    src/platform/windows/audio_decode.cpp
+  )
+
+elseif(UNIX AND NOT APPLE)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(LINUX_MEDIA REQUIRED IMPORTED_TARGET
+    libpipewire-0.3 libavcodec libavformat libavutil libswscale libswresample gio-2.0 gio-unix-2.0)
+  find_package(Threads REQUIRED)
+  set(PLATFORM_LIBS PkgConfig::LINUX_MEDIA Threads::Threads)
+  file(GLOB LINUX_SOURCES CONFIGURE_DEPENDS src/platform/linux/*.cpp)
+  set(CAPTURE_SOURCES src/binding.cpp src/core/ring_buffer.cpp ${LINUX_SOURCES})
+else()
+  message(FATAL_ERROR "Flash capture supports Windows and Linux only")
+endif()
 
 # Build as Node.js native addon
 add_library(flash_capture SHARED ${CAPTURE_SOURCES} ${CMAKE_JS_SRC})
@@ -108,18 +122,22 @@ target_compile_definitions(flash_capture PRIVATE NAPI_VERSION=8)
 # /UNDEBUG is the point of this helper. CMake's Release config passes /DNDEBUG,
 # which compiles every assert() to nothing, so a Release test exits 0 whether or
 # not its assertions hold. Undefining it keeps the asserts live in every config.
+enable_testing()
 set(FLASH_TEST_TARGETS "" CACHE INTERNAL "self-check targets")
 function(flash_add_test name)
   add_executable(${name} EXCLUDE_FROM_ALL ${ARGN})
   set(FLASH_TEST_TARGETS ${FLASH_TEST_TARGETS} ${name} CACHE INTERNAL "self-check targets")
+  add_test(NAME ${name} COMMAND ${name})
   target_link_libraries(${name} ${PLATFORM_LIBS})
   if(MSVC)
     target_compile_options(${name} PRIVATE /W4 /EHsc /UNDEBUG)
     target_compile_definitions(${name} PRIVATE NOMINMAX)
+  else()
+    target_compile_options(${name} PRIVATE -UNDEBUG)
   endif()
 endfunction()
 
-flash_add_test(flash_ring_buffer_test test/ring_buffer_test.cpp src/buffer/ring_buffer.cpp)
+flash_add_test(flash_ring_buffer_test test/ring_buffer_test.cpp src/core/ring_buffer.cpp)
 flash_add_test(flash_quality_test test/quality_test.cpp)
 flash_add_test(flash_audio_track_test test/audio_track_test.cpp)
 flash_add_test(flash_clip_trimmer_test test/clip_trimmer_test.cpp)
@@ -127,15 +145,15 @@ flash_add_test(flash_export_budget_test test/export_budget_test.cpp)
 flash_add_test(flash_color_space_test test/color_space_test.cpp)
 flash_add_test(flash_audio_decode_test test/audio_decode_test.cpp)
 flash_add_test(flash_smart_render_test test/smart_render_test.cpp)
-flash_add_test(flash_screenshot_test
-  test/screenshot_test.cpp
-  src/capture/screen_capture.cpp
-  src/capture/png_writer.cpp
-  src/capture/wgc_source.cpp
-)
 flash_add_test(flash_voice_trigger_test test/voice_trigger_test.cpp)
-flash_add_test(flash_process_list_test test/process_list_test.cpp src/process_list.cpp)
 if(WIN32)
+  flash_add_test(flash_screenshot_test
+    test/screenshot_test.cpp
+    src/platform/windows/screen_capture.cpp
+    src/platform/windows/png_writer.cpp
+    src/platform/windows/wgc_source.cpp
+  )
+  flash_add_test(flash_process_list_test test/process_list_test.cpp src/platform/windows/process_list.cpp)
   target_link_libraries(flash_screenshot_test windowsapp)
   if(FLASH_CPPWINRT)
     target_include_directories(flash_screenshot_test PRIVATE "${FLASH_CPPWINRT}")

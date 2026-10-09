@@ -1,4 +1,4 @@
-#include "../src/color_space.h"
+#include "../src/core/color_space.h"
 #include <cassert>
 
 int main() {

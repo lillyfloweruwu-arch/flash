@@ -1,7 +1,9 @@
 // Self-check for clips-folder containment. Run with:
 //   node --experimental-strip-types src/shared/clipsRoot.test.ts
 import { strict as assert } from 'node:assert'
-import { isInsideRoot } from './clipsRoot.ts'
+import { isInsideRoot as contains } from './clipsRoot.ts'
+
+const isInsideRoot = (root: string, candidate: string) => contains(root, candidate, 'win32')
 
 // Ordinary containment, including the root itself.
 assert.equal(isInsideRoot('C:\\Clips', 'C:\\Clips\\game\\a.mp4'), true)

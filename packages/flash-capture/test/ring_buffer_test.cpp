@@ -1,6 +1,6 @@
 // Self-check for the replay buffer. Build and run with:
 //   cmake --build build --target flash_ring_buffer_test && build/Release/flash_ring_buffer_test
-#include "../src/buffer/ring_buffer.h"
+#include "../src/core/ring_buffer.h"
 #include <cassert>
 #include <cstdio>
 
@@ -17,8 +17,9 @@ void PushFrames(RingBuffer& buffer, uint32_t count, int64_t startUs = 0) {
     for (uint32_t i = 0; i < count; i++) {
         EncodedPacket packet;
         packet.data.assign(16, static_cast<uint8_t>(i));
-        packet.timestamp_us = startUs + static_cast<int64_t>(i) * (1000000 / kFps);
+        packet.pts_us = startUs + static_cast<int64_t>(i) * (1000000 / kFps);
         packet.isKeyframe = (i % kGop) == 0;
+        packet.dts_us = packet.pts_us; packet.duration_us = 1000000 / kFps;
         buffer.Push(packet);
     }
 }
@@ -32,6 +33,8 @@ int main() {
         PushFrames(buffer, kSeconds * kFps);
         const auto first = buffer.Flush();
         assert(!first.empty());
+        assert(first.front().dts_us == first.front().pts_us);
+        assert(first.front().duration_us == 1000000 / kFps);
         assert(first.front().isKeyframe);
         const auto second = buffer.Flush();
         assert(second.size() == first.size());
@@ -45,7 +48,7 @@ int main() {
         const auto clip = buffer.Flush();
         assert(clip.front().isKeyframe);
         for (size_t i = 1; i < clip.size(); i++)
-            assert(clip[i].timestamp_us > clip[i - 1].timestamp_us);
+            assert(clip[i].pts_us > clip[i - 1].pts_us);
     }
 
     // A static screen produces few frames spread over a long time. Trimming is by
@@ -55,12 +58,12 @@ int main() {
         for (uint32_t i = 0; i < 40; i++) {
             EncodedPacket packet;
             packet.data.assign(16, 0);
-            packet.timestamp_us = static_cast<int64_t>(i) * 1000000; // 1 fps
+            packet.pts_us = static_cast<int64_t>(i) * 1000000; // 1 fps
             packet.isKeyframe = true;
             buffer.Push(packet);
         }
         const auto clip = buffer.Flush();
-        const int64_t span = clip.back().timestamp_us - clip.front().timestamp_us;
+        const int64_t span = clip.back().pts_us - clip.front().pts_us;
         assert(span <= static_cast<int64_t>(kSeconds) * 1000000);
         assert(clip.size() > 1);
     }
@@ -79,7 +82,7 @@ int main() {
         RingBuffer buffer(10, kFps);
         PushFrames(buffer, 10 * kFps);
         const auto clip = buffer.Flush(4.0);
-        const int64_t span = clip.back().timestamp_us - clip.front().timestamp_us;
+        const int64_t span = clip.back().pts_us - clip.front().pts_us;
         assert(clip.front().isKeyframe);
         assert(span > 5900000 && span < 6100000);
     }
@@ -88,7 +91,7 @@ int main() {
     {
         RingBuffer buffer(10, 60);
         for (int i = 0; i < 6; ++i) {
-            EncodedPacket packet; packet.timestamp_us = i * 200000; packet.isKeyframe = true; buffer.Push(packet);
+            EncodedPacket packet; packet.pts_us = i * 200000; packet.isKeyframe = true; buffer.Push(packet);
         }
         assert(buffer.GetDurationSeconds() > 0.99f && buffer.GetDurationSeconds() < 1.01f);
     }
@@ -106,15 +109,15 @@ int main() {
         assert(buffer.GetPacketCount() == kSeconds * kFps);
         const auto grown = buffer.Flush();
         assert(grown.size() == before.size());
-        assert(grown.back().timestamp_us == before.back().timestamp_us);
+        assert(grown.back().pts_us == before.back().pts_us);
 
         buffer.SetMaxDuration(2, kFps);
         assert(buffer.GetPacketCount() == 2 * kFps);
-        PushFrames(buffer, 10, before.back().timestamp_us + 1000000 / kFps);
+        PushFrames(buffer, 10, before.back().pts_us + 1000000 / kFps);
         assert(buffer.GetPacketCount() == 2 * kFps);
         const auto shrunk = buffer.Flush();
         for (size_t i = 1; i < shrunk.size(); i++)
-            assert(shrunk[i].timestamp_us > shrunk[i - 1].timestamp_us);
+            assert(shrunk[i].pts_us > shrunk[i - 1].pts_us);
     }
 
     std::puts("ring_buffer: ok");

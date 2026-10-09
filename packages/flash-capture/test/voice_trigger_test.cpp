@@ -1,4 +1,4 @@
-#include "../src/capture/voice_trigger.h"
+#include "../src/core/voice_trigger.h"
 
 #include <cassert>
 #include <chrono>

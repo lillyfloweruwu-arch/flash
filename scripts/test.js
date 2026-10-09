@@ -1,5 +1,5 @@
 // Runs every self-check in the repo: the TypeScript ones under apps/desktop/src/shared,
-// and the native ones already built under packages/flash-capture/build/Release.
+// and the native ones under packages/flash-capture/build (Release on Windows).
 // Native checks are skipped (not failed) when the addon has not been built — a clone
 // without Visual Studio should still be able to run the TypeScript half.
 import { execFileSync } from 'node:child_process'
@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const shared = join(root, 'apps/desktop/src/shared')
-const nativeDir = join(root, 'packages/flash-capture/build/Release')
+const nativeDir = join(root, `packages/flash-capture/build${process.platform === 'win32' ? '/Release' : ''}`)
 
 const run = (label, file, args, cwd) => {
   try {
@@ -17,7 +17,7 @@ const run = (label, file, args, cwd) => {
     console.log(`  pass  ${label}`)
     return true
   } catch (error) {
-    const output = `${error.stdout ?? ''}${error.stderr ?? ''}`.trim()
+    const output = `${error.stdout ?? ''}${error.stderr ?? ''}`.trim() || error.message
     console.log(`  FAIL  ${label}`)
     if (output) console.log(output.split('\n').map(line => `        ${line}`).join('\n'))
     return false
@@ -54,8 +54,8 @@ if (!existsSync(nativeDir)) {
   }
 
   const tests = readdirSync(nativeDir)
-    .filter(name => name.startsWith('flash_') && name.endsWith('_test.exe'))
-  if (!tests.length) console.log('  skip  no test binaries built')
+    .filter(name => name.startsWith('flash_') && name.endsWith(process.platform === 'win32' ? '_test.exe' : '_test'))
+  if (!tests.length) { console.log('  FAIL  no test binaries built'); failed++ }
   for (const exe of tests) {
     if (!run(exe, join(nativeDir, exe), [], nativeDir)) failed++
   }
