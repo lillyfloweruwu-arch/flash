@@ -98,7 +98,7 @@ function functions(names, context) {
       loadURL(url) { this.url = url }
     }
     Object.assign(context, { BrowserWindow: FakeWindow, notificationWindow: null, overlayWindow: null, overlaySaving: false,
-      __FLASH_ANTONIO_DATA__: 'data:font/woff2;base64,fixture', toastHtml, overlayHtml, cornerBounds,
+      antonioFont: () => 'data:font/woff2;base64,fixture', toastHtml, overlayHtml, cornerBounds,
       captureDisplay: () => ({ workArea: { x: -1920, y: 0, width: 1920, height: 1080 } }),
       setTimeout: callback => { timers.push(callback); return timers.length }, clearTimeout() {},
     })
