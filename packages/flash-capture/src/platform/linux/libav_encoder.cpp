@@ -74,8 +74,12 @@ public:
             }
             av_opt_set(context_->priv_data, "forced-idr", "1", 0);
             if (config.exportQuality && name_.find("_nvenc") != std::string::npos) {
-                // Options an encoder does not have are ignored by av_opt_set.
+                // av_opt_set returns an error for an option an encoder does not
+                // have; those errors are deliberately ignored.
                 av_opt_set(context_->priv_data, "preset", "p7", 0);
+                // NVENC takes its profile from this private option, not from
+                // context_->profile. AV1 keeps the encoder's default profile.
+                if (config.codec == "h264") av_opt_set(context_->priv_data, "profile", "high", 0);
                 av_opt_set(context_->priv_data, "tune", "hq", 0);
                 av_opt_set(context_->priv_data, "rc", "vbr", 0);
                 av_opt_set(context_->priv_data, "rc-lookahead", "32", 0);
