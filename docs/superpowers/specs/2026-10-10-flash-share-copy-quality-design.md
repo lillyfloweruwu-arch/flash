@@ -1,7 +1,7 @@
 # Share copy quality (piece 1 of 3)
 
 Date: 2026-10-10
-Status: awaiting review
+Status: implemented on branch `share-copy-quality` (2026-10-11); see "As built" at the end
 
 This is the first of three pieces agreed on 2026-10-10. The other two, audio lanes
 (separate Discord and Music tracks, and the silent `game` track) and capture audio
@@ -270,3 +270,58 @@ By hand (Windows):
   `Flash-compare/D - AV1 1080p60.mp4`, then drops it into Discord and confirms it plays
   inline.
 - Opening an AV1 copy in the editor shows a message and does not crash.
+
+## As built (2026-10-11)
+
+Where the implementation knowingly differs from the text above, and what is still unproven.
+
+Differences:
+
+- **Frame grid.** The text says output frame *k* is "the first source frame at or after
+  *k / fps*". The code gives each source frame to the slot nearest its timestamp, and the
+  first frame to reach a slot takes it. Timestamps are truncated to whole microseconds, so
+  with "at or after" a 60 fps source's second frame (16666 us) would miss slot 1.
+- **`FLASH_EXPORT_CODEC`.** The text calls the ladder override "debug-only". It is read in
+  release builds too. It can only move a share copy to a lower step of the ladder, and
+  `docs/linux.md` documents it as a way to test the fallback.
+- **Stepping down.** The text steps down the ladder only when a codec cannot be set up.
+  The code also steps down when a newer codec fails after writing has begun and no copy
+  has been kept yet, because Flash will run on GPUs nobody tested. Bad arguments and an
+  over-budget result are reported straight away. The cost is that an error no codec can
+  fix (a full disk, a clip that is too long) is tried once per ladder step before the
+  last step reports it.
+- **Linux AV1 in MP4.** FFmpeg 7.1's MP4 muxer does not build the AV1 configuration box
+  from the first packet, as the plan assumed. The Linux muxer extracts the sequence
+  header from the first keyframe and supplies it itself, and steps down to H.264 if the
+  encoder did not emit one.
+- **Linux encoder settings.** B-frames are off (see the Linux section). VA-API encoders
+  get the profile, GOP and bitrate peak but no preset or lookahead; only NVENC has those
+  options set.
+- **Default menu entry.** `10MB` (Auto) on every platform. An earlier draft defaulted
+  Linux to the compatible entry; that belonged to the HEVC version of this design.
+- **Dropdown.** The shared dropdown's popup now grows to fit its labels. The new
+  "10MB compatible" entry did not fit the Watch view's 150px control.
+
+Measured on the development machine (RTX 4060, Windows 11), reference clip, 10 MiB limit:
+
+| Codec | Result | Size |
+|---|---|---|
+| AV1 (Auto) | Main, 1920x1080, 60 fps | 9.61 MiB (96%) |
+| HEVC (forced) | Main, 1920x1080, 60 fps | 9.23 MiB (92%) |
+| H.264 (compatible) | High, 1280x720, 60 fps | 9.02 MiB (90%) |
+
+Unproven:
+
+- Nothing under `platform/linux` has been compiled or run. The repository has no git
+  remote, so the Ubuntu CI job has not built this branch.
+- No run exercised a retry round or a ladder step-down caused by a failure: every
+  measured export landed inside the window on its first attempt, and there is no way to
+  make a working encoder fail on demand.
+- Only one GPU has been used. HEVC and H.264 were reached by forcing the ladder, not by
+  running on a card without AV1.
+- The note "no AV1 encoder on this GPU" is also shown when AV1 exists but failed and the
+  export stepped down; the wording is inaccurate in that case.
+- Opening an AV1 copy in the editor UI was checked through the trim call only
+  (`input video is not H.264`), not by clicking through the editor.
+- Whether the copy looks good enough, and whether it plays inline in Discord, are the
+  user's checks and have not been done.
