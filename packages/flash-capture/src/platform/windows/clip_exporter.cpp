@@ -345,7 +345,9 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         };
         DWORD videoOut = 0;
         setup(writer->AddStream(videoTarget.Get(), &videoOut), "AddStream(video)");
-        if (FAILED(writer->SetInputMediaType(videoOut, actualVideo.Get(), EncoderSettings(plan).Get())))
+        // Only size-limited exports get tuned encoder settings; the editor's
+        // full-quality save keeps the encoder defaults.
+        if (!limited || FAILED(writer->SetInputMediaType(videoOut, actualVideo.Get(), EncoderSettings(plan).Get())))
             setup(writer->SetInputMediaType(videoOut, actualVideo.Get(), nullptr), "SetInputMediaType(video)");
 
         DWORD audioOut = 0;
@@ -505,7 +507,14 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
             ExportResult best;
             bool kept = false;
             for (int round = 0; round < 3; ++round) {
-                auto result = EncodeClip(inputPath, attemptPath, options, plan, round != 0, codec);
+                ExportResult result;
+                try {
+                    result = EncodeClip(inputPath, attemptPath, options, plan, round != 0, codec);
+                } catch (const std::exception&) {
+                    // A copy that already fits outranks a failed retry.
+                    if (kept) break;
+                    throw;
+                }
                 if (result.bytes <= options.maxBytes && (!kept || result.bytes > best.bytes)) {
                     std::filesystem::rename(attempt, output.Partial());
                     best = result;
