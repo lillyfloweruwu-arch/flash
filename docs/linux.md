@@ -9,7 +9,7 @@ L1 adds the portable boundary and a Linux backend for CI compilation. **All Linu
 | Native boundary | `src/core` interfaces, frames, packet PTS/DTS/duration, replay buffer, clocks, audio math and export planning; compile-time platform factories | Linux compiler and linker |
 | Windows | Existing WGC/DXGI, MF, WASAPI and speech implementations under `src/platform/windows` | Existing native checks and hardware probes run on Windows |
 | Wayland video | GDBus ScreenCast session, permission request, restore-token rotation, portal fd, mapped BGRx/RGBx PipeWire frames | GNOME, KDE, wlroots and Hyprland; cancel, revoke, suspend, unplug and source resize |
-| H.264 | Probe `h264_vaapi`, then `h264_nvenc`, then `libopenh264`; closed GOP, no B-frames, two-second GOP | Driver compatibility, inline SPS/PPS at every IDR, latency, colour, long recordings |
+| Video encoding | Capture: probe `h264_vaapi`, then `h264_nvenc`, then `libopenh264`; closed GOP, no B-frames, two-second GOP. Share copies: `av1_vaapi`, then `av1_nvenc`, then the H.264 order, with High profile, a four-second GOP and a bitrate peak on the hardware encoders | Driver compatibility, inline SPS/PPS at every IDR, latency, colour, long recordings; AV1 in MP4 playback; size window accuracy per encoder |
 | Audio | Default sink monitor and default microphone, 48 kHz stereo float; desktop audio uses the `other` lane | Timing, default-device changes, PipeWire routing and permissions |
 | Saved media | MP4 H.264 plus native AAC tracks, audio preview decode, keyframe stream-copy trim, video re-encode export, PNG screenshot | Decode/playback, seeking, audio alignment, export budgets and encoder drain |
 | Desktop adapters | POSIX clip URLs, platform-aware containment, XDG autostart, `/proc` fallback, Steam/Proton IDs, CLI commands | Real packaged Electron sessions |
@@ -34,6 +34,21 @@ Build package names by distro family (versions and repository availability vary)
 | Arch | `base-devel cmake pkgconf git nasm patchelf zlib pipewire glib2 libva openh264` | `ffmpeg` includes development files; do not bundle its libav libraries |
 
 OpenH264 may require the distro's Cisco OpenH264 repository. If no packaged development files are available, build upstream OpenH264 separately and put its `.pc` file on `PKG_CONFIG_PATH`; do not replace it with x264. Fedora's libav subpackages are listed in the [Fedora package catalog](https://packages.fedoraproject.org/pkgs/ffmpeg/). The PipeWire package and its splits are listed in the [Arch package catalog](https://archlinux.org/packages/extra/x86_64/pipewire/).
+
+### Share copies and GPU encoders
+
+A share copy uses AV1 when the GPU can encode it (NVIDIA RTX 40 series, AMD RX 7000 series and Ryzen 7040-series graphics, Intel Arc and Core Ultra, or newer), and H.264 otherwise. HEVC is not used on Linux: Chromium decodes it only through VA-API, so it often does not play in Flash or in Discord.
+
+Without a GPU encoder Flash falls back to OpenH264, which is Constrained Baseline and looks visibly worse at the same size. Whether the GPU encoders are present depends on the distro's drivers. This table has not been confirmed on hardware and is part of L2.
+
+| Distro family | GPU | AV1 encode (recent GPU) | H.264 encode |
+| --- | --- | --- | --- |
+| Any | NVIDIA proprietary driver | NVENC | NVENC |
+| Debian, Ubuntu, Arch, SteamOS and derivatives | AMD or Intel | VA-API | VA-API |
+| Fedora, openSUSE and derivatives | AMD (Mesa) | VA-API | Off by default; install `mesa-va-drivers-freeworld` from RPM Fusion (Fedora) or the Packman Mesa packages (openSUSE) |
+| Fedora | Intel | Needs `intel-media-driver` from RPM Fusion | Same |
+
+`vainfo` lists what the driver offers; an entry ending `EncSlice` for `VAProfileAV1Profile0` or `VAProfileH264High` means that encoder is available. Setting `FLASH_EXPORT_CODEC=h264` in the environment makes share copies skip AV1, for testing the fallback.
 
 Runtime also needs a working user session bus, PipeWire with an audio session manager such as WirePlumber, GLib/GIO, libva/libva-drm, the GPU's appropriate driver, and the desktop portal plus a backend. AppImage may need FUSE 2 (`libfuse2` on Ubuntu 24.04); extracting the AppImage is an alternative where FUSE is unavailable.
 
@@ -128,5 +143,5 @@ The sandbox also denied `git mv` because `.git` is read-only. Files were moved i
 ## Next phases
 
 - **L1 (this change):** platform boundaries, Linux skeleton, Windows regression verification, portable tests, packaging configuration and CI.
-- **L2:** compile and run on real AMD/Intel/NVIDIA hardware across GNOME/KDE/wlroots/Hyprland; verify saved clips and all lifecycle failures; measure sync, dropped frames, CPU and memory; implement DMA-BUF import with modifiers/fences, X11/XShm fallback, per-app audio, and Flatpak permissions/manual game selection. Confirm Steam Deck scope and the oldest supported distro/glibc baseline.
+- **L2:** compile and run on real AMD/Intel/NVIDIA hardware across GNOME/KDE/wlroots/Hyprland; verify saved clips and all lifecycle failures; measure sync, dropped frames, CPU and memory; implement DMA-BUF import with modifiers/fences, X11/XShm fallback, per-app audio, and Flatpak permissions/manual game selection. Run a share-copy export per distro family and GPU vendor: confirm the codec chosen, that the file plays in Flash and in Discord, and that it lands between 88% and 100% of the limit; then decide whether B-frames can be enabled for exports. Confirm Steam Deck scope and the oldest supported distro/glibc baseline.
 - **After hardware validation:** broaden the distro matrix, dependency/security updates and licence/notice distribution review, installer polish, then a release candidate. No Linux support claim or release is made by this L1 change.

@@ -22,7 +22,7 @@ cd "$work/ffmpeg"
   --disable-avdevice --disable-avfilter --disable-postproc --disable-network \
   --enable-avcodec --enable-avformat --enable-avutil --enable-swscale --enable-swresample \
   --enable-libopenh264 --enable-vaapi --enable-ffnvcodec --enable-nvenc \
-  --enable-encoder=h264_vaapi,h264_nvenc,libopenh264,aac,png \
+  --enable-encoder=h264_vaapi,h264_nvenc,av1_vaapi,av1_nvenc,libopenh264,aac,png \
   --enable-decoder=h264,aac --enable-parser=h264,aac \
   --enable-muxer=mp4 --enable-demuxer=mov --enable-protocol=file \
   --enable-bsf=extract_extradata,h264_mp4toannexb,aac_adtstoasc \

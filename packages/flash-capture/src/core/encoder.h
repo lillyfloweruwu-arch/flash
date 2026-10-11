@@ -22,6 +22,9 @@ struct EncoderConfig {
     uint32_t fps = 60;
     uint32_t bitrate = 20000000; // 20 Mbps
     std::string preset = "fast";  // fast/medium/slow
+    // Linux file exports only. The capture path leaves both at their defaults.
+    std::string codec = "h264";   // "h264" or "av1"
+    bool exportQuality = false;   // quality over latency: lookahead, VBR with a peak, longer GOP
     void* device = nullptr;
 };
 

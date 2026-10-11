@@ -10,6 +10,8 @@ extern "C" {
 }
 #include <cstring>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace flash {
 void CheckLibavLicense() {
@@ -35,18 +37,33 @@ public:
     bool Initialize(const EncoderConfig& config) override {
         CheckLibavLicense();
         // L1: device probing and hardware uploads require real GPUs in L2.
-        for (const char* name : {"h264_vaapi", "h264_nvenc", "libopenh264"}) {
+        // AV1 is hardware only: there is no software AV1 encoder in the build,
+        // so a machine without one returns false and the exporter steps down.
+        const std::vector<const char*> names = config.codec == "av1"
+            ? std::vector<const char*>{"av1_vaapi", "av1_nvenc"}
+            : std::vector<const char*>{"h264_vaapi", "h264_nvenc", "libopenh264"};
+        for (const char* name : names) {
             Clear(); const auto* codec = avcodec_find_encoder_by_name(name);
             if (!codec) continue;
             context_ = avcodec_alloc_context3(codec); if (!context_) continue;
             name_ = name;
             context_->width = config.width; context_->height = config.height;
             context_->time_base = AVRational{1, 1000000}; context_->framerate = AVRational{static_cast<int>(config.fps), 1};
-            context_->bit_rate = config.bitrate; context_->gop_size = config.fps * 2; context_->max_b_frames = 0;
+            // B-frames stay off for exports too: the muxer takes a clip's end
+            // from the last packet in decode order, untested with reordering.
+            context_->bit_rate = config.bitrate; context_->max_b_frames = 0;
+            context_->gop_size = config.fps * (config.exportQuality ? 4 : 2);
+            const bool hardware = name_ != "libopenh264";
+            if (config.exportQuality && hardware) {
+                context_->rc_max_rate = static_cast<int64_t>(config.bitrate) * 3 / 2;
+                context_->rc_buffer_size = static_cast<int>(config.bitrate) * 2;
+                if (config.codec == "h264") context_->profile = AV_PROFILE_H264_HIGH;
+            }
             context_->flags |= AV_CODEC_FLAG_CLOSED_GOP;
             context_->color_range = AVCOL_RANGE_MPEG; context_->colorspace = AVCOL_SPC_BT709;
             context_->color_primaries = AVCOL_PRI_BT709; context_->color_trc = AVCOL_TRC_BT709;
-            context_->pix_fmt = name_ == "h264_vaapi" ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
+            const bool vaapi = name_.find("_vaapi") != std::string::npos;
+            context_->pix_fmt = vaapi ? AV_PIX_FMT_VAAPI : AV_PIX_FMT_YUV420P;
             if (context_->pix_fmt == AV_PIX_FMT_VAAPI) {
                 if (av_hwdevice_ctx_create(&device_, AV_HWDEVICE_TYPE_VAAPI, nullptr, nullptr, 0) < 0) continue;
                 context_->hw_frames_ctx = av_hwframe_ctx_alloc(device_); if (!context_->hw_frames_ctx) continue;
@@ -56,7 +73,15 @@ public:
                 if (av_hwframe_ctx_init(context_->hw_frames_ctx) < 0) continue;
             }
             av_opt_set(context_->priv_data, "forced-idr", "1", 0);
-            av_opt_set(context_->priv_data, "rc-lookahead", "0", 0);
+            if (config.exportQuality && name_.find("_nvenc") != std::string::npos) {
+                // Options an encoder does not have are ignored by av_opt_set.
+                av_opt_set(context_->priv_data, "preset", "p7", 0);
+                av_opt_set(context_->priv_data, "tune", "hq", 0);
+                av_opt_set(context_->priv_data, "rc", "vbr", 0);
+                av_opt_set(context_->priv_data, "rc-lookahead", "32", 0);
+            } else if (!config.exportQuality) {
+                av_opt_set(context_->priv_data, "rc-lookahead", "0", 0);
+            }
             if (avcodec_open2(context_, codec, nullptr) < 0) continue;
             frame_ = av_frame_alloc(); if (!frame_) continue;
             frame_->format = context_->pix_fmt == AV_PIX_FMT_VAAPI ? AV_PIX_FMT_NV12 : context_->pix_fmt;

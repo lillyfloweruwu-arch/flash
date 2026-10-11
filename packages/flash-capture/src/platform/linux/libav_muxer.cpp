@@ -4,11 +4,14 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/mem.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
 #include <algorithm>
+#include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <ctime>
@@ -82,6 +85,31 @@ std::string ClipPath(const std::string& directory, const std::string& game) {
 }
 struct AudioPcm { std::string id; std::vector<float> samples; };
 
+// The sequence header OBU of an AV1 temporal unit, with its own header and
+// size field, or empty when the unit has none or is not in the size-prefixed
+// form MP4 stores.
+std::vector<uint8_t> Av1SequenceHeader(const std::vector<uint8_t>& unit) {
+    size_t at = 0;
+    while (at < unit.size()) {
+        const uint8_t header = unit[at];
+        if (!(header & 0x02)) return {};                          // obu_has_size_field
+        size_t payload = at + 1 + ((header & 0x04) ? 1 : 0);      // optional extension byte
+        uint64_t size = 0;
+        for (int shift = 0;; shift += 7) {                        // leb128
+            if (payload >= unit.size() || shift > 28) return {};
+            const uint8_t byte = unit[payload++];
+            size |= static_cast<uint64_t>(byte & 0x7f) << shift;
+            if (!(byte & 0x80)) break;
+        }
+        if (size > unit.size() - payload) return {};
+        const size_t next = payload + static_cast<size_t>(size);
+        if (((header >> 3) & 0x0f) == 1)                          // OBU_SEQUENCE_HEADER
+            return std::vector<uint8_t>(unit.begin() + static_cast<std::ptrdiff_t>(at), unit.begin() + static_cast<std::ptrdiff_t>(next));
+        at = next;
+    }
+    return {};
+}
+
 std::vector<AudioPcm> DecodePcm(const std::string& path, uint32_t rate, uint32_t channels) {
     Media scan; scan.Open(path); std::vector<AudioPcm> tracks;
     for (unsigned index = 0; index < scan.input->nb_streams; ++index) {
@@ -131,6 +159,12 @@ public:
     std::string GenerateClipPath(const std::string& dir, const std::string& game) override { return ClipPath(dir, game); }
     ClipMetadata Write(const std::string& path, const std::vector<EncodedPacket>& video,
         const std::vector<AudioData>& audio, uint32_t width, uint32_t height, uint32_t fps, const std::string& game) override {
+        return WriteCodec(path, video, audio, width, height, fps, game, AV_CODEC_ID_H264);
+    }
+    // Saved clips are always H.264; a share copy may be AV1.
+    ClipMetadata WriteCodec(const std::string& path, const std::vector<EncodedPacket>& video,
+        const std::vector<AudioData>& audio, uint32_t width, uint32_t height, uint32_t fps, const std::string& game,
+        AVCodecID videoCodec) {
         if (video.empty() || !video.front().isKeyframe) throw std::runtime_error("Clip must begin on a video keyframe");
         const int64_t base = video.front().pts_us;
         const int64_t end = video.back().pts_us + std::max<int64_t>(video.back().duration_us, 1000000 / fps);
@@ -138,11 +172,21 @@ public:
         Check(avformat_alloc_output_context2(&media.output, nullptr, "mp4", output.Path().c_str()), "Create MP4");
         auto* stream = avformat_new_stream(media.output, nullptr); if (!stream) throw std::bad_alloc();
         stream->time_base = micros; stream->avg_frame_rate = AVRational{static_cast<int>(fps), 1};
-        auto* parameters = stream->codecpar; parameters->codec_type = AVMEDIA_TYPE_VIDEO; parameters->codec_id = AV_CODEC_ID_H264;
+        auto* parameters = stream->codecpar; parameters->codec_type = AVMEDIA_TYPE_VIDEO; parameters->codec_id = videoCodec;
         parameters->width = width; parameters->height = height; parameters->format = AV_PIX_FMT_YUV420P;
         parameters->color_space = AVCOL_SPC_BT709; parameters->color_range = AVCOL_RANGE_MPEG;
         // The encoder uses Annex B with inline SPS/PPS. MOV extracts these from
         // the first keyframe and converts packet start codes into length prefixes.
+        // It does not do the same for AV1: without extradata the av1C box comes
+        // out empty, so hand it the first keyframe's sequence header.
+        if (videoCodec == AV_CODEC_ID_AV1) {
+            const auto header = Av1SequenceHeader(video.front().data);
+            if (header.empty()) throw NoEncoder{};
+            parameters->extradata = static_cast<uint8_t*>(av_mallocz(header.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+            if (!parameters->extradata) throw std::bad_alloc();
+            std::copy(header.begin(), header.end(), parameters->extradata);
+            parameters->extradata_size = static_cast<int>(header.size());
+        }
         std::vector<std::unique_ptr<Media>> encoders;
         std::vector<AudioPcm> pcm;
         for (const std::string id : {"game", "mic", "other"}) {
@@ -264,24 +308,46 @@ public:
         for (auto& pcm : DecodePcm(path, rate, 1)) result.push_back({pcm.id, std::move(pcm.samples)});
         return result;
     }
-    ExportResult Export(const std::string& input, const std::string& output, const ExportOptions& options) override {
+    // Thrown when the plan's codec cannot be produced here (no encoder, or
+    // output the MP4 muxer cannot describe), so Export can step down.
+    struct NoEncoder {};
+
+    static std::vector<ExportCodec> ExportLadder(ExportCodecChoice choice) {
+        if (choice == ExportCodecChoice::H264) return {ExportCodec::H264};
+        // Linux skips HEVC: Chromium here decodes it only through VA-API, so an
+        // HEVC copy is often a black frame in Flash's player and in Discord.
+        ExportCodec forced = ExportCodec::Av1;
+        if (ParseExportCodec(std::getenv("FLASH_EXPORT_CODEC"), forced) && forced != ExportCodec::Av1)
+            return {ExportCodec::H264};
+        return {ExportCodec::Av1, ExportCodec::H264};
+    }
+
+    // One encode at a fixed plan, written to encodedPath (which must not exist).
+    ExportResult ExportOnce(const std::string& input, const std::string& encodedPath, const ExportOptions& options,
+                            const ExportPlan& plan, int64_t end) {
         Media media; media.Open(input); const int index = av_find_best_stream(media.input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
         Check(index, "Find export video"); auto* stream = media.input->streams[index]; media.Decoder(index);
-        const int64_t end = options.endUs ? options.endUs : ScanVideo(input).lastTimeUs;
-        auto plan = PlanExport(media.codec->width, media.codec->height, std::max(1, static_cast<int>(av_q2d(stream->avg_frame_rate))),
-            (end - options.startUs) / 1000000.0, options.maxBytes, options.maxHeight);
-        if (!plan.videoKbps) throw std::runtime_error("Export budget is too small");
+        const uint32_t sourceFps = static_cast<uint32_t>(std::max(1, static_cast<int>(av_q2d(stream->avg_frame_rate) + 0.5)));
         EncoderConfig config; config.width = plan.width; config.height = plan.height; config.fps = plan.fps; config.bitrate = plan.videoKbps * 1000;
-        auto encoder = CreateEncoder(config); if (!encoder) throw std::runtime_error("No LGPL H.264 encoder available");
+        config.codec = ExportCodecName(plan.codec); config.exportQuality = true;
+        auto encoder = CreateEncoder(config); if (!encoder) throw NoEncoder{};
         std::vector<EncodedPacket> encoded; std::vector<uint8_t> pixels(static_cast<size_t>(plan.width) * plan.height * 4);
-        int64_t next = options.startUs;
+        // Below the source rate, frames are re-timed onto an even grid. At the
+        // source rate they keep their own timestamps.
+        const bool regrid = plan.fps < sourceFps; FrameGrid grid{plan.fps};
         auto receive = [&] {
             int result;
             while ((result = avcodec_receive_frame(media.codec, media.frame)) == 0) {
-                const auto time = av_rescale_q(media.frame->best_effort_timestamp, stream->time_base, micros);
-                if (time >= next && time < end) {
+                auto time = av_rescale_q(media.frame->best_effort_timestamp, stream->time_base, micros);
+                bool keep = time >= options.startUs && time < end;
+                if (keep && regrid) {
+                    const int64_t slot = grid.Take(time - options.startUs);
+                    keep = slot >= 0;
+                    if (keep) time = options.startUs + slot * 1000000 / plan.fps;
+                }
+                if (keep) {
                     media.scaler = sws_getCachedContext(media.scaler, media.frame->width, media.frame->height,
-                        static_cast<AVPixelFormat>(media.frame->format), plan.width, plan.height, AV_PIX_FMT_BGR0, SWS_BILINEAR, nullptr, nullptr, nullptr);
+                        static_cast<AVPixelFormat>(media.frame->format), plan.width, plan.height, AV_PIX_FMT_BGR0, SWS_BICUBIC, nullptr, nullptr, nullptr);
                     if (!media.scaler) throw std::runtime_error("Export conversion unavailable");
                     uint8_t* dest[] = {pixels.data()}; int strides[] = {static_cast<int>(plan.width * 4)};
                     sws_scale(media.scaler, media.frame->data, media.frame->linesize, 0, media.frame->height, dest, strides);
@@ -293,7 +359,6 @@ public:
                     FrameData frame{}; frame.data = pixels.data(); frame.width = plan.width; frame.height = plan.height;
                     frame.stride = plan.width * 4; frame.timestamp_us = time;
                     if (!encoder->EncodeFrame(frame, encoded)) throw std::runtime_error("Export encoding failed");
-                    next = time + 1000000 / plan.fps;
                 }
                 av_frame_unref(media.frame);
             }
@@ -315,15 +380,62 @@ public:
         }
         for (auto& sample : mixed) sample = std::clamp(sample, -1.0f, 1.0f);
         AudioData audio{mixed.data(), static_cast<uint32_t>(mixed.size() / 2), 2, 48000, start, "other"};
-        // Enforce the budget before publishing the user's destination.
+        auto metadata = WriteCodec(encodedPath, encoded, {audio}, plan.width, plan.height, plan.fps, "",
+            plan.codec == ExportCodec::Av1 ? AV_CODEC_ID_AV1 : AV_CODEC_ID_H264);
+        return {"", metadata.durationSeconds, plan.width, plan.height, std::filesystem::file_size(encodedPath),
+            plan.videoKbps, ExportCodecName(plan.codec)};
+    }
+
+    ExportResult Export(const std::string& input, const std::string& output, const ExportOptions& options) override {
+        uint32_t width = 0, height = 0, fps = 30;
+        {
+            Media probe; probe.Open(input); const int index = av_find_best_stream(probe.input, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+            Check(index, "Find export video"); probe.Decoder(index);
+            width = probe.codec->width; height = probe.codec->height;
+            fps = static_cast<uint32_t>(std::max(1, static_cast<int>(av_q2d(probe.input->streams[index]->avg_frame_rate) + 0.5)));
+        }
+        const int64_t last = ScanVideo(input).lastTimeUs;
+        const int64_t end = options.endUs ? options.endUs : last;
+        // The source's overall bitrate caps a size-limited copy.
+        const uint32_t sourceKbps = options.maxBytes < kExportUnlimitedBytes && last > 0
+            ? static_cast<uint32_t>(std::min(static_cast<double>(kExportMaxVideoKbps),
+                std::filesystem::file_size(input) * 8.0 / 1000.0 / (last / 1000000.0)))
+            : 0;
+        // Each attempt is encoded beside the staged file and only moved onto it
+        // when it fits and is the largest so far, so a retry that overshoots
+        // cannot cost the copy that already fit.
         OutputFile staged(output);
         const std::string encodedPath = staged.Path() + ".mp4";
         struct Remove { std::string path; ~Remove() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{encodedPath};
-        auto metadata = Write(encodedPath, encoded, {audio}, plan.width, plan.height, plan.fps, "");
-        const auto bytes = std::filesystem::file_size(encodedPath);
-        if (bytes > options.maxBytes) throw std::runtime_error("Encoded export exceeds the requested size budget");
-        std::filesystem::rename(encodedPath, staged.Path()); staged.Publish();
-        return {output, metadata.durationSeconds, plan.width, plan.height, bytes, plan.videoKbps};
+        for (ExportCodec codec : ExportLadder(options.codec)) {
+            ExportPlan plan = PlanExport(width, height, fps, (end - options.startUs) / 1000000.0, options.maxBytes,
+                options.maxHeight, codec, options.maxFps, sourceKbps);
+            if (!plan.videoKbps) throw std::runtime_error("Export budget is too small");
+            ExportResult best; bool kept = false;
+            try {
+                for (int round = 0; round < 3 && plan.width; ++round) {
+                    std::error_code ignored; std::filesystem::remove(encodedPath, ignored);
+                    ExportResult result;
+                    try {
+                        result = ExportOnce(input, encodedPath, options, plan, end);
+                    } catch (const std::exception&) {
+                        // A copy that already fits outranks a failed retry.
+                        if (kept) break;
+                        throw;
+                    }
+                    if (result.bytes <= options.maxBytes && (!kept || result.bytes > best.bytes)) {
+                        std::filesystem::rename(encodedPath, staged.Path()); best = result; kept = true;
+                    }
+                    if (!ExportNeedsRetry(plan, options.maxBytes, result.bytes)) break;
+                    plan = RetryExportPlan(plan, options.maxBytes, result.bytes);
+                }
+            } catch (const NoEncoder&) {
+                if (!kept) continue;   // next step of the ladder
+            }
+            if (!kept) throw std::runtime_error("Encoded export exceeds the requested size budget");
+            staged.Publish(); best.filePath = output; return best;
+        }
+        throw std::runtime_error("No LGPL video encoder available");
     }
 };
 }
