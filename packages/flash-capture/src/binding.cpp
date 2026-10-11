@@ -647,6 +647,7 @@ public:
         value.Set("height", result_.height);
         value.Set("bytes", static_cast<double>(result_.bytes));
         value.Set("bitrateKbps", result_.bitrateKbps);
+        value.Set("codec", result_.codec);
         deferred_.Resolve(value);
     }
     void OnError(const Napi::Error& error) override { deferred_.Reject(error.Value()); }
@@ -708,7 +709,7 @@ Napi::Value GetClipKeyframesBinding(const Napi::CallbackInfo& info) {
 Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
     if (info.Length() < 3 || !info[0].IsString() || !info[1].IsString() || !info[2].IsObject()) {
-        Napi::TypeError::New(env, "expected (input, output, { maxBytes, maxHeight?, startSeconds?, endSeconds? })")
+        Napi::TypeError::New(env, "expected (input, output, { maxBytes, maxHeight?, startSeconds?, endSeconds?, codec?, maxFps? })")
             .ThrowAsJavaScriptException();
         return env.Undefined();
     }
@@ -757,6 +758,24 @@ Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
             return env.Undefined();
         }
         parsed.saturation = static_cast<uint32_t>(saturation);
+    }
+
+    if (!options.Get("codec").IsUndefined()) {
+        const std::string codec = options.Get("codec").IsString() ? options.Get("codec").As<Napi::String>().Utf8Value() : "";
+        if (codec == "auto") parsed.codec = ExportCodecChoice::Auto;
+        else if (codec == "h264") parsed.codec = ExportCodecChoice::H264;
+        else {
+            Napi::TypeError::New(env, "codec must be 'auto' or 'h264'").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+    }
+    if (!options.Get("maxFps").IsUndefined()) {
+        const double maxFps = options.Get("maxFps").IsNumber() ? options.Get("maxFps").As<Napi::Number>().DoubleValue() : -1.0;
+        if (!std::isfinite(maxFps) || maxFps < 0.0 || maxFps > 1000.0) {
+            Napi::RangeError::New(env, "maxFps must be a number between 0 and 1000").ThrowAsJavaScriptException();
+            return env.Undefined();
+        }
+        parsed.maxFps = static_cast<uint32_t>(maxFps);
     }
 
     auto* worker = new ExportClipWorker(env, info[0].As<Napi::String>().Utf8Value(),
