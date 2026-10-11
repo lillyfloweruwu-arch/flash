@@ -19,6 +19,8 @@ function functions(names, context) {
 ;(async () => {
   const { byteRange } = await import('../../apps/desktop/src/shared/byteRange.ts')
   const { clipPathFromUrl } = await import('../../apps/desktop/src/shared/platform.ts')
+  const { clipUrl } = await import('../../apps/desktop/src/shared/editor.ts')
+  const { isInsideRoot } = await import('../../apps/desktop/src/shared/clipsRoot.ts')
   const { writeSidecar, readSidecar } = await import('../../apps/desktop/src/shared/clipFiles.ts')
   const { gameFolderName, firstFreeName, clipTimestamp } = await import('../../apps/desktop/src/shared/clipPath.ts')
   const { cornerBounds, toastHtml, overlayHtml } = await import('../../apps/desktop/src/shared/windowTemplates.ts')
@@ -61,7 +63,7 @@ function functions(names, context) {
     console.log('PASS: clipboard rejection refreshes saved PNG; post-disk-check game identity agrees; display fallback and hidden/minimized visibility')
 
     let handler
-    Object.assign(context, { byteRange, clipPathFromUrl, Readable: require('node:stream').Readable,
+    Object.assign(context, { byteRange, clipPathFromUrl, isInsideRoot, Readable: require('node:stream').Readable,
       protocol: { handle: (_scheme, callback) => { handler = callback } },
       isInsideClips: file => file.startsWith(dir), resource: () => path.join(dir, 'sound.wav'),
     })
@@ -70,7 +72,9 @@ function functions(names, context) {
     const media = path.join(dir, 'range ü.mp4')
     const bytes = Buffer.from(Array.from({ length: 1000 }, (_, i) => i % 256))
     fs.writeFileSync(media, bytes)
-    const url = `flash-clip://local/${encodeURIComponent(media)}`
+    // The renderer's own URL builder, so the probe follows it on every platform:
+    // a POSIX path has no drive letter and keeps its slashes.
+    const url = clipUrl(media)
     for (const [range, status, start, end] of [[null, 200, 0, 1000], ['bytes=100-', 206, 100, 1000], ['bytes=-100', 206, 900, 1000], ['bytes=200-299', 206, 200, 300]]) {
       const response = await handler({ url, headers: new Headers(range ? { Range: range } : {}) })
       assert.equal(response.status, status)
