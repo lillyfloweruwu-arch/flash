@@ -62,12 +62,14 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
       const below = window.innerHeight - rect.bottom - 14
       const up = below < Math.min(320, options.length * 32 + 8) && above > below
       setUpward(up)
-      setAnchor({ left: Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8)), top: rect.bottom + 6, bottom: window.innerHeight - rect.top + 6, width: rect.width })
+      const menuWidth = Math.max(rect.width, menuRef.current?.offsetWidth ?? 0)
+      setAnchor({ left: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)), top: rect.bottom + 6, bottom: window.innerHeight - rect.top + 6, width: rect.width })
       setMaxHeight(Math.max(0, Math.min(320, up ? above : below)))
     }
     position()
     const observer = new ResizeObserver(position)
     if (rootRef.current) observer.observe(rootRef.current)
+    if (menuRef.current) observer.observe(menuRef.current)
     window.addEventListener('resize', position)
     window.addEventListener('scroll', position, true)
     return () => { observer.disconnect(); window.removeEventListener('resize', position); window.removeEventListener('scroll', position, true) }
@@ -137,7 +139,7 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
             position: 'fixed', zIndex: 110,
             ...(upward ? { bottom: anchor.bottom } : { top: anchor.top }),
             maxHeight, overflowY: 'auto', overscrollBehavior: 'contain',
-            left: anchor.left, width: anchor.width, maxWidth: 'calc(100vw - 16px)', borderRadius: 8, padding: 4,
+            left: anchor.left, minWidth: anchor.width, width: 'max-content', maxWidth: 'calc(100vw - 16px)', borderRadius: 8, padding: 4,
             background: 'var(--panel)', border: '1px solid var(--edge)',
             boxShadow: '0 16px 40px rgba(0,0,0,0.6)',
           }}>
@@ -160,7 +162,7 @@ export function Dropdown<T extends string | number>({ value, options, onChange, 
                   background: index === active ? 'var(--hover)' : 'transparent',
                 }}>
                 <span className="flex-1 truncate">{option.label}</span>
-                {option.hint && <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>{option.hint}</span>}
+                {option.hint && <span style={{ fontSize: 11, color: 'var(--muted-3)', whiteSpace: 'nowrap' }}>{option.hint}</span>}
                 <span style={{ width: 12, display: 'flex', color: 'var(--accent)' }} aria-hidden="true">
                   {isSelected && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>}
                 </span>
