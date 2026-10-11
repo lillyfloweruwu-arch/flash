@@ -4,6 +4,7 @@
 #include "color_space.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <stdexcept>
@@ -15,6 +16,8 @@
 #include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
+#include <mftransform.h>
+#include <codecapi.h>
 #include <propvarutil.h>
 #include <wrl/client.h>
 using Microsoft::WRL::ComPtr;
@@ -78,11 +81,77 @@ ComPtr<IMFMediaType> MakeType(const GUID& major, const GUID& subtype) {
     return type;
 }
 
+// Thrown when the chosen codec cannot be set up, so the caller can step down
+// the ladder. Anything that fails once writing has begun is a real error.
+struct CodecUnavailable final : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+const GUID& Subtype(ExportCodec codec) {
+    switch (codec) {
+        case ExportCodec::Av1: return MFVideoFormat_AV1;
+        case ExportCodec::Hevc: return MFVideoFormat_HEVC;
+        default: return MFVideoFormat_H264;
+    }
+}
+
+// AV1 and HEVC are only worth using through the GPU: Windows ships no software
+// encoder for either.
+bool HasHardwareEncoder(const GUID& subtype) {
+    MFT_REGISTER_TYPE_INFO output{MFMediaType_Video, subtype};
+    IMFActivate** activates = nullptr;
+    UINT32 count = 0;
+    const HRESULT hr = MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER, nullptr, &output, &activates, &count);
+    if (FAILED(hr)) return false;
+    for (UINT32 i = 0; i < count; ++i) activates[i]->Release();
+    CoTaskMemFree(activates);
+    return count > 0;
+}
+
+std::vector<ExportCodec> CodecLadder(ExportCodecChoice choice) {
+    if (choice == ExportCodecChoice::H264) return {ExportCodec::H264};
+    // A test hook: start the ladder at a given step, so the HEVC and H.264
+    // paths can be exercised on a machine whose GPU has AV1.
+    ExportCodec forced = ExportCodec::Av1;
+    char* value = nullptr;
+    size_t valueSize = 0;
+    _dupenv_s(&value, &valueSize, "FLASH_EXPORT_CODEC");
+    const bool haveForced = ParseExportCodec(value, forced);
+    std::free(value);
+    std::vector<ExportCodec> ladder;
+    MfScope mf;
+    if ((!haveForced || forced == ExportCodec::Av1) && HasHardwareEncoder(MFVideoFormat_AV1))
+        ladder.push_back(ExportCodec::Av1);
+    if ((!haveForced || forced != ExportCodec::H264) && HasHardwareEncoder(MFVideoFormat_HEVC))
+        ladder.push_back(ExportCodec::Hevc);
+    ladder.push_back(ExportCodec::H264);
+    return ladder;
+}
+
+// Encoder settings the sink writer hands to whichever encoder it creates. All
+// of them are requests: an encoder that cannot honour one ignores it, and the
+// caller falls back to no settings at all if the set is refused outright.
+ComPtr<IMFAttributes> EncoderSettings(const ExportPlan& plan) {
+    ComPtr<IMFAttributes> settings;
+    Check(MFCreateAttributes(&settings, 7), "MFCreateAttributes(encoder)");
+    settings->SetUINT32(CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_PeakConstrainedVBR);
+    settings->SetUINT32(CODECAPI_AVEncCommonMeanBitRate, plan.videoKbps * 1000);
+    settings->SetUINT32(CODECAPI_AVEncCommonMaxBitRate, plan.videoKbps * 1500);
+    settings->SetUINT32(CODECAPI_AVEncMPVDefaultBPictureCount, 2);
+    // Four seconds between keyframes: a share copy is watched start to finish,
+    // and every keyframe spent on seekability is bits taken from the picture.
+    settings->SetUINT32(CODECAPI_AVEncMPVGOPSize, plan.fps * 4);
+    settings->SetUINT32(CODECAPI_AVEncCommonQualityVsSpeed, 100);
+    if (plan.codec == ExportCodec::H264) settings->SetUINT32(CODECAPI_AVEncH264CABACEnable, TRUE);
+    return settings;
+}
+
 } // namespace
 #endif
 
 static ExportResult EncodeClip(const std::string& inputPath, const std::string& outputPath,
-                        const ExportOptions& options, ExportPlan& usedPlan, bool retry) {
+                        const ExportOptions& options, ExportPlan& usedPlan, bool retry, ExportCodec codec) {
     if (inputPath.empty() || outputPath.empty()) throw std::invalid_argument("clip paths must not be empty");
     if (!options.maxBytes) throw std::invalid_argument("maxBytes must be greater than zero");
     if (options.startUs < 0 || (options.endUs && options.endUs <= options.startUs))
@@ -154,7 +223,15 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         if (span <= 0.0) throw std::runtime_error("export range contains no video");
         if (span > kMaxExportSeconds) throw std::runtime_error("clip is too long to export");
 
-        const ExportPlan plan = retry ? usedPlan : PlanExport(sourceWidth, sourceHeight, fps, span, options.maxBytes, options.maxHeight);
+        // The source's overall bitrate caps a size-limited copy: more bits than
+        // the original had cannot make it look better.
+        const bool limited = options.maxBytes < kExportUnlimitedBytes;
+        const uint32_t sourceKbps = limited
+            ? static_cast<uint32_t>((std::min)(static_cast<double>(kExportMaxVideoKbps),
+                std::filesystem::file_size(input) * 8.0 / 1000.0 / sourceSeconds))
+            : 0;
+        const ExportPlan plan = retry ? usedPlan : PlanExport(sourceWidth, sourceHeight, fps, span,
+            options.maxBytes, options.maxHeight, codec, options.maxFps, sourceKbps);
         if (!plan.width || !plan.height) throw std::runtime_error("export size budget is too small for the minimum video and audio bitrate");
         usedPlan = plan;
 
@@ -248,15 +325,28 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
 
         // Giving the writer an encoded target type and an uncompressed input type
         // makes it instantiate the encoder itself — no manual MFT wiring.
-        auto videoTarget = MakeType(MFMediaType_Video, MFVideoFormat_H264);
+        auto videoTarget = MakeType(MFMediaType_Video, Subtype(plan.codec));
         Check(MFSetAttributeSize(videoTarget.Get(), MF_MT_FRAME_SIZE, outWidth, outHeight), "target frame size");
         Check(MFSetAttributeRatio(videoTarget.Get(), MF_MT_FRAME_RATE, plan.fps, 1), "target frame rate");
         Check(MFSetAttributeRatio(videoTarget.Get(), MF_MT_PIXEL_ASPECT_RATIO, 1, 1), "target aspect");
         Check(videoTarget->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive), "target interlace");
         Check(videoTarget->SetUINT32(MF_MT_AVG_BITRATE, plan.videoKbps * 1000), "target bitrate");
+        // Without a profile the hardware encoder defaults to Constrained
+        // Baseline, which is what made share copies look the way they did.
+        if (plan.codec == ExportCodec::H264)
+            Check(videoTarget->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High), "target profile");
+        // A codec the writer or encoder will not set up is a reason to step
+        // down the ladder, not to fail the export. H.264 is the last step, so
+        // there it is a real error.
+        const auto setup = [&](HRESULT hr, const char* operation) {
+            if (SUCCEEDED(hr)) return;
+            if (plan.codec != ExportCodec::H264) throw CodecUnavailable(operation);
+            Check(hr, operation);
+        };
         DWORD videoOut = 0;
-        Check(writer->AddStream(videoTarget.Get(), &videoOut), "AddStream(video)");
-        Check(writer->SetInputMediaType(videoOut, actualVideo.Get(), nullptr), "SetInputMediaType(video)");
+        setup(writer->AddStream(videoTarget.Get(), &videoOut), "AddStream(video)");
+        if (FAILED(writer->SetInputMediaType(videoOut, actualVideo.Get(), EncoderSettings(plan).Get())))
+            setup(writer->SetInputMediaType(videoOut, actualVideo.Get(), nullptr), "SetInputMediaType(video)");
 
         DWORD audioOut = 0;
         if (haveAudio) {
@@ -268,7 +358,7 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
             Check(writer->AddStream(audioTarget.Get(), &audioOut), "AddStream(audio)");
             Check(writer->SetInputMediaType(audioOut, audioInput.Get(), nullptr), "SetInputMediaType(audio)");
         }
-        Check(writer->BeginWriting(), "IMFSinkWriter::BeginWriting");
+        setup(writer->BeginWriting(), "IMFSinkWriter::BeginWriting");
 
         // Interleave: the sink writer needs samples in roughly increasing time
         // order across streams, so audio is emitted in chunks as video advances.
@@ -306,7 +396,12 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         Check(reader->SetCurrentPosition(GUID_NULL, seekVideo), "seek video");
         PropVariantClear(&seekVideo);
 
-        LONGLONG lastEnd = 0, lastSlot = -1;
+        LONGLONG lastEnd = 0;
+        // Below the source rate, frames are re-timed onto an even grid. At the
+        // source rate they keep their own timestamps untouched.
+        const bool regrid = plan.fps < fps;
+        FrameGrid grid{plan.fps};
+        const LONGLONG frameTicks = 10000000LL / (std::max)(1u, plan.fps);
         bool wroteVideo = false;
         for (;;) {
             DWORD actual = 0, flags = 0;
@@ -320,11 +415,12 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
             // dropped, so every frame between the keyframe the reader had to
             // start from and the requested start piled up on timestamp zero.
             if (time < startTicks) continue;
-            const LONGLONG rebased = time - startTicks;
-            if (plan.fps < fps) {   // halved rate: keep every other frame
-                const LONGLONG slot = rebased / (10000000LL / (std::max)(1u, plan.fps));
-                if (slot == lastSlot) continue;
-                lastSlot = slot;
+            LONGLONG rebased = time - startTicks;
+            if (regrid) {
+                const int64_t slot = grid.Take(rebased / 10);
+                if (slot < 0) continue;
+                rebased = slot * 10000000LL / plan.fps;
+                Check(sample->SetSampleDuration(frameTicks), "set video duration");
             }
             Check(sample->SetSampleTime(rebased), "set video time");
             // Saturation is a scale of each chroma sample about neutral, applied
@@ -369,6 +465,7 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         result.bytes = std::filesystem::file_size(output);
         result.bitrateKbps = result.durationSeconds > 0.0
             ? static_cast<uint32_t>((result.bytes * 8.0) / result.durationSeconds / 1000.0) : 0;
+        result.codec = ExportCodecName(plan.codec);
         return result;
     } catch (...) {
         writer.Reset();
@@ -380,7 +477,7 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         throw;
     }
 #else
-    (void)inputPath; (void)outputPath; (void)options; (void)usedPlan; (void)retry;
+    (void)inputPath; (void)outputPath; (void)options; (void)usedPlan; (void)retry; (void)codec;
     throw std::runtime_error("clip export is only available on Windows");
 #endif
 }
@@ -390,19 +487,43 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
 #ifdef _WIN32
     if (inputPath.empty() || outputPath.empty()) throw std::invalid_argument("clip paths must not be empty");
     MediaOutput output(std::filesystem::u8path(outputPath));
-    ExportPlan plan;
-    const auto utf8 = output.Partial().u8string();
-    const std::string temporary(utf8.begin(), utf8.end());
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        auto result = EncodeClip(inputPath, temporary, options, plan, attempt != 0);
-        if (result.bytes <= options.maxBytes) {
+    // Each attempt is encoded beside the reserved partial file and only moved
+    // onto it when it fits and is the largest so far. That way a retry that
+    // overshoots cannot cost the copy that already fit.
+    std::filesystem::path attempt = output.Partial();
+    attempt += L".try.mp4";
+    struct Remove {
+        std::filesystem::path path;
+        ~Remove() { std::error_code ignored; std::filesystem::remove(path, ignored); }
+    } cleanup{attempt};
+    const auto utf8 = attempt.u8string();
+    const std::string attemptPath(utf8.begin(), utf8.end());
+
+    for (ExportCodec codec : CodecLadder(options.codec)) {
+        try {
+            ExportPlan plan;
+            ExportResult best;
+            bool kept = false;
+            for (int round = 0; round < 3; ++round) {
+                auto result = EncodeClip(inputPath, attemptPath, options, plan, round != 0, codec);
+                if (result.bytes <= options.maxBytes && (!kept || result.bytes > best.bytes)) {
+                    std::filesystem::rename(attempt, output.Partial());
+                    best = result;
+                    kept = true;
+                }
+                if (!ExportNeedsRetry(plan, options.maxBytes, result.bytes)) break;
+                plan = RetryExportPlan(plan, options.maxBytes, result.bytes);
+                if (!plan.width) break;
+            }
+            if (!kept) throw std::runtime_error("export still exceeds the requested size budget after retry");
             output.Publish();
-            result.filePath = outputPath;
-            return result;
+            best.filePath = outputPath;
+            return best;
+        } catch (const CodecUnavailable&) {
+            continue;   // next step of the ladder
         }
-        plan = RetryExportPlan(plan, options.maxBytes, result.bytes);
     }
-    throw std::runtime_error("export still exceeds the requested size budget after retry");
+    throw std::runtime_error("no video encoder accepted the export");
 #else
     (void)inputPath; (void)outputPath; (void)options;
     throw std::runtime_error("clip export is only available on Windows");
