@@ -80,7 +80,7 @@
       },
       "extraResources": [
         {
-          "from": "../../packages/flash-capture/build/flash_capture.node",
+          "from": "../../packages/flash-capture/build/Release/flash_capture.node",
           "to": "flash_capture.node"
         },
         {

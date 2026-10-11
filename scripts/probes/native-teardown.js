@@ -7,7 +7,7 @@ const path = require('node:path')
 const { Worker } = require('node:worker_threads')
 
 const addonPath = path.join(__dirname, '../../packages/flash-capture/build',
-  process.platform === 'win32' ? 'Release' : '', 'flash_capture.node')
+  'Release', 'flash_capture.node')
 if (!existsSync(addonPath)) {
   console.log('SKIP: native teardown checks require a built addon')
   process.exit(0)

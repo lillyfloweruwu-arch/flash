@@ -1,7 +1,7 @@
 // Records a short source, changes games during a save, then exports twice.
 // Run with node --experimental-strip-types scripts/probes/export-and-game.js.
 const safe = process.argv.includes('--safe')
-const addonPath = require('node:path').join(__dirname, '../../packages/flash-capture/build', process.platform === 'win32' ? 'Release' : '', 'flash_capture.node')
+const addonPath = require('node:path').join(__dirname, '../../packages/flash-capture/build', 'Release', 'flash_capture.node')
 if (safe && !require('node:fs').existsSync(addonPath)) {
   console.log('SKIP: safe native export checks require a built addon')
   process.exit(0)

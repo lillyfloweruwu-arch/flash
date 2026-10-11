@@ -468,7 +468,7 @@ function antonioFont(): string {
 }
 
 function loadCaptureAddon(): CaptureAddon | null {
-  const addonPath = resource('flash_capture.node', `packages/flash-capture/build/${process.platform === 'win32' ? 'Release/' : ''}flash_capture.node`)
+  const addonPath = resource('flash_capture.node', 'packages/flash-capture/build/Release/flash_capture.node')
   try { return require(addonPath) as CaptureAddon }
   catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
 }

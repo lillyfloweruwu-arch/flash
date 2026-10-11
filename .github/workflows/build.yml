@@ -51,7 +51,7 @@ jobs:
       - run: pnpm build
       - name: Package LGPL-only AppImage
         run: |
-          patchelf --set-rpath '$ORIGIN/linux-media' packages/flash-capture/build/flash_capture.node
+          patchelf --set-rpath '$ORIGIN/linux-media' packages/flash-capture/build/Release/flash_capture.node
           pnpm --filter @flash/desktop exec electron-builder --linux AppImage --publish never
       - uses: actions/upload-artifact@v4.6.2
         with:

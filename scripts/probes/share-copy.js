@@ -6,7 +6,7 @@
 const path = require('node:path'), fs = require('node:fs'), os = require('node:os')
 const assert = require('node:assert/strict')
 const addon = require(path.join(__dirname, '../../packages/flash-capture/build',
-  process.platform === 'win32' ? 'Release' : '', 'flash_capture.node'))
+  'Release', 'flash_capture.node'))
 
 const clip = process.argv[2]
 const expected = process.argv[3] ?? 'av1'

@@ -107,7 +107,7 @@ The media script downloads pinned release tags into ignored `build/`, records it
 Packaging on Linux only:
 
 ```sh
-patchelf --set-rpath '$ORIGIN/linux-media' packages/flash-capture/build/flash_capture.node
+patchelf --set-rpath '$ORIGIN/linux-media' packages/flash-capture/build/Release/flash_capture.node
 pnpm --filter @flash/desktop exec electron-builder --linux AppImage --publish never
 # Supply real maintainer information before distributing a deb.
 pnpm --filter @flash/desktop exec electron-builder --linux deb --publish never
