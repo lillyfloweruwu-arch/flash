@@ -54,11 +54,13 @@ public:
             context_->bit_rate = config.bitrate; context_->max_b_frames = 0;
             context_->gop_size = config.fps * (config.exportQuality ? 4 : 2);
             const bool hardware = name_ != "libopenh264";
+            // Every file export asks for High, tuned or not; capture does not.
+            const bool highProfile = config.highProfile && config.codec == "h264" && hardware;
             if (config.exportQuality && hardware) {
                 context_->rc_max_rate = static_cast<int64_t>(config.bitrate) * 3 / 2;
                 context_->rc_buffer_size = static_cast<int>(config.bitrate) * 2;
-                if (config.codec == "h264") context_->profile = AV_PROFILE_H264_HIGH;
             }
+            if (highProfile) context_->profile = AV_PROFILE_H264_HIGH;
             context_->flags |= AV_CODEC_FLAG_CLOSED_GOP;
             context_->color_range = AVCOL_RANGE_MPEG; context_->colorspace = AVCOL_SPC_BT709;
             context_->color_primaries = AVCOL_PRI_BT709; context_->color_trc = AVCOL_TRC_BT709;
@@ -73,13 +75,14 @@ public:
                 if (av_hwframe_ctx_init(context_->hw_frames_ctx) < 0) continue;
             }
             av_opt_set(context_->priv_data, "forced-idr", "1", 0);
-            if (config.exportQuality && name_.find("_nvenc") != std::string::npos) {
+            const bool nvenc = name_.find("_nvenc") != std::string::npos;
+            // NVENC takes its profile from this private option, not from
+            // context_->profile. AV1 keeps the encoder's default profile.
+            if (highProfile && nvenc) av_opt_set(context_->priv_data, "profile", "high", 0);
+            if (config.exportQuality && nvenc) {
                 // av_opt_set returns an error for an option an encoder does not
                 // have; those errors are deliberately ignored.
                 av_opt_set(context_->priv_data, "preset", "p7", 0);
-                // NVENC takes its profile from this private option, not from
-                // context_->profile. AV1 keeps the encoder's default profile.
-                if (config.codec == "h264") av_opt_set(context_->priv_data, "profile", "high", 0);
                 av_opt_set(context_->priv_data, "tune", "hq", 0);
                 av_opt_set(context_->priv_data, "rc", "vbr", 0);
                 av_opt_set(context_->priv_data, "rc-lookahead", "32", 0);

@@ -82,7 +82,8 @@ ComPtr<IMFMediaType> MakeType(const GUID& major, const GUID& subtype) {
 }
 
 // Thrown when the chosen codec cannot be set up, so the caller can step down
-// the ladder. Anything that fails once writing has begun is a real error.
+// the ladder. ExportClip also raises it when a newer codec fails once writing
+// has begun and no copy has been kept.
 struct CodecUnavailable final : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
@@ -501,7 +502,8 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
     const auto utf8 = attempt.u8string();
     const std::string attemptPath(utf8.begin(), utf8.end());
 
-    for (ExportCodec codec : CodecLadder(options.codec)) {
+    const std::vector<ExportCodec> ladder = CodecLadder(options.codec);
+    for (ExportCodec codec : ladder) {
         try {
             ExportPlan plan;
             ExportResult best;
@@ -510,10 +512,16 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
                 ExportResult result;
                 try {
                     result = EncodeClip(inputPath, attemptPath, options, plan, round != 0, codec);
-                } catch (const std::exception&) {
+                } catch (const std::exception& error) {
                     // A copy that already fits outranks a failed retry.
                     if (kept) break;
-                    throw;
+                    // A hardware encoder can accept set-up and then fail on the
+                    // first sample or at finalize. With nothing kept and an
+                    // older codec left, that is a reason to step down, not to
+                    // fail. The last codec's error is the real one, and no
+                    // codec can fix a bad argument.
+                    if (codec == ladder.back() || dynamic_cast<const std::invalid_argument*>(&error)) throw;
+                    throw CodecUnavailable(error.what());
                 }
                 if (result.bytes <= options.maxBytes && (!kept || result.bytes > best.bytes)) {
                     std::filesystem::rename(attempt, output.Partial());

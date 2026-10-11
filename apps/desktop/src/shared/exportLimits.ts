@@ -21,11 +21,8 @@ export const EXPORT_LIMITS: ExportLimit[] = [
   { value: '500', label: '500MB', hint: 'Nitro', bytes: 500 * 1048576, codec: 'auto' },
 ]
 
-// Linux starts on the compatible entry: when a Linux GPU has no AV1 encoder,
-// the fallback is H.264 either way, and H.264 is what Linux players and Discord
-// on Linux reliably decode.
-export const defaultExportLimit = (platform: string | undefined): string =>
-  platform === 'linux' ? '10-h264' : '10'
+// The default is the best codec the GPU can encode, on every platform.
+export const DEFAULT_EXPORT_LIMIT = '10'
 
 export const findExportLimit = (id: string): ExportLimit =>
   EXPORT_LIMITS.find(limit => limit.value === id) ?? EXPORT_LIMITS[0]

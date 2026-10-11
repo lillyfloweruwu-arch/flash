@@ -1,6 +1,6 @@
 import { useEffect, useState, type DragEvent } from 'react'
 import { Dropdown } from './Dropdown'
-import { EXPORT_LIMITS, codecNote, defaultExportLimit, findExportLimit } from '../shared/exportLimits'
+import { DEFAULT_EXPORT_LIMIT, EXPORT_LIMITS, codecNote, findExportLimit } from '../shared/exportLimits'
 
 export interface SelectionItem {
   id: string
@@ -16,7 +16,7 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
   onDelete: () => void
   onRefresh: () => Promise<void>
 }) {
-  const [exportLimit, setExportLimit] = useState(() => defaultExportLimit(window.flash?.platform))
+  const [exportLimit, setExportLimit] = useState(DEFAULT_EXPORT_LIMIT)
   const [exportBusy, setExportBusy] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [moveBusy, setMoveBusy] = useState(false)

@@ -25,6 +25,7 @@ struct EncoderConfig {
     // Linux file exports only. The capture path leaves both at their defaults.
     std::string codec = "h264";   // "h264" or "av1"
     bool exportQuality = false;   // quality over latency: lookahead, VBR with a peak, longer GOP
+    bool highProfile = false;   // request H.264 High on hardware encoders (file exports)
     void* device = nullptr;
 };
 

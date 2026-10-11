@@ -1,7 +1,7 @@
 // Self-check for the share-copy size menu. Run with:
 //   node --experimental-strip-types src/shared/exportLimits.test.ts
 import { strict as assert } from 'node:assert'
-import { EXPORT_LIMITS, codecNote, defaultExportLimit, exportSuffix, findExportLimit } from './exportLimits.ts'
+import { EXPORT_LIMITS, DEFAULT_EXPORT_LIMIT, codecNote, exportSuffix, findExportLimit } from './exportLimits.ts'
 
 // Every entry is reachable by its id, and ids are unique.
 assert.equal(new Set(EXPORT_LIMITS.map(limit => limit.value)).size, EXPORT_LIMITS.length)
@@ -11,11 +11,9 @@ for (const limit of EXPORT_LIMITS) assert.equal(findExportLimit(limit.value), li
 assert.equal(findExportLimit('nope'), EXPORT_LIMITS[0])
 assert.equal(findExportLimit(String(10 * 1048576)), EXPORT_LIMITS[0])
 
-// Windows defaults to the best codec; Linux to the one that plays everywhere there.
-assert.equal(findExportLimit(defaultExportLimit('win32')).codec, 'auto')
-assert.equal(findExportLimit(defaultExportLimit('linux')).codec, 'h264')
-assert.equal(findExportLimit(defaultExportLimit(undefined)).codec, 'auto')
-assert.equal(findExportLimit(defaultExportLimit('linux')).bytes, 10 * 1048576)
+// Every platform defaults to the best codec the GPU can encode, at 10MB.
+assert.equal(findExportLimit(DEFAULT_EXPORT_LIMIT).codec, 'auto')
+assert.equal(findExportLimit(DEFAULT_EXPORT_LIMIT).bytes, 10 * 1048576)
 
 // The two 10MB copies of one clip get different names.
 assert.equal(exportSuffix(10 * 1048576, 'auto'), ' - 10MB.mp4')

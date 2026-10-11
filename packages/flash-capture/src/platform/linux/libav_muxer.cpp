@@ -329,7 +329,10 @@ public:
         Check(index, "Find export video"); auto* stream = media.input->streams[index]; media.Decoder(index);
         const uint32_t sourceFps = static_cast<uint32_t>(std::max(1, static_cast<int>(av_q2d(stream->avg_frame_rate) + 0.5)));
         EncoderConfig config; config.width = plan.width; config.height = plan.height; config.fps = plan.fps; config.bitrate = plan.videoKbps * 1000;
-        config.codec = ExportCodecName(plan.codec); config.exportQuality = true;
+        config.codec = ExportCodecName(plan.codec);
+        // Only size-limited exports get the share-copy tuning; an editor save
+        // keeps the capture settings and only gains the High profile.
+        config.highProfile = true; config.exportQuality = options.maxBytes < kExportUnlimitedBytes;
         auto encoder = CreateEncoder(config); if (!encoder) throw NoEncoder{};
         std::vector<EncodedPacket> encoded; std::vector<uint8_t> pixels(static_cast<size_t>(plan.width) * plan.height * 4);
         // Below the source rate, frames are re-timed onto an even grid. At the
@@ -407,7 +410,8 @@ public:
         OutputFile staged(output);
         const std::string encodedPath = staged.Path() + ".mp4";
         struct Remove { std::string path; ~Remove() { std::error_code error; std::filesystem::remove(path, error); } } cleanup{encodedPath};
-        for (ExportCodec codec : ExportLadder(options.codec)) {
+        const std::vector<ExportCodec> ladder = ExportLadder(options.codec);
+        for (ExportCodec codec : ladder) {
             ExportPlan plan = PlanExport(width, height, fps, (end - options.startUs) / 1000000.0, options.maxBytes,
                 options.maxHeight, codec, options.maxFps, sourceKbps);
             if (!plan.videoKbps) throw std::runtime_error("Export budget is too small");
@@ -418,10 +422,16 @@ public:
                     ExportResult result;
                     try {
                         result = ExportOnce(input, encodedPath, options, plan, end);
-                    } catch (const std::exception&) {
+                    } catch (const std::exception& error) {
                         // A copy that already fits outranks a failed retry.
                         if (kept) break;
-                        throw;
+                        // A hardware encoder can accept set-up and then fail on
+                        // the first frame or at the trailer. With nothing kept
+                        // and an older codec left, that is a reason to step
+                        // down, not to fail. The last codec's error is the real
+                        // one, and no codec can fix a bad argument.
+                        if (codec == ladder.back() || dynamic_cast<const std::invalid_argument*>(&error)) throw;
+                        throw NoEncoder{};
                     }
                     if (result.bytes <= options.maxBytes && (!kept || result.bytes > best.bytes)) {
                         std::filesystem::rename(encodedPath, staged.Path()); best = result; kept = true;
