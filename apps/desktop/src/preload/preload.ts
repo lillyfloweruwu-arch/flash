@@ -87,8 +87,8 @@ contextBridge.exposeInMainWorld('flash', {
     ipcRenderer.invoke('save-clip-frame', filePath, playheadSeconds, bytes),
   trimClip: (filePath: string, start: number, end: number) =>
     ipcRenderer.invoke('trim-clip', filePath, start, end),
-  exportClip: (filePath: string, maxBytes: number) =>
-    ipcRenderer.invoke('export-clip', filePath, maxBytes),
+  exportClip: (filePath: string, maxBytes: number, codec?: 'auto' | 'h264') =>
+    ipcRenderer.invoke('export-clip', filePath, maxBytes, codec),
   // The editor needs every audio track separately, because a video element
   // decodes only the first one, and the keyframe list to know where a cut can
   // stay lossless.
@@ -181,8 +181,8 @@ export type FlashAPI = {
     Promise<{ path?: string; error?: string }>
   trimClip: (filePath: string, start: number, end: number) =>
     Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
-  exportClip: (filePath: string, maxBytes: number) =>
-    Promise<{ path?: string; bytes?: number; width?: number; height?: number; bitrateKbps?: number; error?: string }>
+  exportClip: (filePath: string, maxBytes: number, codec?: 'auto' | 'h264') =>
+    Promise<{ path?: string; bytes?: number; width?: number; height?: number; bitrateKbps?: number; codec?: string; error?: string }>
   saveClipEdit: (filePath: string, options: {
     startSeconds: number
     endSeconds: number

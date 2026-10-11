@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clipUrl, formatTimecode } from '../shared/editor'
 import { clipDisplayTitle } from '../shared/clipTitle'
 import { Dropdown } from './Dropdown'
-import { EXPORT_LIMITS } from './SelectionBar'
+import { EXPORT_LIMITS, codecNote, defaultExportLimit, findExportLimit } from '../shared/exportLimits'
 import { useClipAudio } from './editor/useClipAudio'
 import { useLiveMix } from './editor/useLiveMix'
 import { thumbnailFor, useThumbnail } from './thumbnails'
@@ -56,7 +56,7 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   const [muted, setMuted] = useState(false)
   const [frameBusy, setFrameBusy] = useState(false)
   const [exportBusy, setExportBusy] = useState(false)
-  const [exportBytes, setExportBytes] = useState(10 * 1048576)   // Discord free tier
+  const [exportLimit, setExportLimit] = useState(() => defaultExportLimit(window.flash?.platform))
 
   useEffect(() => {
     if (clip && clip.filePath !== currentPath) onPathChange(clip.filePath)
@@ -182,10 +182,12 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   const exportCopy = async () => {
     if (!clip) return
     setExportBusy(true); setNote(null)
-    const result = await window.flash?.exportClip(clip.filePath, exportBytes)
+    const limit = findExportLimit(exportLimit)
+    const result = await window.flash?.exportClip(clip.filePath, limit.bytes, limit.codec)
     setExportBusy(false)
     if (!result || result.error) { setNote(result?.error ?? 'Export failed'); return }
-    setNote(`Shareable copy saved: ${formatBytes(result.bytes ?? 0)} at ${result.height}p`)
+    const fallback = codecNote(limit.codec, result.codec)
+    setNote(`Shareable copy saved: ${formatBytes(result.bytes ?? 0)} at ${result.height}p${fallback ? `. ${fallback}` : ''}`)
   }
 
   const copyFile = async () => {
@@ -280,11 +282,11 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
             <div className="flex items-center" style={{ gap: 0 }}>
               <button onClick={exportCopy} disabled={exportBusy} className="btn"
                 style={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
-                title={`Make a copy under ${Math.round(exportBytes / 1048576)}MB to send in Discord`}>
+                title={`Make a copy under ${findExportLimit(exportLimit).label} to send in Discord`}>
                 <Icon name="send" size={15} /> {exportBusy ? 'Compressing…' : 'Export'}
               </button>
-              <Dropdown value={exportBytes} onChange={setExportBytes} title="Upload limit to fit under"
-                options={EXPORT_LIMITS} width={96} variant="joined" />
+              <Dropdown value={exportLimit} onChange={setExportLimit} title="Upload limit to fit under"
+                options={EXPORT_LIMITS} width={150} variant="joined" />
             </div>
             {note && <span role="status" style={{ fontSize: 12, color: 'var(--fg)', marginLeft: 6, textShadow: '0 1px 8px rgba(0,0,0,0.8)' }}>{note}</span>}
           </div>

@@ -17,6 +17,7 @@ import { toastHtml, overlayHtml, cornerBounds } from '../shared/windowTemplates'
 import { byteRange } from '../shared/byteRange'
 import { createClipDeletion } from '../shared/clipDeletion'
 import { getTheme } from '../shared/themes'
+import { exportSuffix, type ExportCodecChoice } from '../shared/exportLimits'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
 import { clipTimestamp, firstFreeName, gameFolderName, sidecarPath } from '../shared/clipPath'
@@ -300,7 +301,10 @@ type CaptureAddon = {
     // by miscounting. Omitting either leaves the export unchanged.
     gains?: { game?: number; mic?: number; other?: number }
     saturation?: number
-  }): Promise<{ path: string; duration: number; width: number; height: number; bytes: number; bitrateKbps: number }>
+    // 'auto' takes the best codec the GPU can encode; the result says which.
+    codec?: ExportCodecChoice
+    maxFps?: number
+  }): Promise<{ path: string; duration: number; width: number; height: number; bytes: number; bitrateKbps: number; codec: string }>
   decodeClipAudio?(input: string):
     Promise<{ sampleRate: number; tracks: { id: string; samples: Float32Array }[] }>
   getClipKeyframes?(input: string):
@@ -1382,6 +1386,8 @@ function setupIPC() {
           endSeconds: options.endSeconds,
           gains: options.gains,
           saturation: options.saturation,
+          // A saved edit is opened again by the trimmer, which only reads H.264.
+          codec: 'h264',
         })
       } else {
         if (!captureAddon?.trimClip) return { error: 'This build cannot trim clips' }
@@ -1423,17 +1429,20 @@ function setupIPC() {
 
   // A share copy, not a replacement. Capture bitrate stays archival-high on
   // purpose; this produces a small sibling that actually fits an upload limit.
-  ipcMain.handle('export-clip', async (_event, filePath: string, maxBytes: number) => {
+  ipcMain.handle('export-clip', async (_event, filePath: string, maxBytes: number, requested?: ExportCodecChoice) => {
     if (!captureAddon?.exportClip) return { error: 'This build cannot export clips' }
     if (!isInsideClips(filePath) || !existsSync(filePath)) return { error: 'Clip not found' }
-    const mb = Math.round(maxBytes / (1024 * 1024))
+    if (!Number.isFinite(maxBytes) || maxBytes <= 0) return { error: 'Export size is not valid' }
+    const codec: ExportCodecChoice = requested === 'h264' ? 'h264' : 'auto'
     if (extname(filePath).toLowerCase() !== '.mp4') return { error: 'Only clips can be processed' }
     let reservation: ReturnType<typeof reserveOutput> | undefined
-    const requested = filePath.replace(/\.mp4$/i, ` - ${mb}MB.mp4`)
+    const requestedPath = filePath.replace(/\.mp4$/i, exportSuffix(maxBytes, codec))
     try {
-      reservation = reserveOutput(requested)
+      reservation = reserveOutput(requestedPath)
       const output = reservation.path
-      const result = await captureAddon.exportClip(filePath, output, { maxBytes })
+      // 60 fps is the most a chat-window player shows; anything above it is
+      // bitrate spent on frames nobody sees.
+      const result = await captureAddon.exportClip(filePath, output, { maxBytes, codec, maxFps: 60 })
       try {
         writeSidecar(result.path, {
           duration: Math.round(result.duration), game: readSidecar(filePath)?.game ?? basename(dirname(filePath)),

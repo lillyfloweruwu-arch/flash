@@ -1,5 +1,6 @@
 import { useEffect, useState, type DragEvent } from 'react'
 import { Dropdown } from './Dropdown'
+import { EXPORT_LIMITS, codecNote, defaultExportLimit, findExportLimit } from '../shared/exportLimits'
 
 export interface SelectionItem {
   id: string
@@ -8,14 +9,6 @@ export interface SelectionItem {
   kind?: 'clip' | 'shot'
 }
 
-// Discord's upload ceilings. The tier is the hint rather than part of the
-// label, so the size stays the thing you read first.
-export const EXPORT_LIMITS = [
-  { value: 10 * 1048576, label: '10MB', hint: 'Discord free' },
-  { value: 50 * 1048576, label: '50MB', hint: 'Nitro Basic' },
-  { value: 500 * 1048576, label: '500MB', hint: 'Nitro' },
-]
-
 export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
   items: readonly SelectionItem[]
   games: readonly string[]
@@ -23,7 +16,7 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
   onDelete: () => void
   onRefresh: () => Promise<void>
 }) {
-  const [exportBytes, setExportBytes] = useState(10 * 1048576)
+  const [exportLimit, setExportLimit] = useState(() => defaultExportLimit(window.flash?.platform))
   const [exportBusy, setExportBusy] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [moveBusy, setMoveBusy] = useState(false)
@@ -46,15 +39,17 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
     const skipped = items.length - exportable.length
     let exported = 0
     let failed = 0
+    const limit = findExportLimit(exportLimit)
+    let fallback = ''
     setExportBusy(true)
     setExportOpen(false)
     setNote(`Exporting 0/${items.length}`)
 
     for (const clip of exportable) {
       try {
-        const result = await window.flash?.exportClip(clip.filePath, exportBytes)
+        const result = await window.flash?.exportClip(clip.filePath, limit.bytes, limit.codec)
         if (!result || result.error) failed++
-        else exported++
+        else { exported++; fallback = codecNote(limit.codec, result.codec) || fallback }
       } catch {
         failed++
       }
@@ -63,7 +58,8 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
 
     const skippedNote = skipped ? ` — ${skipped} screenshot${skipped === 1 ? '' : 's'} skipped` : ''
     const failedNote = failed ? ` — ${failed} failed` : ''
-    setNote(`Exported ${exported} of ${items.length}${skippedNote}${failedNote}`)
+    const codecSuffix = fallback ? ` — ${fallback}` : ''
+    setNote(`Exported ${exported} of ${items.length}${skippedNote}${failedNote}${codecSuffix}`)
     setExportBusy(false)
   }
 
@@ -125,8 +121,8 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
               boxShadow: '0 12px 32px rgba(0,0,0,0.55)',
             }}>
             <Dropdown
-              value={exportBytes}
-              onChange={setExportBytes}
+              value={exportLimit}
+              onChange={setExportLimit}
               title="Upload limit to fit under"
               options={EXPORT_LIMITS}
               width={150}
@@ -163,7 +159,7 @@ export function SelectionBar({ items, games, onClear, onDelete, onRefresh }: {
         )}
       </div>
       {note && (
-        <span role="status" style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span role="status" style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {note}
         </span>
       )}
