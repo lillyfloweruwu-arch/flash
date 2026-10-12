@@ -36,5 +36,6 @@ std::unique_ptr<AudioSource> CreateAudioSource() { return std::make_unique<Audio
 std::unique_ptr<ClipMuxer> CreateClipMuxer() { return std::make_unique<WindowsMuxer>(); }
 std::unique_ptr<ProcessLister> CreateProcessLister() { return std::make_unique<WindowsProcesses>(); }
 std::vector<DisplayInfo> ListPlatformDisplays() { return ScreenCapture::ListDisplays(); }
+bool PlatformSupportsPerAppAudio() { return AudioCapture::ProcessLoopbackAvailable(); }
 void SetPortalRestoreToken(const std::string&, std::function<void(const std::string&)>) {}
 } // namespace flash

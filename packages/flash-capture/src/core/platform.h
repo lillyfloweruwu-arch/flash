@@ -29,6 +29,8 @@ std::unique_ptr<AudioSource> CreateAudioSource();
 std::unique_ptr<ClipMuxer> CreateClipMuxer();
 std::unique_ptr<ProcessLister> CreateProcessLister();
 std::vector<DisplayInfo> ListPlatformDisplays();
+// Whether desktop sound can be captured one app at a time on this machine.
+bool PlatformSupportsPerAppAudio();
 // Tokens restore permission only. JavaScript owns persistence in userData.
 void SetPortalRestoreToken(const std::string&, std::function<void(const std::string&)>);
 } // namespace flash

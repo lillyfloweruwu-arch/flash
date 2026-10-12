@@ -1,13 +1,16 @@
 #include "audio_capture.h"
 #include "../../core/audio_math.h"
 #include "../../core/capture_clock.h"
+#include "../../core/process_list.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
 #ifdef _WIN32
 #include <Windows.h>
 #include <audioclientactivationparams.h>
+#include <audiopolicy.h>
 #include <functiondiscoverykeys_devpkey.h>
 #include <propvarutil.h>
 #include <wrl/implements.h>
@@ -33,6 +36,30 @@ struct AudioCapture::Source {
     bool isFloat = true;
     uint16_t bits = 32;
     ~Source() {
+#ifdef _WIN32
+        if (event) CloseHandle(event);
+#endif
+    }
+};
+
+// One app whose sound is captured on its own and mixed into a lane.
+struct AudioCapture::App {
+    uint32_t rootPid = 0;
+    std::string exe, name;
+    // Written only by the scanner, holding mutex_ and mixMutex_ together, so
+    // either lock is enough to read it.
+    AudioLane lane = AudioLane::Other;
+    int missedScans = 0;                  // scans in a row with no audio session; guarded by mutex_
+#ifdef _WIN32
+    ComPtr<IAudioClient> client;
+    ComPtr<IAudioCaptureClient> capture;
+    HANDLE event = nullptr;
+#endif
+    std::thread thread;
+    // Cleared by whoever stops the app, and by its own thread when the capture
+    // fails, which is how the scanner learns it has to be replaced.
+    std::atomic<bool> running{false};
+    ~App() {
 #ifdef _WIN32
         if (event) CloseHandle(event);
 #endif
@@ -162,7 +189,29 @@ bool AudioCapture::Initialize() {
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
         __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(enumerator_.GetAddressOf()));
     if (FAILED(hr)) return false;
+    perApp_ = ProcessLoopbackAvailable();
     BuildSources(0); return !sources_.empty();
+#else
+    return false;
+#endif
+}
+
+// Whether process loopback exists at all. Activating a client for our own
+// process is enough to tell, and nothing stays open afterwards. Unlike
+// Initialize() this never touches the microphone, so the addon can ask at load.
+bool AudioCapture::ProcessLoopbackAvailable() {
+#ifdef _WIN32
+    // Balanced here, so the calling thread is left exactly as it was: S_OK and
+    // S_FALSE are both undone, and a thread that is already an STA
+    // (RPC_E_CHANGED_MODE) is not touched at all. The activation works there too.
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool available = false;
+    {
+        auto probe = std::make_shared<Source>();
+        available = InitializeProcess(probe, GetCurrentProcessId(), true);
+    }   // released before COM is balanced
+    if (SUCCEEDED(apartment)) CoUninitialize();
+    return available;
 #else
     return false;
 #endif
@@ -170,19 +219,32 @@ bool AudioCapture::Initialize() {
 
 void AudioCapture::BuildSources(uint32_t processId) {
 #ifdef _WIN32
-    auto game = std::make_shared<Source>(); game->info = {"game", "process", "Game"};
     auto mic = std::make_shared<Source>(); mic->info = {"mic", "microphone", "Microphone"};
-    auto other = std::make_shared<Source>(); other->info = {"other", "process", "Other apps"};
-    const bool split = InitializeProcess(game, processId, true) && InitializeProcess(other, processId, false);
     InitializeEndpoint(mic, eCapture);
-    if (split) { mode_ = "separate"; processError_.clear(); sources_ = {game, mic, other}; }
-    else {
-        // Keep the reason before the failed sources are discarded, otherwise a
-        // fallback to mixed is indistinguishable from "not attempted".
-        processError_ = !game->info.error.empty() ? game->info.error : other->info.error;
+    std::vector<std::shared_ptr<Source>> sources; std::string mode, error; uint32_t gamePid = 0;
+    if (perApp_) {
+        // Every other app is captured on its own by the scanner, so the only
+        // process source built here is the game's.
+        mode = "separate";
+        if (processId) {
+            auto game = std::make_shared<Source>(); game->info = {"game", "process", "Game"};
+            if (InitializeProcess(game, processId, true)) { sources.push_back(game); gamePid = processId; }
+            // Without a game source the lanes still work. The pid is forgotten
+            // too, so the scanner does not set that tree aside for a source
+            // that does not exist.
+            else error = game->info.error;
+        }
+        sources.push_back(mic);
+    } else {
+        // Keep the reason, otherwise a fallback to mixed is indistinguishable
+        // from "not attempted".
+        error = "process loopback unavailable";
         auto mixed = std::make_shared<Source>(); mixed->info = {"game", "system", "System mix"}; InitializeEndpoint(mixed, eRender);
-        mode_ = "mixed"; sources_ = {mixed, mic};
+        mode = "mixed"; sources = {mixed, mic};
     }
+    // Only called with the scanner stopped; the lock is for the readers.
+    std::lock_guard lock(mutex_);
+    gamePid_ = gamePid; mode_ = std::move(mode); processError_ = std::move(error); sources_ = std::move(sources);
 #else
     (void)processId;
 #endif
@@ -199,12 +261,21 @@ std::string AudioCapture::GetMode() const { std::lock_guard lock(mutex_); return
 std::string AudioCapture::GetProcessError() const { std::lock_guard lock(mutex_); return processError_; }
 
 bool AudioCapture::Start(AudioCallback callback) {
+    // Stop() joined the mixer thread, so nothing is reading callback_ here.
     if (capturing_.exchange(true)) return false; callback_ = std::move(callback);
 #ifdef _WIN32
-    std::lock_guard lock(mutex_);
-    for (auto& source : sources_) if (source->info.available && source->info.enabled && SUCCEEDED(source->client->Start())) {
-        source->info.active = true; source->running.store(true);
-        source->thread = std::thread(&AudioCapture::CaptureLoop, this, source);
+    {
+        std::lock_guard lock(mutex_);
+        for (auto& source : sources_) if (source->info.available && source->info.enabled && SUCCEEDED(source->client->Start())) {
+            source->info.active = true; source->running.store(true);
+            source->thread = std::thread(&AudioCapture::CaptureLoop, this, source);
+        }
+    }
+    if (perApp_) {
+        { std::lock_guard mix(mixMutex_); mixers_ = {}; }
+        { std::lock_guard wake(scanMutex_); scanNow_ = false; }
+        scanThread_ = std::thread(&AudioCapture::ScanLoop, this);
+        mixThread_ = std::thread(&AudioCapture::MixLoop, this);
     }
 #endif
     return true;
@@ -212,10 +283,248 @@ bool AudioCapture::Start(AudioCallback callback) {
 
 void AudioCapture::Stop() {
     capturing_.store(false);
+    // The scanner starts and stops app captures, so it goes first; then the
+    // mixer, which is the only lane thread that uses the callback; then the
+    // apps, which nothing can add to any more. No lock is held across a join.
+    { std::lock_guard wake(scanMutex_); scanNow_ = true; }
+    scanWake_.notify_all();
+    if (scanThread_.joinable()) scanThread_.join();
+    if (mixThread_.joinable()) mixThread_.join();
+    StopApps();
 #ifdef _WIN32
     for (auto& source : sources_) { source->running.store(false); if (source->client) source->client->Stop(); if (source->event) SetEvent(source->event); }
     for (auto& source : sources_) { if (source->thread.joinable()) source->thread.join(); source->info.active = false; }
 #endif
+}
+
+void AudioCapture::StopApps() {
+    std::map<uint32_t, std::shared_ptr<App>> apps;
+    { std::lock_guard lock(mutex_); apps.swap(apps_); }
+    for (auto& entry : apps) {
+        auto& app = entry.second;
+        app->running.store(false);
+#ifdef _WIN32
+        if (app->client) app->client->Stop();
+        if (app->event) SetEvent(app->event);
+#endif
+    }
+    for (auto& entry : apps) if (entry.second->thread.joinable()) entry.second->thread.join();
+}
+
+int AudioCapture::MixedLaneIndex(AudioLane lane) {
+    return lane == AudioLane::Discord ? 0 : lane == AudioLane::Music ? 1 : lane == AudioLane::Other ? 2 : -1;
+}
+
+void AudioCapture::ScanLoop() {
+#ifdef _WIN32
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    // Its own enumerator rather than enumerator_, which belongs to the thread
+    // that called Initialize() and may live in a different apartment.
+    CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+        __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(scanEnumerator_.GetAddressOf()));
+    while (capturing_.load()) {
+        ScanOnce();
+        std::unique_lock lock(scanMutex_);
+        scanWake_.wait_for(lock, std::chrono::seconds(2), [this] { return scanNow_ || !capturing_.load(); });
+        scanNow_ = false;
+    }
+    scanEnumerator_.Reset();
+    if (SUCCEEDED(apartment)) CoUninitialize();
+#endif
+}
+
+void AudioCapture::ScanOnce() {
+#ifdef _WIN32
+    // Every process that has an audio session on any active output device.
+    std::vector<uint32_t> sessionPids;
+    ComPtr<IMMDeviceCollection> devices;
+    if (scanEnumerator_ && SUCCEEDED(scanEnumerator_->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &devices))) {
+        UINT deviceCount = 0; devices->GetCount(&deviceCount);
+        for (UINT d = 0; d < deviceCount; ++d) {
+            ComPtr<IMMDevice> device; ComPtr<IAudioSessionManager2> manager; ComPtr<IAudioSessionEnumerator> sessions;
+            if (FAILED(devices->Item(d, &device))) continue;
+            if (FAILED(device->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL, nullptr,
+                    reinterpret_cast<void**>(manager.GetAddressOf())))) continue;
+            if (FAILED(manager->GetSessionEnumerator(&sessions))) continue;
+            int count = 0; sessions->GetCount(&count);
+            for (int i = 0; i < count; ++i) {
+                ComPtr<IAudioSessionControl> control; ComPtr<IAudioSessionControl2> control2;
+                if (FAILED(sessions->GetSession(i, &control)) || FAILED(control.As(&control2))) continue;
+                if (control2->IsSystemSoundsSession() == S_OK) continue;   // belongs to no app
+                AudioSessionState state = AudioSessionStateExpired;
+                if (FAILED(control->GetState(&state)) || state == AudioSessionStateExpired) continue;
+                DWORD pid = 0;
+                if (SUCCEEDED(control2->GetProcessId(&pid)) && pid) sessionPids.push_back(pid);
+            }
+        }
+    }
+
+    const ProcessSnapshot snapshot = ListProcesses();
+    const auto& processes = snapshot.processes;
+    const uint32_t selfRoot = AppRoot(GetCurrentProcessId(), processes);
+    AudioLaneConfig config; uint32_t gamePid;
+    { std::lock_guard lock(mutex_); config = lanes_; gamePid = gamePid_; }
+
+    // The apps that should be captured right now, by root pid.
+    struct Wanted { std::string exe, name; AudioLane lane; };
+    std::map<uint32_t, Wanted> wanted;
+    for (uint32_t pid : sessionPids) {
+        const uint32_t root = AppRoot(pid, processes);
+        if (wanted.count(root)) continue;
+        const auto found = std::find_if(processes.begin(), processes.end(),
+            [&](const ProcessInfo& p) { return p.pid == root; });
+        if (found == processes.end()) continue;   // exited between the two listings
+        // Asked of the process that owns the session, not of its app root: the
+        // game can be a child of a launcher with the same name, and its root
+        // then sits above the game's tree.
+        const AudioLane lane = LaneForApp(found->exe, IsInProcessTree(pid, gamePid, processes),
+                                          IsInProcessTree(pid, selfRoot, processes), config);
+        if (MixedLaneIndex(lane) < 0) continue;   // the game has its own source; Flash is not recorded
+        wanted[root] = {found->exe, found->windowTitle.empty() ? found->exe : found->windowTitle, lane};
+    }
+
+    // Descendants win. A capture takes a whole process tree, so an app with the
+    // game or another wanted app beneath it (Steam above a game it started)
+    // would record that sound a second time. Such an app is not captured, and
+    // its own sound is given up. Judged against every wanted app, including
+    // ones that are dropped themselves, so the deepest of a chain is the one
+    // that stays.
+    std::vector<uint32_t> wantedRoots, shadowed;
+    for (const auto& entry : wanted) wantedRoots.push_back(entry.first);
+    for (uint32_t root : wantedRoots)
+        if (HasCapturedDescendant(root, wantedRoots, gamePid, processes)) shadowed.push_back(root);
+    for (uint32_t root : shadowed) wanted.erase(root);
+    const auto isShadowed = [&](uint32_t root) { return std::find(shadowed.begin(), shadowed.end(), root) != shadowed.end(); };
+
+    std::vector<std::shared_ptr<App>> stopping, starting;
+    bool tooMany = false;
+    {
+        std::lock_guard lock(mutex_);
+        for (auto it = apps_.begin(); it != apps_.end();) {
+            auto& app = it->second;
+            const auto want = wanted.find(it->first);
+            const bool alive = std::any_of(processes.begin(), processes.end(),
+                [&](const ProcessInfo& p) { return p.pid == it->first; });
+            app->missedScans = want == wanted.end() ? app->missedScans + 1 : 0;
+            // Gone, silent for 30 s (15 scans), now above another captured app,
+            // or its capture gave up. In the last case it is still wanted and
+            // is started afresh just below.
+            if (!alive || app->missedScans >= 15 || isShadowed(it->first) || !app->running.load()) { stopping.push_back(app); it = apps_.erase(it); continue; }
+            if (want != wanted.end() && want->second.lane != app->lane) {
+                // Reassigned in Settings: its audio moves lane from now on.
+                std::lock_guard mix(mixMutex_);
+                mixers_[MixedLaneIndex(app->lane)].Remove(app->rootPid);
+                app->lane = want->second.lane;
+            }
+            ++it;
+        }
+        for (const auto& entry : wanted) {
+            if (apps_.count(entry.first)) continue;
+            if (apps_.size() >= 16) { tooMany = true; break; }
+            auto app = std::make_shared<App>();
+            app->rootPid = entry.first; app->exe = entry.second.exe; app->name = entry.second.name; app->lane = entry.second.lane;
+            apps_[entry.first] = app;
+            starting.push_back(app);
+        }
+        if (tooMany) processError_ = "more than 16 apps are making sound; some are not recorded";
+        else if (processError_.rfind("more than 16", 0) == 0) processError_.clear();
+    }
+
+    for (auto& app : stopping) {
+        app->running.store(false);
+        if (app->client) app->client->Stop();
+        if (app->event) SetEvent(app->event);
+        if (app->thread.joinable()) app->thread.join();
+        std::lock_guard mix(mixMutex_);
+        mixers_[MixedLaneIndex(app->lane)].Remove(app->rootPid);
+    }
+    for (auto& app : starting) {
+        // The same activation the game source uses, pointed at this app's tree.
+        // Once capturing_ is false Stop() is waiting for this thread, so the
+        // rest are not started.
+        auto source = std::make_shared<Source>();
+        if (!capturing_.load() || !InitializeProcess(source, app->rootPid, true)) {
+            std::lock_guard lock(mutex_); apps_.erase(app->rootPid);   // tried again on the next scan
+            continue;
+        }
+        app->client = source->client; app->capture = source->capture;
+        app->event = source->event; source->event = nullptr;          // the App owns the handle now
+        if (FAILED(app->client->Start())) { std::lock_guard lock(mutex_); apps_.erase(app->rootPid); continue; }
+        app->running.store(true);
+        app->thread = std::thread(&AudioCapture::AppLoop, this, app);
+    }
+#endif
+}
+
+// An app's capture thread. The same buffer handling as CaptureLoop, but the
+// audio goes to its lane's mixer instead of the callback. Process loopback is
+// always 48 kHz stereo float (see InitializeProcess), so nothing is converted.
+void AudioCapture::AppLoop(std::shared_ptr<App> app) {
+#ifdef _WIN32
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool failed = false;
+    while (!failed && capturing_.load() && app->running.load()) {
+        if (WaitForSingleObject(app->event, 100) != WAIT_OBJECT_0) continue;
+        UINT32 packet = 0;
+        if (FAILED(app->capture->GetNextPacketSize(&packet))) { failed = true; break; }
+        while (packet && capturing_.load() && app->running.load()) {
+            BYTE* data = nullptr; UINT32 frames = 0; DWORD flags = 0;
+            if (FAILED(app->capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr))) { failed = true; break; }
+            if (frames && !(flags & AUDCLNT_BUFFERFLAGS_SILENT)) {
+                const int64_t startUs = CaptureClockUs() - static_cast<int64_t>(frames) * 1000000 / 48000;
+                // The lane is read under the mixer's lock, so a reassignment
+                // cannot slip in between choosing the mixer and pushing to it.
+                std::lock_guard mix(mixMutex_);
+                const int index = MixedLaneIndex(app->lane);
+                if (index >= 0) mixers_[index].Push(app->rootPid, reinterpret_cast<const float*>(data), frames, startUs);
+            }
+            app->capture->ReleaseBuffer(frames);
+            if (FAILED(app->capture->GetNextPacketSize(&packet))) { failed = true; break; }
+        }
+    }
+    // A capture that failed ends its own thread; the next scan replaces it.
+    if (failed) app->running.store(false);
+    if (SUCCEEDED(apartment)) CoUninitialize();
+#else
+    (void)app;
+#endif
+}
+
+void AudioCapture::MixLoop() {
+    std::vector<LaneMixer::Packet> packets;
+    while (capturing_.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::array<bool, 3> enabled;
+        { std::lock_guard lock(mutex_); enabled = laneEnabled_; }
+        for (size_t lane = 0; lane < mixers_.size(); ++lane) {
+            packets.clear();
+            { std::lock_guard mix(mixMutex_); mixers_[lane].Pull(CaptureClockUs(), packets); }
+            // Pulled even when the lane is off, so its timeline keeps moving
+            // and nothing stale comes out when it is switched back on.
+            if (!enabled[lane] || !callback_) continue;
+            for (auto& packet : packets) {
+                AudioData value{packet.samples.data(), LaneMixer::kPacketFrames, LaneMixer::kChannels,
+                                LaneMixer::kRate, packet.startUs, kMixedLanes[lane]};
+                callback_(value);
+            }
+        }
+    }
+}
+
+void AudioCapture::SetLanes(const AudioLaneConfig& config) {
+    { std::lock_guard lock(mutex_); lanes_ = config; }
+    { std::lock_guard lock(scanMutex_); scanNow_ = true; }
+    scanWake_.notify_all();
+}
+
+std::vector<AudioAppInfo> AudioCapture::ListApps() const {
+    std::lock_guard lock(mutex_); std::vector<AudioAppInfo> result;
+    for (const auto& entry : apps_) {
+        const auto& app = entry.second;
+        result.push_back({app->exe, app->name, std::string(AudioLaneTrack(app->lane)), app->rootPid,
+                          app->running.load() && app->missedScans == 0});
+    }
+    return result;
 }
 
 void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
@@ -258,10 +567,28 @@ void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
 
 std::vector<AudioSourceInfo> AudioCapture::ListSources() const {
     std::lock_guard lock(mutex_); std::vector<AudioSourceInfo> result;
-    for (const auto& source : sources_) result.push_back(source->info); return result;
+    for (const auto& source : sources_) result.push_back(source->info);
+    if (perApp_) {
+        // The three mixed lanes, so the list stays a complete picture.
+        static constexpr std::array<const char*, 3> names{"Discord", "Music", "Other apps"};
+        for (size_t lane = 0; lane < kMixedLanes.size(); ++lane) {
+            AudioSourceInfo info; info.id = kMixedLanes[lane]; info.kind = "apps"; info.name = names[lane];
+            info.available = true; info.enabled = laneEnabled_[lane]; info.sampleRate = 48000; info.channels = 2;
+            info.active = std::any_of(apps_.begin(), apps_.end(), [&](const auto& entry) {
+                return MixedLaneIndex(entry.second->lane) == static_cast<int>(lane); });
+            result.push_back(std::move(info));
+        }
+    }
+    return result;
 }
 
 bool AudioCapture::SetSource(const std::string& id, bool enabled, float gain) {
+    for (size_t lane = 0; lane < kMixedLanes.size(); ++lane) {
+        if (id != kMixedLanes[lane]) continue;
+        // On the system-mix fallback there is no such lane, and saying so would
+        // make "Record audio" report a failure for something that is fine.
+        std::lock_guard lock(mutex_); laneEnabled_[lane] = enabled; return true;
+    }
     std::shared_ptr<Source> target;
     {
         std::lock_guard lock(mutex_);

@@ -3,6 +3,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "audio_lanes.h"
 namespace flash {
 struct AudioData {
     float* samples;       // Interleaved float samples
@@ -21,6 +22,13 @@ struct AudioSourceInfo {
     std::string error;
 };
 
+// One app that has an audio session, for the Settings picker.
+struct AudioAppInfo {
+    std::string exe, name, lane;   // lane is a track name: game, discord, music or other
+    uint32_t pid = 0;
+    bool capturing = false;
+};
+
 using AudioCallback = std::function<void(const AudioData& audio)>;
 
 class AudioSource {
@@ -35,5 +43,10 @@ public:
     virtual bool SetSource(const std::string& id, bool enabled, float gain) = 0;
     virtual std::string GetMode() const = 0;
     virtual std::string GetProcessError() const = 0;
+    // Per-app lanes. The defaults describe a backend that records desktop sound
+    // as one stream, which is what Linux does for now.
+    virtual void SetLanes(const AudioLaneConfig&) {}
+    virtual std::vector<AudioAppInfo> ListApps() const { return {}; }
+    virtual bool SupportsPerApp() const { return false; }
 };
 } // namespace flash

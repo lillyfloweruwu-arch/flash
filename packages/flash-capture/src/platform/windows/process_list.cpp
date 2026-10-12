@@ -28,6 +28,17 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM param) {
     if (!IsWindowVisible(window)) return TRUE;
     // An owned window is a dialog or a tool window, never the app's main one.
     if (GetWindow(window, GW_OWNER)) return TRUE;
+
+    DWORD pid = 0;
+    const DWORD thread = GetWindowThreadProcessId(window, &pid);
+    if (!pid) return TRUE;
+    // Reading the title of a window in this process sends it a message and
+    // waits for the thread that owns it. The audio scanner calls this from its
+    // own thread, and the main thread may be waiting to join that thread at
+    // that moment, which would hang both. Those windows are Flash's own, and
+    // no caller on another thread needs their titles.
+    if (pid == GetCurrentProcessId() && thread != GetCurrentThreadId()) return TRUE;
+
     const int length = GetWindowTextLengthW(window);
     if (length <= 0) return TRUE;
 
@@ -35,10 +46,6 @@ BOOL CALLBACK CollectWindow(HWND window, LPARAM param) {
     const int written = GetWindowTextW(window, title.data(), length + 1);
     if (written <= 0) return TRUE;
     title.resize(static_cast<size_t>(written));
-
-    DWORD pid = 0;
-    GetWindowThreadProcessId(window, &pid);
-    if (!pid) return TRUE;
 
     // First titled top-level window wins. A game has exactly one that matters,
     // and emplace leaves an already-recorded title alone.
@@ -68,6 +75,7 @@ ProcessSnapshot ListProcesses() {
         do {
             ProcessInfo info;
             info.pid = static_cast<uint32_t>(entry.th32ProcessID);
+            info.parentPid = static_cast<uint32_t>(entry.th32ParentProcessID);
             info.exe = Narrow(entry.szExeFile);
             if (const auto found = titles.find(info.pid); found != titles.end()) {
                 info.windowTitle = found->second;

@@ -104,6 +104,8 @@ bool awaitingFirstKeyframe = false;
 Quality quality;
 // Whether each track is recorded, in kAudioTrackOrder.
 std::array<bool, kAudioTrackCount> audioEnabled{true, true, true, true, true};
+// Which executables go to the Discord and Music lanes. Lower case.
+AudioLaneConfig audioLanes{{"discord.exe"}, {"spotify.exe"}};
 std::string pipelineError;
 std::unique_ptr<VoiceTrigger> voiceTrigger;
 VoiceStatus voiceFallbackStatus{false, "", "Voice recognition is unavailable."};
@@ -222,6 +224,8 @@ bool BuildPipeline(bool initializeAudio) {
     screen->SetGpuOutputEnabled(nextEncoder->IsHardwareAccelerated());
     std::unique_ptr<AudioSource> audio;
     if (initializeAudio) { audio = CreateAudioSource(); audio->Initialize(); }
+    // A re-created source keeps the user's lists.
+    if (initializeAudio && audio) audio->SetLanes(audioLanes);
     else { std::lock_guard lock(stateMutex); audio = std::move(audioCapture); }
     auto ring = std::make_unique<RingBuffer>(bufferSeconds, quality.fps);
     std::scoped_lock lock(stateMutex, encodeMutex);
@@ -469,9 +473,43 @@ Napi::Value SetAudioTracks(const Napi::CallbackInfo& info) {
         if (!field.IsBoolean()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
         next[i] = field.As<Napi::Boolean>();
     }
-    std::lock_guard lock(stateMutex); audioEnabled = next;
-    if (audioCapture) for (size_t i = 0; i < kAudioTrackCount; ++i) audioCapture->SetSource(std::string(kAudioTrackOrder[i]), audioEnabled[i], 1.0f);
+    AudioSource* audio;
+    { std::lock_guard lock(stateMutex); audioEnabled = next; audio = audioCapture.get(); }
+    // Not under stateMutex. Switching a source off joins its capture thread,
+    // and that thread takes stateMutex to hand over every packet: holding it
+    // here left the two waiting for each other, and the switch hung the app.
+    if (audio) for (size_t i = 0; i < kAudioTrackCount; ++i) audio->SetSource(std::string(kAudioTrackOrder[i]), next[i], 1.0f);
     return info.Env().Undefined();
+}
+Napi::Value SetAudioLanes(const Napi::CallbackInfo& info) {
+    const char* shape = "audio lanes must be { discord: string[], music: string[] }";
+    if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    auto value = info[0].As<Napi::Object>();
+    AudioLaneConfig next;
+    for (auto [name, list] : {std::pair<const char*, std::vector<std::string>*>{"discord", &next.discord}, {"music", &next.music}}) {
+        if (!value.Get(name).IsArray()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+        auto array = value.Get(name).As<Napi::Array>();
+        for (uint32_t i = 0; i < array.Length() && i < 64; ++i) {
+            const Napi::Value entry = array.Get(i);
+            if (!entry.IsString()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+            list->push_back(LowerAscii(entry.As<Napi::String>().Utf8Value()));
+        }
+    }
+    std::lock_guard lock(stateMutex); audioLanes = next;
+    if (audioCapture) audioCapture->SetLanes(audioLanes);
+    return info.Env().Undefined();
+}
+Napi::Value ListAudioApps(const Napi::CallbackInfo& info) {
+    std::lock_guard lock(stateMutex); auto result = Napi::Array::New(info.Env());
+    if (!audioCapture) return result;
+    uint32_t i = 0;
+    for (const auto& app : audioCapture->ListApps()) {
+        auto entry = Napi::Object::New(info.Env());
+        entry.Set("exe", app.exe); entry.Set("name", app.name); entry.Set("lane", app.lane);
+        entry.Set("pid", app.pid); entry.Set("capturing", app.capturing);
+        result.Set(i++, entry);
+    }
+    return result;
 }
 Napi::Value SetBufferLength(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "buffer length must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t seconds = info[0].As<Napi::Number>().Uint32Value(); if (seconds < 1 || seconds > 600) { Napi::RangeError::New(info.Env(), "buffer length must be between 1 and 600 seconds").ThrowAsJavaScriptException(); return info.Env().Undefined(); } std::lock_guard lock(stateMutex); bufferSeconds = seconds; if (ringBuffer) ringBuffer->SetMaxDuration(seconds, quality.fps); return info.Env().Undefined(); }
 
@@ -854,10 +892,13 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     capabilities.Set("smartRender", false);
     capabilities.Set("smartRenderError", "Smart render is unsupported on Linux; trim uses keyframe stream copy.");
 #endif
+    capabilities.Set("perAppAudio", PlatformSupportsPerAppAudio());
     exports.Set("capabilities", capabilities);
     exports.Set("initialize", Napi::Function::New(env, Invoke<&AddonState::Initialize>, "Initialize", this)); exports.Set("startReplayBuffer", Napi::Function::New(env, Invoke<&AddonState::StartReplayBuffer>, "StartReplayBuffer", this)); exports.Set("stopReplayBuffer", Napi::Function::New(env, Invoke<&AddonState::StopReplayBuffer>, "StopReplayBuffer", this));
     exports.Set("saveClip", Napi::Function::New(env, Invoke<&AddonState::SaveClip>, "SaveClip", this)); exports.Set("trimClip", Napi::Function::New(env, Invoke<&AddonState::TrimClipAsync>, "TrimClipAsync", this)); exports.Set("getStatus", Napi::Function::New(env, Invoke<&AddonState::GetStatus>, "GetStatus", this)); exports.Set("setCurrentGame", Napi::Function::New(env, Invoke<&AddonState::SetCurrentGame>, "SetCurrentGame", this)); exports.Set("setBufferLength", Napi::Function::New(env, Invoke<&AddonState::SetBufferLength>, "SetBufferLength", this)); exports.Set("exportClip", Napi::Function::New(env, Invoke<&AddonState::ExportClipBinding>, "ExportClipBinding", this)); exports.Set("setClipsDir", Napi::Function::New(env, Invoke<&AddonState::SetClipsDir>, "SetClipsDir", this));
     exports.Set("setQuality", Napi::Function::New(env, Invoke<&AddonState::SetQuality>, "SetQuality", this)); exports.Set("listDisplays", Napi::Function::New(env, Invoke<&AddonState::ListDisplays>, "ListDisplays", this)); exports.Set("setDisplay", Napi::Function::New(env, Invoke<&AddonState::SetDisplay>, "SetDisplay", this)); exports.Set("setAudioTracks", Napi::Function::New(env, Invoke<&AddonState::SetAudioTracks>, "SetAudioTracks", this));
+    exports.Set("setAudioLanes", Napi::Function::New(env, Invoke<&AddonState::SetAudioLanes>, "SetAudioLanes", this));
+    exports.Set("listAudioApps", Napi::Function::New(env, Invoke<&AddonState::ListAudioApps>, "ListAudioApps", this));
     exports.Set("decodeClipAudio", Napi::Function::New(env, Invoke<&AddonState::DecodeClipAudioBinding>, "DecodeClipAudioBinding", this));
     exports.Set("getClipKeyframes", Napi::Function::New(env, Invoke<&AddonState::GetClipKeyframesBinding>, "GetClipKeyframesBinding", this));
     exports.Set("saveScreenshot", Napi::Function::New(env, Invoke<&AddonState::SaveScreenshotBinding>, "SaveScreenshotBinding", this));

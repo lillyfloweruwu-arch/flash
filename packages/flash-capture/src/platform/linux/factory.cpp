@@ -6,6 +6,7 @@ namespace flash {
 std::shared_ptr<VideoSource> CreateVideoSource() { return CreatePipeWireVideo(); }
 std::unique_ptr<AudioSource> CreateAudioSource() { return CreatePipeWireAudio(); }
 std::unique_ptr<ClipMuxer> CreateClipMuxer() { CheckLibavLicense(); return CreateLibavMuxer(); }
+bool PlatformSupportsPerAppAudio() { return false; }
 std::vector<DisplayInfo> ListPlatformDisplays() {
     // The portal chooses the source after permission. These dimensions are the
     // initial encode ceiling; PipeWire frames supply the actual source size.
