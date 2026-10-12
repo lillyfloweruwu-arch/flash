@@ -141,6 +141,7 @@ flash_add_test(flash_ring_buffer_test test/ring_buffer_test.cpp src/core/ring_bu
 flash_add_test(flash_quality_test test/quality_test.cpp)
 flash_add_test(flash_audio_track_test test/audio_track_test.cpp)
 flash_add_test(flash_audio_lanes_test test/audio_lanes_test.cpp)
+flash_add_test(flash_lane_mixer_test test/lane_mixer_test.cpp)
 flash_add_test(flash_clip_trimmer_test test/clip_trimmer_test.cpp)
 flash_add_test(flash_export_budget_test test/export_budget_test.cpp)
 flash_add_test(flash_color_space_test test/color_space_test.cpp)
