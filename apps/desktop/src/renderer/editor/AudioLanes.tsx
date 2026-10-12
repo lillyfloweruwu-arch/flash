@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { reducePeaks } from '../../shared/editor'
+import { LANE_DISPLAY_ORDER, isSilent, laneLabel } from '../../shared/audioLanes'
 import type { LiveMixTrack } from './useLiveMix'
 
 function TrackIcon({ id }: { id: string }) {
@@ -16,6 +17,24 @@ function TrackIcon({ id }: { id: string }) {
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" aria-hidden="true">
         <path d="M2 3.5h12v8H7l-3.5 2v-2H2z" />
         <path d="M5 6.5h6M5 8.5h4" strokeLinecap="round" />
+      </svg>
+    )
+  }
+  if (id === 'discord') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M2.5 9.5v-2a5.5 5.5 0 0111 0v2" />
+        <rect x="1.5" y="9" width="3" height="4.5" rx="1" />
+        <rect x="11.5" y="9" width="3" height="4.5" rx="1" />
+      </svg>
+    )
+  }
+  if (id === 'music') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M6 12V3.5l7-1.5v8.5" />
+        <circle cx="4.2" cy="12" r="1.8" />
+        <circle cx="11.2" cy="10.5" r="1.8" />
       </svg>
     )
   }
@@ -93,10 +112,10 @@ function Waveform({ track }: { track: LiveMixTrack }) {
 }
 
 const LANE_SHELL = 'w-full overflow-hidden rounded-lg'
-const LANE_GRID = '32px 54px minmax(60px, 1fr) 88px 42px'
-// Every clip carries these three, so the placeholder can name them rather than
+const LANE_GRID = '32px 84px minmax(60px, 1fr) 88px 42px'
+// Every clip carries these, so the placeholder can name them rather than
 // showing anonymous grey bars.
-const EXPECTED_TRACKS = ['game', 'mic', 'other'] as const
+const EXPECTED_TRACKS = LANE_DISPLAY_ORDER
 
 export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, loading }: {
   tracks: LiveMixTrack[]
@@ -106,6 +125,11 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
   onMuteToggle: (id: string) => void
   loading?: boolean
 }) {
+  // Every new clip carries all five tracks and most are empty. An empty lane
+  // is shown, so the layout does not jump between clips, but it is dimmed and
+  // its controls are off: there is nothing in it to mute or boost.
+  const silent = useMemo(() => new Set(tracks.filter(track => isSilent(track.samples)).map(track => track.id)), [tracks])
+
   if (tracks.length === 0 && loading) {
     return (
       <div className={LANE_SHELL} style={{ maxWidth: 900, borderBottom: '1px solid var(--edge-soft)' }}>
@@ -117,7 +141,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
               <TrackIcon id={id} />
             </span>
             <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--muted-3)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              {id}
+              {laneLabel(id)}
             </span>
             <span className="lane-skeleton" style={{ height: 6 }} aria-hidden="true" />
             <span className="lane-skeleton" style={{ height: 3, width: 112 }} aria-hidden="true" />
@@ -134,7 +158,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
   return (
     <div className={LANE_SHELL} style={{ maxWidth: 900, borderBottom: '1px solid var(--edge-soft)' }}>
       {tracks.map((track, index) => {
-        const disabled = track.samples.length === 0
+        const disabled = track.samples.length === 0 || silent.has(track.id)
         const isMuted = muted.has(track.id)
         const gain = gains[track.id] ?? 1
         return (
@@ -150,7 +174,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
             <button
               type="button"
               disabled={disabled}
-              aria-label={isMuted ? `Unmute ${track.id}` : `Mute ${track.id}`}
+              aria-label={isMuted ? `Unmute ${laneLabel(track.id)}` : `Mute ${laneLabel(track.id)}`}
               aria-pressed={isMuted}
               onClick={() => onMuteToggle(track.id)}
               className="relative flex h-8 w-8 items-center justify-center rounded-md"
@@ -164,10 +188,12 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
             </button>
 
             <span className="caps" style={{ color: 'var(--fg)', fontSize: 10.5 }}>
-              {track.id}
+              {laneLabel(track.id)}
             </span>
 
-            <Waveform track={track} />
+            {silent.has(track.id) && track.samples.length > 0
+              ? <span style={{ fontSize: 11, color: 'var(--muted-3)' }}>no sound</span>
+              : <Waveform track={track} />}
 
             <input
               className="audio-gain-range"
@@ -177,7 +203,7 @@ export function AudioLanes({ tracks, gains, onGainChange, muted, onMuteToggle, l
               step={0.01}
               value={gain}
               disabled={disabled}
-              aria-label={`${track.id} gain`}
+              aria-label={`${laneLabel(track.id)} gain`}
               onChange={event => onGainChange(track.id, event.currentTarget.valueAsNumber)}
               style={{ ['--filled' as string]: `${gain * 50}%` }}
             />

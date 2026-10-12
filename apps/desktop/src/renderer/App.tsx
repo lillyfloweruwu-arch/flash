@@ -1,6 +1,7 @@
 import { usePlaybackVisibility } from './usePlaybackVisibility'
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { DEFAULT_THEME } from '../shared/themes'
+import { DEFAULT_AUDIO_LANES } from '../shared/audioLanes'
 import { clipUrl, matchesQuery } from '../shared/editor'
 import type { AutostartState } from '../preload/preload'
 import { clearSelection, selectRange, toggleSelection } from '../shared/selection'
@@ -173,7 +174,7 @@ export default function App() {
     shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
     voiceEnabled: false, voicePhrase: '', voiceRawFloor: 0.5, voiceCooldownMs: 3000,
     quality: '1080p 60fps', bufferLength: 30,
-    audioCapture: true, autoSave: true, notifications: true, autoDeleteDays: 0,
+    audioCapture: true, audioLanes: DEFAULT_AUDIO_LANES, autoSave: true, notifications: true, autoDeleteDays: 0,
     perGame: {},
   })
   const [encoder, setEncoder] = useState('none')

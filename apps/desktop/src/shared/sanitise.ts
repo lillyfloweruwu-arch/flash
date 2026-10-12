@@ -1,4 +1,5 @@
 import { THEMES } from './themes.ts'
+import { sanitiseAudioLanes } from './audioLanes.ts'
 
 export const QUALITY_OPTIONS = [
   '720p 30fps', '720p 60fps',
@@ -31,6 +32,11 @@ export function sanitise<T extends Record<string, unknown>>(defaults: T, parsed:
         clean[key] = Object.fromEntries(Object.entries(value).filter(([exe, name]) =>
           exe.trim() && typeof name === 'string' && name.trim()).map(([exe, name]) => [exe, (name as string).trim()]))
       }
+      continue
+    }
+    if (key === 'audioLanes') {
+      const lanes = sanitiseAudioLanes(value)
+      if (lanes) clean[key] = lanes
       continue
     }
     if (key === 'ignoredGames') {

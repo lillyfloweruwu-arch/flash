@@ -5,6 +5,7 @@ import { toAccelerator } from '../shared/accelerator'
 import { resolveGameSettings } from '../shared/perGame'
 import { countSyllables } from '../shared/syllables'
 import type { AutostartState } from '../preload/preload'
+import { assignApp, laneLabel } from '../shared/audioLanes'
 import { Dropdown } from './Dropdown'
 import { Toggle, formatBytes } from './ui'
 
@@ -25,6 +26,7 @@ export interface Settings {
   quality: string
   bufferLength: number
   audioCapture: boolean
+  audioLanes: { discord: string[]; music: string[] }
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
@@ -115,6 +117,84 @@ function Row({ label, hint, children }: { label: string; hint?: React.ReactNode;
       </div>
       <div className="shrink-0 flex items-center gap-3">{children}</div>
     </div>
+  )
+}
+
+type AudioApp = { exe: string; name: string; lane: string; capturing: boolean }
+
+// Which apps are recorded to the Discord and Music lanes. Lists what is making
+// sound now, then anything assigned that is not running, so an assignment can
+// be undone without starting the app.
+function AppAudio({ lanes, onChange }: {
+  lanes: { discord: string[]; music: string[] }
+  onChange: (next: { discord: string[]; music: string[] }) => void
+}) {
+  const [state, setState] = useState<{ supported: boolean; apps: AudioApp[] } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = () => window.flash.listAudioApps().then(result => { if (!cancelled) setState(result) }).catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 2000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [])
+
+  if (!state) return null
+  if (!state.supported) {
+    return (
+      <Row label="App audio" hint={window.flash.platform === 'linux'
+        ? 'Per-app audio is not available on Linux yet. Desktop sound is recorded to Other apps.'
+        : 'Per-app audio is not available on this version of Windows. Desktop sound is recorded to one track.'}>
+        <span style={{ fontSize: 12, color: 'var(--muted-2)' }}>Not available</span>
+      </Row>
+    )
+  }
+
+  const running = new Set(state.apps.map(app => app.exe.toLowerCase()))
+  const assignedOnly = [...lanes.discord.map(exe => ({ exe, lane: 'discord' })), ...lanes.music.map(exe => ({ exe, lane: 'music' }))]
+    .filter(entry => !running.has(entry.exe))
+  const choices = [
+    { value: 'discord', label: laneLabel('discord') },
+    { value: 'music', label: laneLabel('music') },
+    { value: 'other', label: laneLabel('other') },
+  ]
+  // The list is the source of truth for the control, so a change shows at once
+  // rather than after the capture engine's next two-second scan.
+  const laneOf = (exe: string) => {
+    const name = exe.toLowerCase()
+    return lanes.discord.includes(name) ? 'discord' : lanes.music.includes(name) ? 'music' : 'other'
+  }
+
+  return (
+    <Row label="App audio" hint="Choose which apps are recorded to the Discord and Music lanes. Everything else goes to Other apps.">
+      <div className="flex flex-col gap-2" style={{ minWidth: 300 }}>
+        {state.apps.length === 0 && assignedOnly.length === 0 && (
+          <span style={{ fontSize: 12, color: 'var(--muted-2)' }}>No apps are making sound right now.</span>
+        )}
+        {state.apps.map(app => (
+          <div key={app.exe} className="flex items-center gap-3">
+            <span className="flex-1 truncate" style={{ fontSize: 12, color: 'var(--fg)' }} title={app.exe}>
+              {app.name}
+            </span>
+            {app.lane === 'game'
+              ? <span style={{ fontSize: 12, color: 'var(--muted-2)', width: 132 }}>{laneLabel('game')}</span>
+              : <Dropdown value={laneOf(app.exe)} options={choices} width={132} title={`Lane for ${app.name}`}
+                  onChange={lane => onChange(assignApp(lanes, app.exe, lane as 'discord' | 'music' | 'other'))} />}
+          </div>
+        ))}
+        {assignedOnly.map(entry => (
+          <div key={entry.exe} className="flex items-center gap-3">
+            <span className="flex-1 truncate" style={{ fontSize: 12, color: 'var(--muted-2)' }}>
+              {entry.exe} <span style={{ color: 'var(--muted-3)' }}>· not running · {laneLabel(entry.lane)}</span>
+            </span>
+            <button type="button" className="btn btn-sm btn-ghost" aria-label={`Remove ${entry.exe}`}
+              onClick={() => onChange(assignApp(lanes, entry.exe, 'other'))}>
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+    </Row>
   )
 }
 
@@ -367,9 +447,12 @@ export function SettingsView({ previewClip, settings, onChange, storage, encoder
                 width={170}
               />
             </Row>
-            <Row label="Record audio" hint="Game, system and microphone, each on its own track.">
+            <Row label="Record audio" hint="Game, microphone, Discord, music and other apps, each on its own track.">
               <Toggle label="Record audio" on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
             </Row>
+            {settings.audioCapture && (
+              <AppAudio lanes={settings.audioLanes} onChange={audioLanes => onChange({ audioLanes })} />
+            )}
             {autostart.supported && (
               <Row label={window.flash.platform === 'win32' ? 'Start with Windows' : 'Start with your computer'}
                 hint={autostart.managedByWindows

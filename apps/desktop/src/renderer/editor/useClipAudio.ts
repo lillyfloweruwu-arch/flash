@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { LiveMixTrack } from './useLiveMix'
 import { createDecodeQueue } from '../../shared/decodeQueue'
+import { sortLanes } from '../../shared/audioLanes'
 import { usePlaybackVisibility } from '../usePlaybackVisibility'
 
 const requestDecode = createDecodeQueue((path: string) => window.flash.decodeClipAudio(path))
@@ -36,7 +37,7 @@ export function useClipAudio(filePath: string) {
           console.error(`Could not decode audio for ${filePath}: ${result.error}`)
           return
         }
-        setTracks(result.tracks.map(track => ({ ...track, sampleRate: result.sampleRate })))
+        setTracks(sortLanes(result.tracks.map(track => ({ ...track, sampleRate: result.sampleRate }))))
       }).catch(error => {
         if (cancelled) return
         setLoading(false)

@@ -24,6 +24,7 @@ import { clipTimestamp, firstFreeName, gameFolderName, sidecarPath } from '../sh
 import { migrateSidecars, readSidecar, writeSidecar, reserveOutput } from '../shared/clipFiles'
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
+import { DEFAULT_AUDIO_LANES, type AudioLanesSetting, type AudioTrackId } from '../shared/audioLanes'
 import { decideAutostart } from '../shared/autostart'
 import { clipPathFromUrl, captureCommand, isLinuxInfrastructure, type CaptureCommand } from '../shared/platform'
 import { linuxAutostartEnabled, setLinuxAutostart, linuxProcessSnapshot } from './linux'
@@ -64,6 +65,7 @@ const DEFAULTS = {
   quality: '1080p 60fps',
   bufferLength: 30,
   audioCapture: true,
+  audioLanes: DEFAULT_AUDIO_LANES as AudioLanesSetting,
   autoSave: true,
   notifications: true,
   autoDeleteDays: 0,  // 0 = never
@@ -299,7 +301,7 @@ type CaptureAddon = {
     maxBytes: number; maxHeight?: number; startSeconds?: number; endSeconds?: number
     // Gains are keyed by track name so a caller cannot silence the wrong lane
     // by miscounting. Omitting either leaves the export unchanged.
-    gains?: { game?: number; mic?: number; other?: number }
+    gains?: Partial<Record<AudioTrackId, number>>
     saturation?: number
     // 'auto' takes the best codec the GPU can encode; the result says which.
     codec?: ExportCodecChoice
@@ -328,7 +330,10 @@ type CaptureAddon = {
   setDisplay?(id: number): void
   // All three recorded tracks at once. The engine keeps them separate so the
   // editor can mix them; this is the blanket on/off.
-  setAudioTracks?(tracks: { game: boolean; mic: boolean; other: boolean }): void
+  setAudioTracks?(tracks: Record<AudioTrackId, boolean>): void
+  setAudioLanes?(lanes: AudioLanesSetting): void
+  listAudioApps?(): { exe: string; name: string; lane: string; pid: number; capturing: boolean }[]
+  capabilities?: { smartRender?: boolean; perAppAudio?: boolean }
   listProcesses?(): ProcessSnapshot
   setVoiceEnabled?(enabled: boolean): void
   setVoicePhrases?(phrases: string[]): boolean
@@ -394,8 +399,15 @@ function configuredVoicePhrases(): string[] {
 // thought was silent.
 function applyAudioCapture() {
   const on = settings.audioCapture
-  try { captureAddon?.setAudioTracks?.({ game: on, mic: on, other: on }) }
+  try { captureAddon?.setAudioTracks?.({ game: on, mic: on, other: on, discord: on, music: on }) }
   catch (error) { console.warn('Could not apply audio capture setting', error) }
+}
+
+// Which apps are recorded to the Discord and Music lanes. Applied to the
+// running capture; nothing needs restarting and saved clips are not touched.
+function applyAudioLanes() {
+  try { captureAddon?.setAudioLanes?.(settings.audioLanes) }
+  catch (error) { console.warn('Could not apply audio lanes', error) }
 }
 
 function applyVoicePhrases() {
@@ -1362,7 +1374,7 @@ function setupIPC() {
   ipcMain.handle('save-clip-edit', async (_event, filePath: string, options: {
     startSeconds: number
     endSeconds: number
-    gains?: { game?: number; mic?: number; other?: number }
+    gains?: Partial<Record<AudioTrackId, number>>
     saturation?: number
     reEncode: boolean
   }) => {
@@ -1521,6 +1533,7 @@ function setupIPC() {
       applyCaptureSettings()
     }
     if (changed.audioCapture !== undefined) applyAudioCapture()
+    if (changed.audioLanes !== undefined) applyAudioLanes()
     if (changed.autoDeleteDays !== undefined) pruneOldClips()
     if (changed.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (changed.overlay !== undefined || changed.overlayPosition !== undefined) updateOverlay()
@@ -1542,6 +1555,19 @@ function setupIPC() {
     ...setAutostart(enabled === true), supported: process.platform === 'linux' || (process.platform === 'win32' && app.isPackaged),
   }))
   ipcMain.handle('get-learned-games', () => ({ ...learnedGames() }))
+  // What the Settings picker shows: apps that have an audio session right now,
+  // and which lane each is recorded to.
+  ipcMain.handle('list-audio-apps', () => {
+    const supported = captureAddon?.capabilities?.perAppAudio === true
+    if (!supported) return { supported: false, apps: [] }
+    try {
+      const apps = captureAddon?.listAudioApps?.() ?? []
+      return { supported: true, apps: apps.map(({ exe, name, lane, capturing }) => ({ exe, name, lane, capturing })) }
+    } catch (error) {
+      console.warn('Could not list audio apps', error)
+      return { supported: true, apps: [] }
+    }
+  })
   ipcMain.handle('forget-game', (_event, exe: string) => {
     const learned = { ...learnedGames() }
     delete learned[exe.toLowerCase()]
@@ -1854,6 +1880,7 @@ app.on('ready', () => {
     if (status.error) console.warn('Capture init warning:', status.error)
     // Auto-start replay buffer
     applyCaptureSettings(null)
+    applyAudioLanes()
     applyAudioCapture()
     // Voice owns the Windows default input stream and is deliberately not tied
     // to replay-buffer state. Once enabled it listens for the lifetime of Flash.

@@ -43,6 +43,7 @@ export interface Settings {
   quality: string
   bufferLength: number
   audioCapture: boolean
+  audioLanes: { discord: string[]; music: string[] }
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
@@ -95,7 +96,7 @@ contextBridge.exposeInMainWorld('flash', {
   saveClipEdit: (filePath: string, options: {
     startSeconds: number
     endSeconds: number
-    gains?: { game?: number; mic?: number; other?: number }
+    gains?: Partial<Record<'game' | 'mic' | 'other' | 'discord' | 'music', number>>
     saturation?: number
     reEncode: boolean
   }) => ipcRenderer.invoke('save-clip-edit', filePath, options),
@@ -114,6 +115,7 @@ contextBridge.exposeInMainWorld('flash', {
   getAutostart: () => ipcRenderer.invoke('autostart-status'),
   setAutostart: (enabled: boolean) => ipcRenderer.invoke('set-autostart', enabled),
   getLearnedGames: () => ipcRenderer.invoke('get-learned-games'),
+  listAudioApps: () => ipcRenderer.invoke('list-audio-apps'),
   forgetGame: (exe: string) => ipcRenderer.invoke('forget-game', exe),
   identifyGame: (exe: string, name: string | null) => ipcRenderer.invoke('identify-game', exe, name),
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => {
@@ -186,7 +188,7 @@ export type FlashAPI = {
   saveClipEdit: (filePath: string, options: {
     startSeconds: number
     endSeconds: number
-    gains?: { game?: number; mic?: number; other?: number }
+    gains?: Partial<Record<'game' | 'mic' | 'other' | 'discord' | 'music', number>>
     saturation?: number
     reEncode: boolean
   }) => Promise<{ path?: string; duration?: number; actualStartSeconds?: number; error?: string }>
@@ -208,6 +210,7 @@ export type FlashAPI = {
   getAutostart: () => Promise<AutostartState>
   setAutostart: (enabled: boolean) => Promise<AutostartState>
   getLearnedGames: () => Promise<Record<string, string>>
+  listAudioApps: () => Promise<{ supported: boolean; apps: { exe: string; name: string; lane: string; capturing: boolean }[] }>
   forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => () => void
