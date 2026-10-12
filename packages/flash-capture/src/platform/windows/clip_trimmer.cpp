@@ -1,4 +1,5 @@
 #include "media_output.h"
+#include "audio_track_order.h"
 #include "../../core/clip_trimmer.h"
 #include "../../core/smart_render.h"
 #include "color_space.h"
@@ -151,7 +152,14 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         size_t video = (std::numeric_limits<size_t>::max)();
         ComPtr<IMFMediaType> sourceVideoType;
         uint32_t width = 0, height = 0, fps = 0;
-        for (DWORD index = 0;; ++index) {
+        // Audio tracks are copied in the order the file holds them. The reader
+        // lists them in an order of its own (see audio_track_order.h), and
+        // adding them to the writer in that order turned the tracks of every
+        // trimmed clip back to front.
+        const std::vector<DWORD> fileAudio = AudioStreamsInFileOrder(wideInput);
+        size_t audioSeen = 0;
+        for (DWORD slot = 0;; ++slot) {
+            DWORD index = slot;
             ComPtr<IMFMediaType> type;
             const HRESULT result = reader->GetNativeMediaType(index, 0, &type);
             if (result == MF_E_INVALIDSTREAMNUMBER) break;
@@ -159,6 +167,11 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
             GUID major{};
             Check(type->GetGUID(MF_MT_MAJOR_TYPE, &major), "get native major type");
             if (major != MFMediaType_Video && major != MFMediaType_Audio) continue;
+            if (major == MFMediaType_Audio && audioSeen < fileAudio.size()) {
+                index = fileAudio[audioSeen++];
+                type.Reset();
+                Check(reader->GetNativeMediaType(index, 0, &type), "IMFSourceReader::GetNativeMediaType");
+            }
             GUID subtype{};
             Check(type->GetGUID(MF_MT_SUBTYPE, &subtype), "get native subtype");
             if (major == MFMediaType_Video && subtype != MFVideoFormat_H264)

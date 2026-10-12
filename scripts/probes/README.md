@@ -26,6 +26,7 @@ The remaining probes exercise real hardware and the desktop:
 | `audio-lands-in-place.js` | That filling the gaps does not move or flatten the real audio |
 | `audio-under-load.js` | A timestamp defect that is real in the code and does not show up in the output |
 | `process-list-vs-tasklist.js` | That the native process list agrees with `tasklist` on 330 of 332 processes |
+| `track-order.js` | Decode, export and trim read a clip's audio tracks in the reader's order, not the file's, which swapped Game and Other in the editor |
 
 Live recording and the native screenshot probe are skipped by default. Set
 `FLASH_HARDWARE_TESTS=1` to include the capture/export, screenshot and idle-reset

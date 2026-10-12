@@ -1,6 +1,7 @@
 #include "../../core/clip_exporter.h"
 #include "../../core/export_budget.h"
 #include "media_output.h"
+#include "audio_track_order.h"
 #include "color_space.h"
 
 #include <algorithm>
@@ -208,6 +209,10 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         }
         if (videoStream == static_cast<DWORD>(MF_SOURCE_READER_INVALID_STREAM_INDEX))
             throw std::runtime_error("input clip has no video stream");
+        // Gains are per track, a track is named by its place in the file, and
+        // the reader lists streams in an order of its own.
+        if (auto ordered = AudioStreamsInFileOrder(wideInput); ordered.size() == audioStreams.size())
+            audioStreams = std::move(ordered);
         if (!sourceWidth || !sourceHeight) throw std::runtime_error("input clip has no frame size");
 
         PROPVARIANT durationValue;
@@ -267,8 +272,9 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         const size_t mixFrames = static_cast<size_t>(span * kMixRate) + kMixRate;
         std::vector<float> mix(mixFrames * kMixChannels, 0.0f);
         bool haveAudio = false;
-        // audioStreams is in file order, which clip_writer guarantees matches
-        // kAudioTrackOrder because every clip now carries all three tracks.
+        // audioStreams was put in file order above (the reader's own order is
+        // not that), and clip_writer writes every track of kAudioTrackOrder in
+        // that order, so position here is position in options.gains.
         // A gain of exactly zero is skipped rather than multiplied, so a muted
         // track contributes nothing at all instead of a very quiet copy.
         for (size_t track = 0; track < audioStreams.size(); ++track) {

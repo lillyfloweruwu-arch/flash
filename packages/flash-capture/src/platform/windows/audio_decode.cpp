@@ -1,5 +1,6 @@
 #include "../../core/audio_decode.h"
 #include "../../core/audio_tracks.h"
+#include "audio_track_order.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -74,6 +75,11 @@ std::vector<DecodedTrack> DecodeClipAudio(const std::string& path, uint32_t targ
         if (SUCCEEDED(type->GetGUID(MF_MT_MAJOR_TYPE, &major)) && major == MFMediaType_Audio)
             audioStreams.push_back(index);
     }
+
+    // A track is named by its place in the file, and the reader lists streams
+    // in an order of its own (see audio_track_order.h).
+    if (auto ordered = AudioStreamsInFileOrder(widePath); ordered.size() == audioStreams.size())
+        audioStreams = std::move(ordered);
 
     const size_t trackCount = (std::min)(audioStreams.size(), kAudioTrackOrder.size());
     std::vector<DecodedTrack> tracks;
