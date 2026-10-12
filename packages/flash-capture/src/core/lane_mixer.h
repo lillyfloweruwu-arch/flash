@@ -43,16 +43,17 @@ public:
     void Push(uint64_t source, const float* samples, uint32_t frames, int64_t startUs) {
         if (!samples || !frames) return;
         if (!started_) { originUs_ = startUs; started_ = true; }
-        // Compare in microseconds, saturating, before converting to frames: a
-        // wild timestamp must not overflow the frame arithmetic.
-        const int64_t deltaUs = (std::max)(SaturatedSub(startUs, originUs_), -kMaxPastUs);
-        const bool tooFar = deltaUs > emitted_ * 1000000 / kRate + kMaxAheadUs;
-        int64_t position = deltaUs * kRate / 1000000;
+        // Decide from the microsecond difference, before any conversion to
+        // frames, so no timestamp can overflow the arithmetic. A packet too far
+        // ahead of, or behind, the point already emitted is a bad clock: dropped,
+        // whether or not the source has audio waiting.
+        const int64_t relUs = SaturatedSub(SaturatedSub(startUs, originUs_), FramesToUs(emitted_));
+        if (relUs > kMaxAheadUs || relUs < -kMaxPastUs) return;
+        int64_t position = emitted_ + relUs * kRate / 1000000;   // |relUs| <= 5 minutes: cannot overflow
         Source& s = sources_[source];
         const int64_t buffered = Buffered(s);
         uint32_t skip = 0;
         if (!buffered) {
-            if (tooFar) return;
             // Starting, or resuming after running dry: trust the timestamp,
             // but never write into time that has already been emitted.
             if (position < emitted_) {
@@ -63,7 +64,6 @@ public:
         } else {
             const int64_t gap = position - (s.front + buffered);
             if (gap > kMaxBufferedFrames) {
-                if (tooFar) return;
                 s.samples.clear();
                 s.front = position;
             } else if (gap > kGapFrames) {
@@ -89,7 +89,11 @@ public:
     // emitted, and the clip writer fills the silence.
     void Pull(int64_t nowUs, std::vector<Packet>& out) {
         if (!started_) { originUs_ = nowUs; started_ = true; }
-        const int64_t ready = FrameAt(nowUs) - kHoldFrames;
+        // An absurd clock reading (anything over ~1 year from the origin) is
+        // ignored: nothing is emitted and the timeline does not move.
+        const int64_t sinceOriginUs = SaturatedSub(nowUs, originUs_);
+        if (sinceOriginUs > kMaxTimelineUs || sinceOriginUs < -kMaxTimelineUs) return;
+        const int64_t ready = sinceOriginUs * kRate / 1000000 - kHoldFrames;
         while (emitted_ + kPacketFrames <= ready) {
             // Time no source covers is crossed in one step, by whole packets,
             // however long it is: after a sleep or a debugger pause it can be
@@ -109,7 +113,7 @@ public:
             }
             Packet packet;
             packet.samples.assign(static_cast<size_t>(kPacketFrames) * kChannels, 0.0f);
-            packet.startUs = originUs_ + emitted_ * 1000000 / kRate;
+            packet.startUs = SaturatedAdd(originUs_, FramesToUs(emitted_));
             const int64_t end = emitted_ + kPacketFrames;
             bool audible = false;
             for (auto& entry : sources_) {
@@ -142,14 +146,26 @@ private:
     };
     // A packet stamped further ahead than this is a bad clock, not audio.
     static constexpr int64_t kMaxAheadUs = 60 * 1000000;
-    static constexpr int64_t kMaxPastUs = int64_t(1) << 40;   // ~12 days; anything older is trimmed anyway
+    // A packet stamped further behind the emitted point than this is also bad.
+    static constexpr int64_t kMaxPastUs = 300 * 1000000;
+    // Pull ignores a clock reading further than this from the origin (~1 year;
+    // times kRate it still fits an int64_t with room to spare).
+    static constexpr int64_t kMaxTimelineUs = int64_t(1) << 45;
+    static int64_t SaturatedAdd(int64_t a, int64_t b) {
+        if (b > 0 && a > (std::numeric_limits<int64_t>::max)() - b) return (std::numeric_limits<int64_t>::max)();
+        if (b < 0 && a < (std::numeric_limits<int64_t>::min)() - b) return (std::numeric_limits<int64_t>::min)();
+        return a + b;
+    }
+    // Exact, and safe for any frame count that fits the timeline.
+    static int64_t FramesToUs(int64_t frames) {
+        return frames / kRate * 1000000 + frames % kRate * 1000000 / kRate;
+    }
     static int64_t SaturatedSub(int64_t a, int64_t b) {
         if (b < 0 && a > (std::numeric_limits<int64_t>::max)() + b) return (std::numeric_limits<int64_t>::max)();
         if (b > 0 && a < (std::numeric_limits<int64_t>::min)() + b) return (std::numeric_limits<int64_t>::min)();
         return a - b;
     }
     static int64_t Buffered(const Source& s) { return static_cast<int64_t>(s.samples.size() / kChannels); }
-    int64_t FrameAt(int64_t timeUs) const { return (timeUs - originUs_) * kRate / 1000000; }
 
     std::map<uint64_t, Source> sources_;
     int64_t originUs_ = 0, emitted_ = 0;

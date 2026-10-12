@@ -237,6 +237,57 @@ int main() {
         for (float s : out[0].samples) assert(Near(s, 0.25f));
     }
 
+    // Wild timestamps, on an empty source and on one with audio waiting. Each
+    // bad packet is dropped (it is neither placed far away nor laid end to end
+    // as if real), only the legitimate audio comes out, and the mixer carries on.
+    {
+        const int64_t wild[] = {std::numeric_limits<int64_t>::max() / 2, std::numeric_limits<int64_t>::min() / 2,
+                                std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::min()};
+        const auto a = Tone(480, 0.25f);
+        for (int64_t stamp : wild) {
+            for (int waiting = 0; waiting < 2; ++waiting) {
+                LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+                mixer.Pull(0, out);
+                if (waiting) mixer.Push(1, a.data(), 480, 0);
+                mixer.Push(1, a.data(), 480, stamp);
+                mixer.Pull(Us(4800) + hold, out);          // several packets past anything buffered
+                if (waiting) {
+                    assert(out.size() == 1 && out[0].startUs == 0);
+                    for (float s : out[0].samples) assert(Near(s, 0.25f));
+                } else {
+                    assert(out.empty());
+                }
+                out.clear();
+                mixer.Push(1, a.data(), 480, Us(4800));    // still works normally
+                mixer.Pull(Us(5280) + hold, out);
+                assert(out.size() == 1 && out[0].startUs == Us(4800));
+                for (float s : out[0].samples) assert(Near(s, 0.25f));
+            }
+        }
+    }
+
+    // An absurd clock reading passed to Pull is ignored: nothing is emitted and
+    // the timeline does not move, on a fresh mixer and on a running one.
+    {
+        const int64_t extremes[] = {std::numeric_limits<int64_t>::max(), std::numeric_limits<int64_t>::min()};
+        for (int64_t now : extremes) {
+            LaneMixer fresh; std::vector<LaneMixer::Packet> out;
+            fresh.Pull(now, out);                          // the first reading only sets the origin
+            fresh.Pull(now, out);
+            assert(out.empty());
+
+            LaneMixer running;
+            running.Pull(0, out);
+            const auto a = Tone(480, 0.25f);
+            running.Push(1, a.data(), 480, 0);
+            running.Pull(now, out);
+            assert(out.empty());
+            running.Pull(Us(480) + hold, out);             // unaffected by the ignored readings
+            assert(out.size() == 1 && out[0].startUs == 0);
+            for (float s : out[0].samples) assert(Near(s, 0.25f));
+        }
+    }
+
     std::puts("lane mixer self-check passed");
     return 0;
 }
