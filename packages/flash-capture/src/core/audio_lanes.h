@@ -87,11 +87,23 @@ inline uint32_t AppRoot(uint32_t pid, const std::vector<ProcessInfo>& processes)
 inline bool IsInProcessTree(uint32_t pid, uint32_t ancestorPid, const std::vector<ProcessInfo>& processes) {
     using namespace audio_lanes_detail;
     if (!ancestorPid) return false;
+    if (pid == ancestorPid) return true;   // even when the snapshot missed it
     const ProcessInfo* current = Find(processes, pid);
     for (int depth = 0; current && depth < kMaxDepth; ++depth) {
         if (current->pid == ancestorPid) return true;
         current = Parent(processes, *current);
     }
+    return false;
+}
+
+// True when `root` must not be captured because the game, or another app
+// that is captured in its own right, runs beneath it. A tree capture cannot
+// leave a subtree out, so capturing `root` would record that app twice.
+inline bool HasCapturedDescendant(uint32_t root, const std::vector<uint32_t>& otherRoots, uint32_t gamePid,
+                                  const std::vector<ProcessInfo>& processes) {
+    if (gamePid && gamePid != root && IsInProcessTree(gamePid, root, processes)) return true;
+    for (uint32_t other : otherRoots)
+        if (other != root && IsInProcessTree(other, root, processes)) return true;
     return false;
 }
 

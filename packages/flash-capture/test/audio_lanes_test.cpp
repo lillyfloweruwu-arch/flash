@@ -71,6 +71,32 @@ int main() {
     assert(root == 1 || root == 2);
     assert(!IsInProcessTree(1, 77, loop));
 
+    // A pid is inside its own tree even when the snapshot missed it.
+    assert(IsInProcessTree(4242, 4242, {}));
+    assert(IsInProcessTree(4242, 4242, all));
+    assert(!IsInProcessTree(0, 0, all));
+
+    // Descendants win: a tree capture cannot leave a subtree out, so an app with
+    // the game, or another captured app, beneath it is not captured itself.
+    std::vector<ProcessInfo> steam{
+        Proc(10, 4, "explorer.exe", 1),
+        Proc(400, 10, "steam.exe", 40),
+        Proc(401, 400, "steam.exe", 41),               // its own same-named child
+        Proc(402, 400, "RocketLeague.exe", 42),        // the game it launched
+        Proc(500, 10, "chrome.exe", 50),
+        Proc(501, 500, "chrome.exe", 51),
+        Proc(600, 10, "a.exe", 60), Proc(601, 600, "b.exe", 61), Proc(602, 601, "c.exe", 62),
+    };
+    assert(HasCapturedDescendant(400, {400}, 402, steam));          // the game runs beneath it
+    assert(HasCapturedDescendant(400, {400, 402}, 0, steam));       // another captured app runs beneath it
+    assert(!HasCapturedDescendant(400, {400}, 0, steam));           // only its own children
+    assert(!HasCapturedDescendant(500, {500, 400}, 402, steam));    // unrelated apps and game
+    assert(!HasCapturedDescendant(400, {400}, 400, steam));         // the game is the root itself
+    assert(!HasCapturedDescendant(402, {402, 400}, 402, steam));    // the game is not above itself
+    assert(HasCapturedDescendant(600, {600, 601, 602}, 0, steam));
+    assert(HasCapturedDescendant(601, {600, 601, 602}, 0, steam));
+    assert(!HasCapturedDescendant(602, {600, 601, 602}, 0, steam));
+
     std::puts("audio lanes self-check passed");
     return 0;
 }
