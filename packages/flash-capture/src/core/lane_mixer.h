@@ -1,7 +1,9 @@
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -41,11 +43,16 @@ public:
     void Push(uint64_t source, const float* samples, uint32_t frames, int64_t startUs) {
         if (!samples || !frames) return;
         if (!started_) { originUs_ = startUs; started_ = true; }
-        int64_t position = FrameAt(startUs);
+        // Compare in microseconds, saturating, before converting to frames: a
+        // wild timestamp must not overflow the frame arithmetic.
+        const int64_t deltaUs = (std::max)(SaturatedSub(startUs, originUs_), -kMaxPastUs);
+        const bool tooFar = deltaUs > emitted_ * 1000000 / kRate + kMaxAheadUs;
+        int64_t position = deltaUs * kRate / 1000000;
         Source& s = sources_[source];
         const int64_t buffered = Buffered(s);
         uint32_t skip = 0;
         if (!buffered) {
+            if (tooFar) return;
             // Starting, or resuming after running dry: trust the timestamp,
             // but never write into time that has already been emitted.
             if (position < emitted_) {
@@ -56,14 +63,17 @@ public:
         } else {
             const int64_t gap = position - (s.front + buffered);
             if (gap > kMaxBufferedFrames) {
+                if (tooFar) return;
                 s.samples.clear();
                 s.front = position;
             } else if (gap > kGapFrames) {
                 s.samples.insert(s.samples.end(), static_cast<size_t>(gap) * kChannels, 0.0f);
             }
         }
-        s.samples.insert(s.samples.end(), samples + static_cast<size_t>(skip) * kChannels,
-                         samples + static_cast<size_t>(frames) * kChannels);
+        // A driver's NaN or infinity must not become a full-scale click.
+        for (const float* p = samples + static_cast<size_t>(skip) * kChannels,
+                        * end = samples + static_cast<size_t>(frames) * kChannels; p != end; ++p)
+            s.samples.push_back(std::isfinite(*p) ? *p : 0.0f);
         const int64_t waiting = Buffered(s);
         if (waiting > kMaxBufferedFrames) {
             const int64_t drop = waiting - kHoldFrames;
@@ -81,6 +91,22 @@ public:
         if (!started_) { originUs_ = nowUs; started_ = true; }
         const int64_t ready = FrameAt(nowUs) - kHoldFrames;
         while (emitted_ + kPacketFrames <= ready) {
+            // Time no source covers is crossed in one step, by whole packets,
+            // however long it is: after a sleep or a debugger pause it can be
+            // hours, and the owner is holding its lock.
+            bool anyAudio = false;
+            int64_t earliest = 0;
+            for (const auto& entry : sources_) {
+                const Source& s = entry.second;
+                if (!Buffered(s)) continue;
+                earliest = anyAudio ? (std::min)(earliest, s.front) : s.front;
+                anyAudio = true;
+            }
+            if (!anyAudio || earliest >= emitted_ + kPacketFrames) {
+                const int64_t target = anyAudio ? (std::min)(ready, earliest) : ready;
+                emitted_ += (target - emitted_) / kPacketFrames * kPacketFrames;
+                continue;
+            }
             Packet packet;
             packet.samples.assign(static_cast<size_t>(kPacketFrames) * kChannels, 0.0f);
             packet.startUs = originUs_ + emitted_ * 1000000 / kRate;
@@ -114,6 +140,14 @@ private:
         std::deque<float> samples;   // interleaved, starting at frame `front`
         int64_t front = 0;           // frames since the origin
     };
+    // A packet stamped further ahead than this is a bad clock, not audio.
+    static constexpr int64_t kMaxAheadUs = 60 * 1000000;
+    static constexpr int64_t kMaxPastUs = int64_t(1) << 40;   // ~12 days; anything older is trimmed anyway
+    static int64_t SaturatedSub(int64_t a, int64_t b) {
+        if (b < 0 && a > (std::numeric_limits<int64_t>::max)() + b) return (std::numeric_limits<int64_t>::max)();
+        if (b > 0 && a < (std::numeric_limits<int64_t>::min)() + b) return (std::numeric_limits<int64_t>::min)();
+        return a - b;
+    }
     static int64_t Buffered(const Source& s) { return static_cast<int64_t>(s.samples.size() / kChannels); }
     int64_t FrameAt(int64_t timeUs) const { return (timeUs - originUs_) * kRate / 1000000; }
 

@@ -2,8 +2,10 @@
 // track. Pure logic with explicit clocks, so every case is deterministic.
 #include "../src/core/lane_mixer.h"
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace flash;
 
@@ -150,11 +152,89 @@ int main() {
     // Bad input is ignored.
     {
         LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        mixer.Pull(0, out);                            // fixes the origin at time 0
         mixer.Push(1, nullptr, 480, 0);
         const auto a = Tone(480, 0.25f);
         mixer.Push(1, a.data(), 0, 0);
         mixer.Pull(Us(960) + hold, out);
         assert(out.empty());
+        // ...and the mixer is still usable afterwards.
+        mixer.Push(1, a.data(), 480, Us(960));
+        mixer.Pull(Us(1440) + hold, out);
+        assert(out.size() == 1 && out[0].startUs == Us(960));
+        for (float s : out[0].samples) assert(Near(s, 0.25f));
+    }
+
+    // A driver's NaN or infinity becomes silence, not a full-scale click.
+    {
+        LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        auto a = Tone(480, 0.25f);
+        a[10] = std::numeric_limits<float>::quiet_NaN();
+        a[11] = std::numeric_limits<float>::infinity();
+        a[20] = -std::numeric_limits<float>::infinity();
+        mixer.Push(1, a.data(), 480, 0);
+        mixer.Pull(Us(480) + hold, out);
+        assert(out.size() == 1);
+        for (size_t i = 0; i < out[0].samples.size(); ++i) {
+            const bool bad = (i == 10 || i == 11 || i == 20);
+            assert(Near(out[0].samples[i], bad ? 0.0f : 0.25f));
+        }
+    }
+
+    // A wildly wrong timestamp is dropped, and the mixer carries on.
+    {
+        LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        mixer.Pull(0, out);
+        const auto a = Tone(480, 0.25f);
+        mixer.Push(1, a.data(), 480, std::numeric_limits<int64_t>::max() / 2);   // first packet of a source
+        mixer.Push(1, a.data(), 480, std::numeric_limits<int64_t>::min() / 2);   // far in the past
+        mixer.Push(1, a.data(), 480, std::numeric_limits<int64_t>::max());
+        mixer.Pull(Us(480) + hold, out);
+        assert(out.empty());
+        mixer.Push(1, a.data(), 480, Us(480));
+        mixer.Pull(Us(960) + hold, out);
+        assert(out.size() == 1 && out[0].startUs == Us(480));
+        for (float s : out[0].samples) assert(Near(s, 0.25f));
+    }
+    // Same for the jump-ahead branch of a source that already has audio waiting.
+    {
+        LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        mixer.Pull(0, out);
+        const auto a = Tone(480, 0.25f);
+        mixer.Push(1, a.data(), 480, 0);
+        mixer.Push(1, a.data(), 480, std::numeric_limits<int64_t>::max() / 2);
+        mixer.Pull(Us(480) + hold, out);
+        assert(out.size() == 1 && out[0].startUs == 0);
+        for (float s : out[0].samples) assert(Near(s, 0.25f));
+    }
+
+    // A source 10 s ahead is reached in one step and stamped correctly.
+    {
+        LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        mixer.Pull(0, out);
+        const auto a = Tone(480, 0.25f);
+        mixer.Push(1, a.data(), 480, Us(480000));
+        mixer.Pull(Us(480000 + 480) + hold, out);
+        assert(out.size() == 1 && out[0].startUs == Us(480000));
+        for (float s : out[0].samples) assert(Near(s, 0.25f));
+    }
+
+    // A huge clock jump with nothing buffered (sleep, a debugger pause) is
+    // crossed in one step, not walked 10 ms at a time.
+    {
+        LaneMixer mixer; std::vector<LaneMixer::Packet> out;
+        mixer.Pull(0, out);
+        const int64_t later = 1000LL * 3600 * 1000000;          // one thousand hours, on a 10 ms boundary
+        const auto begin = std::chrono::steady_clock::now();
+        mixer.Pull(later, out);
+        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+        assert(out.empty());
+        assert(seconds < 2.0);
+        const auto a = Tone(480, 0.25f);
+        mixer.Push(1, a.data(), 480, later);
+        mixer.Pull(later + 40000, out);
+        assert(out.size() == 1 && out[0].startUs == later);
+        for (float s : out[0].samples) assert(Near(s, 0.25f));
     }
 
     std::puts("lane mixer self-check passed");
