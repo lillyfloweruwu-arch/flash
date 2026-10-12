@@ -107,7 +107,10 @@ one lane would give it overlapping packets, so a lane needs a mixer.
 
 A new `core/` class, the lane mixer, takes packets from any number of sources, each
 stamped with the capture clock, and gives out one stream per lane in fixed 10 ms packets:
-the sum of whatever the sources had for that 10 ms, silence where they had nothing. Its
+the sum of whatever the sources had for that 10 ms. A stretch in which no source had any
+sound is not given out at all: the timeline moves on, and the clip writer, which already
+writes silence wherever a track has no packet, fills it. That keeps three mostly idle
+lanes from filling the replay buffer with zeros. Its
 output timestamps come from a running sample count anchored to the capture clock when
 the lane starts, not from when packets happened to arrive.
 
