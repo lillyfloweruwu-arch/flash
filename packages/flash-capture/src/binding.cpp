@@ -11,7 +11,9 @@
 #include "core/smart_render.h"
 #include "core/process_list.h"
 #include "core/quality.h"
+#include "core/audio_tracks.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -100,7 +102,8 @@ uint32_t bufferSeconds = 30, displayId = 0, encodeWidth = 1920, encodeHeight = 1
 uint32_t previousWidth = 0, previousHeight = 0, previousFps = 0;
 bool awaitingFirstKeyframe = false;
 Quality quality;
-bool audioGame = true, audioMic = true, audioOther = true;
+// Whether each track is recorded, in kAudioTrackOrder.
+std::array<bool, kAudioTrackCount> audioEnabled{true, true, true, true, true};
 std::string pipelineError;
 std::unique_ptr<VoiceTrigger> voiceTrigger;
 VoiceStatus voiceFallbackStatus{false, "", "Voice recognition is unavailable."};
@@ -412,7 +415,8 @@ Napi::Value GetStatus(const Napi::CallbackInfo& info) {
     result.Set("bufferSeconds", ringBuffer ? ringBuffer->GetDurationSeconds() : 0); result.Set("encoder", encoder ? encoder->GetName() : "none");
     result.Set("width", encodeWidth); result.Set("height", encodeHeight); result.Set("fps", quality.fps); result.Set("bitrateKbps", quality.bitrateKbps); result.Set("displayId", displayId);
     result.Set("audioMode", audioCapture ? audioCapture->GetMode() : "unavailable"); auto tracks = Napi::Object::New(info.Env());
-    tracks.Set("game", audioGame); tracks.Set("mic", audioMic); tracks.Set("other", audioOther); result.Set("audioTracks", tracks);
+    for (size_t i = 0; i < kAudioTrackCount; ++i) tracks.Set(std::string(kAudioTrackOrder[i]), Napi::Boolean::New(info.Env(), audioEnabled[i]));
+    result.Set("audioTracks", tracks);
     // Surface why a fallback happened, and each source's own state, so a missing
     // track is diagnosable instead of just silently absent.
     result.Set("audioError", audioCapture ? audioCapture->GetProcessError() : "");
@@ -442,23 +446,32 @@ Napi::Value SetCurrentGame(const Napi::CallbackInfo& info) {
     if (info.Length() > 1 && !info[1].IsNumber()) { Napi::TypeError::New(info.Env(), "game PID must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
     const auto name = info[0].As<Napi::String>().Utf8Value();
     const uint32_t processId = name.empty() || info.Length() < 2 ? 0 : info[1].As<Napi::Number>().Uint32Value();
-    AudioSource* audio; bool game, mic, other;
-    { std::lock_guard lock(stateMutex); currentGame = name.empty() ? "Unknown" : name; audio = audioCapture.get(); game = audioGame; mic = audioMic; other = audioOther; }
+    AudioSource* audio; std::array<bool, kAudioTrackCount> enabled{};
+    { std::lock_guard lock(stateMutex); currentGame = name.empty() ? "Unknown" : name; audio = audioCapture.get(); enabled = audioEnabled; }
     // PID zero rebuilds the startup loopback sources, so an exited game's audio
     // target cannot linger until another game happens to launch.
     if (audio && (name.empty() || info.Length() > 1)) {
         audio->SetGameProcess(processId);
-        audio->SetSource("game", game, 1.0f);
-        audio->SetSource("mic", mic, 1.0f);
-        audio->SetSource("other", other, 1.0f);
+        for (size_t i = 0; i < kAudioTrackCount; ++i) audio->SetSource(std::string(kAudioTrackOrder[i]), enabled[i], 1.0f);
     }
     return info.Env().Undefined();
 }
 Napi::Value SetAudioTracks(const Napi::CallbackInfo& info) {
-    if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    auto value = info[0].As<Napi::Object>(); if (!value.Get("game").IsBoolean() || !value.Get("mic").IsBoolean() || !value.Get("other").IsBoolean()) { Napi::TypeError::New(info.Env(), "audio tracks must be { game, mic, other }").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
-    std::lock_guard lock(stateMutex); audioGame = value.Get("game").As<Napi::Boolean>(); audioMic = value.Get("mic").As<Napi::Boolean>(); audioOther = value.Get("other").As<Napi::Boolean>();
-    if (audioCapture) { audioCapture->SetSource("game", audioGame, 1.0f); audioCapture->SetSource("mic", audioMic, 1.0f); audioCapture->SetSource("other", audioOther, 1.0f); } return info.Env().Undefined();
+    const char* shape = "audio tracks must be { game, mic, other, discord?, music? } booleans";
+    if (!info.Length() || !info[0].IsObject()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    auto value = info[0].As<Napi::Object>();
+    std::array<bool, kAudioTrackCount> next{};
+    for (size_t i = 0; i < kAudioTrackCount; ++i) {
+        const auto field = value.Get(std::string(kAudioTrackOrder[i]));
+        // The two newer lanes may be left out by an older caller; they then
+        // follow "other", which is where their sound used to be recorded.
+        if (field.IsUndefined() && i >= 3) { next[i] = next[2]; continue; }
+        if (!field.IsBoolean()) { Napi::TypeError::New(info.Env(), shape).ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+        next[i] = field.As<Napi::Boolean>();
+    }
+    std::lock_guard lock(stateMutex); audioEnabled = next;
+    if (audioCapture) for (size_t i = 0; i < kAudioTrackCount; ++i) audioCapture->SetSource(std::string(kAudioTrackOrder[i]), audioEnabled[i], 1.0f);
+    return info.Env().Undefined();
 }
 Napi::Value SetBufferLength(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "buffer length must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t seconds = info[0].As<Napi::Number>().Uint32Value(); if (seconds < 1 || seconds > 600) { Napi::RangeError::New(info.Env(), "buffer length must be between 1 and 600 seconds").ThrowAsJavaScriptException(); return info.Env().Undefined(); } std::lock_guard lock(stateMutex); bufferSeconds = seconds; if (ringBuffer) ringBuffer->SetMaxDuration(seconds, quality.fps); return info.Env().Undefined(); }
 
@@ -737,11 +750,10 @@ Napi::Value ExportClipBinding(const Napi::CallbackInfo& info) {
     // making it impossible to silence the wrong lane by miscounting.
     if (options.Get("gains").IsObject()) {
         auto gains = options.Get("gains").As<Napi::Object>();
-        // Indices follow kAudioTrackOrder: game, mic, other.
-        const Napi::Value byTrack[] = {gains.Get("game"), gains.Get("mic"), gains.Get("other")};
         for (size_t i = 0; i < parsed.gains.size(); ++i) {
-            if (!byTrack[i].IsNumber()) continue;
-            const double gain = byTrack[i].As<Napi::Number>().DoubleValue();
+            const Napi::Value named = gains.Get(std::string(kAudioTrackOrder[i]));
+            if (!named.IsNumber()) continue;
+            const double gain = named.As<Napi::Number>().DoubleValue();
             if (!std::isfinite(gain) || gain < 0.0) {
                 Napi::RangeError::New(env, "each gain must be a finite number of at least zero")
                     .ThrowAsJavaScriptException();

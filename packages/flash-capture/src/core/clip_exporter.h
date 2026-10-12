@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <string>
 
+#include "audio_tracks.h"
+
 namespace flash {
 
 // What the caller asked for. Auto walks the platform's codec ladder and takes
@@ -15,8 +17,8 @@ struct ExportOptions {
     uint32_t maxHeight = 0;      // 0 = no ceiling beyond the source
     int64_t startUs = 0;
     int64_t endUs = 0;           // 0 = to the end of the clip
-    // One gain per track in kAudioTrackOrder: game, mic, other. Zero is silence.
-    std::array<float, 3> gains{1.0f, 1.0f, 1.0f};
+    // One gain per track, in kAudioTrackOrder. Zero is silence.
+    std::array<float, kAudioTrackCount> gains{1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     uint32_t saturation = 100;   // percent; 100 skips the chroma pass entirely
     ExportCodecChoice codec = ExportCodecChoice::H264;
     uint32_t maxFps = 0;         // 0 = keep the source frame rate

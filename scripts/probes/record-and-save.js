@@ -26,7 +26,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms))
   addon.stopReplayBuffer()
 
   const ok = clip.duration > 15 && bytes > 2e6 && keys.keyframesSec.length >= 2 &&
-    audio.tracks.length === 3 && after.recording === true && after.captureHealthy !== false
+    audio.tracks.length === 5 && after.recording === true && after.captureHealthy !== false
   fs.rmSync(dir, { recursive: true, force: true })
   console.log(ok ? 'PASS' : 'FAIL')
   process.exit(ok ? 0 : 1)

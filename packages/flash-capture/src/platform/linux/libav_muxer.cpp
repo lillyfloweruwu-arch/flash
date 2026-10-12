@@ -1,6 +1,7 @@
 // L1 backend: not yet compiled or run on Linux hardware.
 #include "linux_backend.h"
 #include "../../core/export_budget.h"
+#include "../../core/audio_tracks.h"
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -117,7 +118,7 @@ std::vector<AudioPcm> DecodePcm(const std::string& path, uint32_t rate, uint32_t
         Media media; media.Open(path); media.Decoder(index);
         auto* stream = media.input->streams[index];
         const auto* title = av_dict_get(stream->metadata, "handler_name", nullptr, 0);
-        if (!title || (std::string(title->value) != "game" && std::string(title->value) != "mic" && std::string(title->value) != "other"))
+        if (!title || AudioTrackIndex(title->value) == kAudioTrackCount)
             title = av_dict_get(stream->metadata, "title", nullptr, 0);
         AudioPcm pcm{title ? title->value : (tracks.empty() ? "other" : "mic"), {}};
         AVChannelLayout layout{}; av_channel_layout_default(&layout, channels);
@@ -189,7 +190,8 @@ public:
         }
         std::vector<std::unique_ptr<Media>> encoders;
         std::vector<AudioPcm> pcm;
-        for (const std::string id : {"game", "mic", "other"}) {
+        for (const std::string_view name : kAudioTrackOrder) {
+            const std::string id(name);
             if (std::none_of(audio.begin(), audio.end(), [&](const AudioData& p) { return p.sourceId == id; })) continue;
             AudioPcm track{id, std::vector<float>(static_cast<size_t>(av_rescale(end - base, 48000, 1000000)) * 2, 0)};
             for (const auto& p : audio) if (p.sourceId == id && p.sampleRate == 48000 && p.channels == 2 && p.samples) {
@@ -377,7 +379,9 @@ public:
         const auto start = encoded.front().pts_us;
         std::vector<float> mixed(static_cast<size_t>(av_rescale(end - start, 48000, 1000000)) * 2, 0);
         for (const auto& track : DecodePcm(input, 48000, 2)) {
-            const float gain = options.gains[track.id == "game" ? 0 : track.id == "mic" ? 1 : 2];
+            // A track this build does not know keeps unity gain and is still mixed.
+            const size_t position = AudioTrackIndex(track.id);
+            const float gain = position < kAudioTrackCount ? options.gains[position] : 1.0f;
             const auto offset = static_cast<size_t>(av_rescale(start, 48000, 1000000)) * 2;
             for (size_t i = 0; i < mixed.size() && offset + i < track.samples.size(); ++i) mixed[i] += track.samples[offset + i] * gain;
         }

@@ -84,8 +84,8 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
     Check(writer->SetInputMediaType(videoStream, videoType.Get(), nullptr), "SetInputMediaType(video)");
 
     struct AudioStream { std::string_view id; DWORD index = 0; uint32_t sampleRate = 0, channels = 0; bool present = false; };
-    std::array<AudioStream, 3> audioStreams{};
-    // Every clip carries all three tracks from kAudioTrackOrder, even a silent
+    std::array<AudioStream, kAudioTrackCount> audioStreams{};
+    // Every clip carries every track from kAudioTrackOrder, even a silent
     // one. The editor maps tracks to mixer lanes by position, so dropping an
     // empty stream would put Discord's audio on the mic lane. A track with no
     // packets still gets its stream and is then never written to — a few hundred
