@@ -77,9 +77,12 @@ std::vector<DecodedTrack> DecodeClipAudio(const std::string& path, uint32_t targ
     }
 
     // A track is named by its place in the file, and the reader lists streams
-    // in an order of its own (see audio_track_order.h).
-    if (auto ordered = AudioStreamsInFileOrder(widePath); ordered.size() == audioStreams.size())
-        audioStreams = std::move(ordered);
+    // in an order of its own (see audio_track_order.h). A clip that cannot be
+    // matched is still played, in the reader's order, and that is logged.
+    if (auto ordered = AudioStreamsInFileOrder(widePath); ordered.streams.size() == audioStreams.size()) {
+        if (!ordered.matched) LogUnmatchedTrackOrder(widePath, "decode");
+        audioStreams = std::move(ordered.streams);
+    }
 
     const size_t trackCount = (std::min)(audioStreams.size(), kAudioTrackOrder.size());
     std::vector<DecodedTrack> tracks;

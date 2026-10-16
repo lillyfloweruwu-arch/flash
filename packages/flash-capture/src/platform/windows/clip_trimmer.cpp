@@ -143,6 +143,16 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         Check(reader->SetStreamSelection(static_cast<DWORD>(MF_SOURCE_READER_ALL_STREAMS), FALSE),
             "deselect source streams");
 
+        // Audio tracks are copied in the order the file holds them. The reader
+        // lists them in an order of its own (see audio_track_order.h), and
+        // adding them to the writer in that order turned the tracks of every
+        // trimmed clip back to front. A trim writes its order to disk for
+        // good, so a clip whose tracks cannot be told apart is refused, before
+        // any output exists.
+        const AudioStreamOrder fileAudio = AudioStreamsInFileOrder(wideInput);
+        if (fileAudio.streams.size() >= 2 && !fileAudio.matched)
+            throw std::runtime_error("cannot tell this clip's audio tracks apart, so trimming it would mix them up");
+
         const auto wideOutput = pending.Partial().wstring();
         Check(MFCreateSinkWriterFromURL(wideOutput.c_str(), nullptr, nullptr, &writer),
             "MFCreateSinkWriterFromURL");
@@ -152,11 +162,6 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
         size_t video = (std::numeric_limits<size_t>::max)();
         ComPtr<IMFMediaType> sourceVideoType;
         uint32_t width = 0, height = 0, fps = 0;
-        // Audio tracks are copied in the order the file holds them. The reader
-        // lists them in an order of its own (see audio_track_order.h), and
-        // adding them to the writer in that order turned the tracks of every
-        // trimmed clip back to front.
-        const std::vector<DWORD> fileAudio = AudioStreamsInFileOrder(wideInput);
         size_t audioSeen = 0;
         for (DWORD slot = 0;; ++slot) {
             DWORD index = slot;
@@ -167,8 +172,8 @@ ClipMetadata TrimClip(const std::string& inputPath, const std::string& outputPat
             GUID major{};
             Check(type->GetGUID(MF_MT_MAJOR_TYPE, &major), "get native major type");
             if (major != MFMediaType_Video && major != MFMediaType_Audio) continue;
-            if (major == MFMediaType_Audio && audioSeen < fileAudio.size()) {
-                index = fileAudio[audioSeen++];
+            if (major == MFMediaType_Audio && audioSeen < fileAudio.streams.size()) {
+                index = fileAudio.streams[audioSeen++];
                 type.Reset();
                 Check(reader->GetNativeMediaType(index, 0, &type), "IMFSourceReader::GetNativeMediaType");
             }

@@ -210,9 +210,12 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
         if (videoStream == static_cast<DWORD>(MF_SOURCE_READER_INVALID_STREAM_INDEX))
             throw std::runtime_error("input clip has no video stream");
         // Gains are per track, a track is named by its place in the file, and
-        // the reader lists streams in an order of its own.
-        if (auto ordered = AudioStreamsInFileOrder(wideInput); ordered.size() == audioStreams.size())
-            audioStreams = std::move(ordered);
+        // the reader lists streams in an order of its own. A clip that cannot
+        // be matched is still exported, in the reader's order, and that is logged.
+        if (auto ordered = AudioStreamsInFileOrder(wideInput); ordered.streams.size() == audioStreams.size()) {
+            if (!ordered.matched) LogUnmatchedTrackOrder(wideInput, "export");
+            audioStreams = std::move(ordered.streams);
+        }
         if (!sourceWidth || !sourceHeight) throw std::runtime_error("input clip has no frame size");
 
         PROPVARIANT durationValue;
