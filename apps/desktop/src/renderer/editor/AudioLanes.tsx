@@ -104,7 +104,7 @@ function Waveform({ track }: { track: LiveMixTrack }) {
     <canvas
       ref={canvasRef}
       role="img"
-      aria-label={`${track.id} audio waveform`}
+      aria-label={`${laneLabel(track.id)} audio waveform`}
       className="block w-full"
       style={{ height: 34 }}
     />

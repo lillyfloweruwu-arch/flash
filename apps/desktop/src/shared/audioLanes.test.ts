@@ -45,7 +45,7 @@ assert.deepEqual(sanitiseAudioLanes({ discord: [], music: [] }), { discord: [], 
 assert.deepEqual(sanitiseAudioLanes({ discord: [' Discord.EXE ', 'discord.exe', 5, null, ''], music: ['Spotify.exe'] }),
   { discord: ['discord.exe'], music: ['spotify.exe'] })
 // A path is not an executable name.
-assert.deepEqual(sanitiseAudioLanes({ discord: ['C:\Apps\Discord.exe', 'a/b.exe'], music: ['ok.exe'] }),
+assert.deepEqual(sanitiseAudioLanes({ discord: ['C:\\Apps\\Discord.exe', 'a/b.exe', 'Apps\\Discord.exe'], music: ['ok.exe'] }),
   { discord: [], music: ['ok.exe'] })
 // An app in both lists is Discord.
 assert.deepEqual(sanitiseAudioLanes({ discord: ['vlc.exe'], music: ['vlc.exe', 'spotify.exe'] }),

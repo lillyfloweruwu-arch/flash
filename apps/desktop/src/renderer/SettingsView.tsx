@@ -133,10 +133,17 @@ function AppAudio({ lanes, onChange }: {
 
   useEffect(() => {
     let cancelled = false
-    const refresh = () => window.flash.listAudioApps().then(result => { if (!cancelled) setState(result) }).catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // The next poll is scheduled after the previous answer, so a slow main
+    // process never has more than one request outstanding.
+    const refresh = () => {
+      window.flash.listAudioApps()
+        .then(result => { if (!cancelled) setState(result) })
+        .catch(() => {})
+        .then(() => { if (!cancelled) timer = setTimeout(refresh, 2000) })
+    }
     refresh()
-    const timer = setInterval(refresh, 2000)
-    return () => { cancelled = true; clearInterval(timer) }
+    return () => { cancelled = true; clearTimeout(timer) }
   }, [])
 
   if (!state) return null

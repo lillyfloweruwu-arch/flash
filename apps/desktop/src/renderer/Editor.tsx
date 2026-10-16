@@ -8,6 +8,7 @@ import { useClipAudio } from './editor/useClipAudio'
 import type { LiveMixTrack } from './editor/useLiveMix'
 import { clampRange, clipUrl, deriveSaveMode, formatTimecode, nearestKeyframe } from '../shared/editor'
 import type { SaveReason } from '../shared/editor'
+import type { AudioTrackId } from '../shared/audioLanes'
 import type { ClipInfo } from '../preload/preload'
 
 const SPEEDS = [0.5, 1, 1.5, 2] as const
@@ -97,7 +98,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     setSaveNote(null)
     const gains = Object.fromEntries(
       audioTracks.map(track => [track.id, liveGains[track.id] ?? 1]),
-    ) as { game?: number; mic?: number; other?: number }
+    ) as Partial<Record<AudioTrackId, number>>
     const result = await window.flash?.saveClipEdit(clip.filePath, {
       startSeconds: range.inSec,
       endSeconds: range.outSec,
