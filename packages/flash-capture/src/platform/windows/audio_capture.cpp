@@ -320,8 +320,12 @@ void AudioCapture::ScanLoop() {
     const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     // Its own enumerator rather than enumerator_, which belongs to the thread
     // that called Initialize() and may live in a different apartment.
-    CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-        __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(scanEnumerator_.GetAddressOf()));
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+            __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(scanEnumerator_.GetAddressOf())))) {
+        // Without it no audio session is ever seen, so say why nothing is captured.
+        std::lock_guard lock(mutex_);
+        processError_ = "the list of audio devices is unavailable, so no app's sound is recorded";
+    }
     while (capturing_.load()) {
         ScanOnce();
         std::unique_lock lock(scanMutex_);
@@ -361,6 +365,9 @@ void AudioCapture::ScanOnce() {
 
     const ProcessSnapshot snapshot = ListProcesses();
     const auto& processes = snapshot.processes;
+    // An empty list is a failed listing, not a machine with nothing running.
+    // Taken at its word it would mark every app dead and restart them all.
+    if (processes.empty()) return;
     const uint32_t selfRoot = AppRoot(GetCurrentProcessId(), processes);
     AudioLaneConfig config; uint32_t gamePid;
     { std::lock_guard lock(mutex_); config = lanes_; gamePid = gamePid_; }
@@ -388,11 +395,15 @@ void AudioCapture::ScanOnce() {
     // would record that sound a second time. Such an app is not captured, and
     // its own sound is given up. Judged against every wanted app, including
     // ones that are dropped themselves, so the deepest of a chain is the one
-    // that stays.
+    // that stays. Flash counts as one of them, though it is never captured:
+    // an app above Flash (explorer or a launcher above an autostarted Flash, a
+    // terminal above a dev build) would otherwise record Flash with it.
     std::vector<uint32_t> wantedRoots, shadowed;
     for (const auto& entry : wanted) wantedRoots.push_back(entry.first);
+    std::vector<uint32_t> beneath = wantedRoots;
+    beneath.push_back(selfRoot);
     for (uint32_t root : wantedRoots)
-        if (HasCapturedDescendant(root, wantedRoots, gamePid, processes)) shadowed.push_back(root);
+        if (HasCapturedDescendant(root, beneath, gamePid, processes)) shadowed.push_back(root);
     for (uint32_t root : shadowed) wanted.erase(root);
     const auto isShadowed = [&](uint32_t root) { return std::find(shadowed.begin(), shadowed.end(), root) != shadowed.end(); };
 
