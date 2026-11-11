@@ -735,9 +735,12 @@ private:
     std::string path_;
 };
 
-// Preview audio is mono at 22050: enough to judge a mix and draw waveforms, and
-// it keeps a five minute clip near 26MB across three tracks rather than 345MB.
-static constexpr uint32_t kPreviewSampleRate = 22050;
+// Preview audio is mono at the clip's own 48000 Hz. The player and editor play
+// this decode, so it is what the user hears. It used to be 22050 Hz with a
+// plain linear resample and no low-pass, which folds everything above 11 kHz
+// back into the audible band as harsh crackle. Clips are 48 kHz, so this takes
+// the no-resample path and stays sample-accurate with the video.
+static constexpr uint32_t kPreviewSampleRate = 48000;
 
 Napi::Value DecodeClipAudioBinding(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
