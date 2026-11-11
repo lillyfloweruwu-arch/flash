@@ -27,8 +27,9 @@ function functions(names, context) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flash-boundaries-'))
   const messages = []
   const context = {
-    console: { ...console, warn() {}, error() {} }, process, ...fs, ...path, Blob, Response,
+    console: { ...console, warn() {}, error: (...a) => process.stderr.write('ERR ' + a.map(String).join(' ') + '\n') }, process, ...fs, ...path, Blob, Response,
     settings: { clipsFolder: dir, notifications: true, overlay: true, overlayPosition: 'bottom-right', theme: 'blood', displayId: 99 },
+    activeClipsFolder: () => dir, activeDisplayId: () => 99, sessionDisplayId: null,
     currentGame: 'Game A', isRecording: true, writeSidecar, readSidecar, gameFolderName, firstFreeName, clipTimestamp,
     mainWindow: { webContents: { send: (...args) => messages.push(args) }, isVisible: () => false, isMinimized: () => false },
     captureAddon: {
