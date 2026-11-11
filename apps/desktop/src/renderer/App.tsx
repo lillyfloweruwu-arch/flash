@@ -210,26 +210,46 @@ export default function App() {
 
   // Poll only while Settings is open — a background timer for a panel nobody is
   // looking at is exactly the kind of idle cost this app exists to avoid.
+  const settingsPollBusy = useRef(false)
   useEffect(() => {
     if (view !== 'Settings' || !window.flash) return
     let cancelled = false
     const read = async () => {
-      const [captureStatus, voice] = await Promise.all([
-        window.flash!.capture.getStatus(),
-        window.flash!.getVoiceStatus(),
-      ])
-      if (cancelled) return
-      const s: any = captureStatus
-      setVoiceStatus(voice)
-      setHealth({
-        healthy: s.captureHealthy !== false && s.recording !== false,
-        fps: s.lastIntervalMs > 0 ? 1000 / s.lastIntervalMs : 0,
-        buffered: s.bufferSeconds ?? 0,
-        audioMode: s.audioMode,
-        error: s.captureError,
-      })
-      if (s.encoder) setEncoder(s.encoder)
-      if (s.captureBackend) setCaptureBackend(s.captureBackend)
+      if (settingsPollBusy.current) return
+      settingsPollBusy.current = true
+      try {
+        let captureStatus: any = null
+        try {
+          captureStatus = await window.flash!.capture.getStatus()
+        } catch (error) {
+          console.error('Could not read capture status', error)
+        }
+        const voice = await window.flash!.getVoiceStatus().catch(error => {
+          console.error('Could not read voice status', error)
+          return null
+        })
+        if (cancelled) return
+        if (voice) setVoiceStatus(voice)
+        if (!captureStatus) {
+          setHealth({ healthy: false, fps: 0, buffered: 0, error: 'Capture unavailable' })
+          return
+        }
+        const s: any = captureStatus
+        setHealth({
+          healthy: s.captureHealthy !== false && s.recording !== false,
+          fps: s.lastIntervalMs > 0 ? 1000 / s.lastIntervalMs : 0,
+          buffered: s.bufferSeconds ?? 0,
+          audioMode: s.audioMode,
+          error: s.captureError,
+        })
+        if (s.encoder) setEncoder(s.encoder)
+        if (s.captureBackend) setCaptureBackend(s.captureBackend)
+      } catch (error) {
+        console.error('Could not read capture status', error)
+        if (!cancelled) setHealth({ healthy: false, fps: 0, buffered: 0, error: 'Capture unavailable' })
+      } finally {
+        settingsPollBusy.current = false
+      }
     }
     read()
     const timer = setInterval(read, 2000)
@@ -250,14 +270,21 @@ export default function App() {
     return () => clearTimeout(timer)
   }, [saveState.error])
 
+  const refreshClipsRequest = useRef(0)
   const refreshClips = useCallback(async () => {
     if (!window.flash) return
-    const [clipList, storageInfo] = await Promise.all([
-      window.flash.getClips(),
-      window.flash.getStorage(),
-    ])
-    setClips(clipList)
-    setStorage(storageInfo)
+    const requestId = ++refreshClipsRequest.current
+    try {
+      const [clipList, storageInfo] = await Promise.all([
+        window.flash.getClips(),
+        window.flash.getStorage(),
+      ])
+      if (requestId !== refreshClipsRequest.current) return
+      setClips(clipList)
+      setStorage(storageInfo)
+    } catch (error) {
+      console.error('Could not refresh clips', error)
+    }
   }, [])
 
   // Build game list from actual clips
@@ -369,8 +396,8 @@ export default function App() {
       confirmLabel: 'Delete',
       destructive: true,
       onConfirm: async () => {
-        const results = await Promise.all(selection.map(clip => window.flash?.deleteClip(clip.filePath)))
-        const failed = results.filter(ok => !ok).length
+        const results = await Promise.allSettled(selection.map(clip => window.flash?.deleteClip(clip.filePath)))
+        const failed = results.filter(result => result.status === 'rejected' || !result.value).length
         if (failed) setSaveState(state => ({ ...state, error: `Could not delete ${failed} of ${count} ${itemWord}.` }))
         clearSelected()
         await refreshClips()

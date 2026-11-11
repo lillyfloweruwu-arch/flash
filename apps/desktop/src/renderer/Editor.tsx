@@ -38,7 +38,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
   // Decoding walks the whole file, so the lanes arrive seconds after the
   // screen. Showing nothing while that happens reads as broken rather than
   // busy, so the mixer renders placeholder rows until the tracks land.
-  const { tracks: audioTracks, loading: audioLoading } = useClipAudio(clip.filePath)
+  const { tracks: audioTracks, loading: audioLoading, error: audioError } = useClipAudio(clip.filePath)
   const [gains, setGains] = useState<Record<string, number>>({})
   const [mutedTracks, setMutedTracks] = useState<Set<string>>(new Set())
 
@@ -99,23 +99,28 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     const gains = Object.fromEntries(
       audioTracks.map(track => [track.id, liveGains[track.id] ?? 1]),
     ) as Partial<Record<AudioTrackId, number>>
-    const result = await window.flash?.saveClipEdit(clip.filePath, {
-      startSeconds: range.inSec,
-      endSeconds: range.outSec,
-      gains,
-      saturation,
-      reEncode: saveMode.reason === 'audio' || saveMode.reason === 'video',
-    })
-    setSaving(false)
-    if (!result || result.error) { setSaveNote(result?.error ?? 'Save failed'); return }
-    // If smart render could not run, the native side falls back to a
-    // keyframe-snapped cut. Say so rather than delivering a different clip than
-    // the one on screen.
-    const drift = result.actualStartSeconds !== undefined
-      ? Math.abs(result.actualStartSeconds - range.inSec) : 0
-    setSaveNote(drift > 0.05
-      ? `Saved from ${formatTimecode(result.actualStartSeconds!)} — ${drift.toFixed(1)}s earlier than asked`
-      : 'Saved alongside the original')
+    try {
+      const result = await window.flash?.saveClipEdit(clip.filePath, {
+        startSeconds: range.inSec,
+        endSeconds: range.outSec,
+        gains,
+        saturation,
+        reEncode: saveMode.reason === 'audio' || saveMode.reason === 'video',
+      })
+      if (!result || result.error) { setSaveNote(result?.error ?? 'Save failed'); return }
+      // If smart render could not run, the native side falls back to a
+      // keyframe-snapped cut. Say so rather than delivering a different clip than
+      // the one on screen.
+      const drift = result.actualStartSeconds !== undefined
+        ? Math.abs(result.actualStartSeconds - range.inSec) : 0
+      setSaveNote(drift > 0.05
+        ? `Saved from ${formatTimecode(result.actualStartSeconds!)} — ${drift.toFixed(1)}s earlier than asked`
+        : 'Saved alongside the original')
+    } catch (error) {
+      setSaveNote(error instanceof Error ? error.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
   }, [audioTracks, liveGains, saturation, saveMode, clip.filePath, range])
 
   const grabFrame = useCallback(async () => {
@@ -268,6 +273,10 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
             </span>
           </div>
         </div>
+
+        {audioError && (
+          <p role="alert" style={{ fontSize: 12, color: 'var(--alert)', padding: '8px 12px' }}>Audio unavailable</p>
+        )}
 
         <AudioLanes
           loading={audioLoading}

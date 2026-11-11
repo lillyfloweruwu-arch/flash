@@ -262,11 +262,18 @@ export interface ConfirmRequest {
 
 export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; onClose: () => void }) {
   const accepted = useRef(false)
-  const accept = useCallback(() => {
+  const [error, setError] = useState<string | null>(null)
+  const accept = useCallback(async () => {
     if (accepted.current) return
     accepted.current = true
-    request.onConfirm()
-    onClose()
+    setError(null)
+    try {
+      await request.onConfirm()
+      onClose()
+    } catch (err) {
+      accepted.current = false
+      setError(err instanceof Error ? err.message : 'Something went wrong')
+    }
   }, [request, onClose])
 
   useEffect(() => {
@@ -286,6 +293,9 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest; o
       </h2>
       {request.body && (
         <p style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.6, marginBottom: 24 }}>{request.body}</p>
+      )}
+      {error && (
+        <p role="alert" style={{ fontSize: 12, color: 'var(--alert)', lineHeight: 1.6, marginBottom: 24 }}>{error}</p>
       )}
       <div className="flex justify-end gap-2">
         <button onClick={onClose} className="btn">Cancel</button>

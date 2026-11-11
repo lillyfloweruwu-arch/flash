@@ -44,6 +44,8 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   if (index >= 0) lastIndex.current = index
   const clip = index >= 0 ? clips[index] : undefined
   const isShot = clip?.kind === 'shot'
+  const currentPathRef = useRef(clip?.filePath)
+  currentPathRef.current = clip?.filePath
 
   const [direction, setDirection] = useState<'up' | 'down' | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -181,13 +183,22 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   // fits an upload limit. It re-encodes, so it takes seconds.
   const exportCopy = async () => {
     if (!clip) return
+    const startedPath = clip.filePath
     setExportBusy(true); setNote(null)
     const limit = findExportLimit(exportLimit)
-    const result = await window.flash?.exportClip(clip.filePath, limit.bytes, limit.codec)
-    setExportBusy(false)
-    if (!result || result.error) { setNote(result?.error ?? 'Export failed'); return }
-    const fallback = codecNote(limit.codec, result.codec)
-    setNote(`Shareable copy saved: ${formatBytes(result.bytes ?? 0)} at ${result.height}p${fallback ? `. ${fallback}` : ''}`)
+    try {
+      const result = await window.flash?.exportClip(clip.filePath, limit.bytes, limit.codec)
+      if (currentPathRef.current !== startedPath) return
+      if (!result || result.error) { setNote(result?.error ?? 'Export failed'); return }
+      const fallback = codecNote(limit.codec, result.codec)
+      setNote(`Shareable copy saved: ${formatBytes(result.bytes ?? 0)} at ${result.height}p${fallback ? `. ${fallback}` : ''}`)
+    } catch (error) {
+      if (currentPathRef.current === startedPath) {
+        setNote(error instanceof Error ? error.message : 'Export failed')
+      }
+    } finally {
+      setExportBusy(false)
+    }
   }
 
   const copyFile = async () => {

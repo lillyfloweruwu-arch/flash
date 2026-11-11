@@ -18,10 +18,12 @@ export function useClipAudio(filePath: string) {
   const visible = usePlaybackVisibility()
   const [tracks, setTracks] = useState<LiveMixTrack[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     setTracks([])
+    setError(null)
     setLoading(!!filePath && visible)
     if (!filePath || !visible) return
     let release: (() => void) | undefined
@@ -34,19 +36,21 @@ export function useClipAudio(filePath: string) {
         setLoading(false)
         if (!result) return
         if (result.error) {
+          setError(result.error)
           console.error(`Could not decode audio for ${filePath}: ${result.error}`)
           return
         }
         setTracks(sortLanes(result.tracks.map(track => ({ ...track, sampleRate: result.sampleRate }))))
-      }).catch(error => {
+      }).catch(err => {
         if (cancelled) return
         setLoading(false)
-        console.error(`Could not decode audio for ${filePath}`, error)
+        setError(err instanceof Error ? err.message : 'Audio unavailable')
+        console.error(`Could not decode audio for ${filePath}`, err)
       })
 
     }, 120)
     return () => { cancelled = true; clearTimeout(timer); release?.() }
   }, [filePath, visible])
 
-  return { tracks, loading }
+  return { tracks, loading, error }
 }
