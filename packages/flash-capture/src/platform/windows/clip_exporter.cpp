@@ -13,6 +13,8 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <cstdio>
+#include <cstring>
 #include <Windows.h>
 #include <mfapi.h>
 #include <mferror.h>
@@ -35,6 +37,57 @@ constexpr uint32_t kMixChannels = 2;
 // A share copy of an hour-long recording is not a thing anyone wants, and the
 // mix timeline is held in memory, so refuse rather than exhaust RAM.
 constexpr double kMaxExportSeconds = 15 * 60;
+
+// The source reader hands back NV12 whose rows can be padded: a 1080-line
+// frame often arrives in a buffer laid out for 1088 lines, so the chroma plane
+// starts 8 rows later than a tight 1080-line layout puts it. The sink writer
+// then reads chroma from the padding, which paints a green band across the top
+// and shifts every colour. Repack such a frame into a tight w x h buffer.
+ComPtr<IMFSample> TightenNv12(const ComPtr<IMFSample>& sample, uint32_t width, uint32_t height) {
+    if (!sample || width == 0 || height == 0) return sample;
+    ComPtr<IMFMediaBuffer> frame;
+    if (FAILED(sample->ConvertToContiguousBuffer(&frame))) return sample;
+    ComPtr<IMF2DBuffer> flat;
+    if (FAILED(frame.As(&flat))) return sample;
+    BYTE* scan0 = nullptr;
+    LONG pitch = 0;
+    if (FAILED(flat->Lock2D(&scan0, &pitch))) return sample;
+    DWORD length = 0;
+    flat->GetContiguousLength(&length);
+    bool repacked = false;
+    ComPtr<IMFMediaBuffer> tight;
+    if (pitch >= static_cast<LONG>(width) && length > 0) {
+        const size_t rows = static_cast<size_t>(length) * 2 / (3 * static_cast<size_t>(pitch));
+        const size_t tightSize = static_cast<size_t>(width) * height * 3 / 2;
+        if (rows > height || static_cast<uint32_t>(pitch) != width) {
+            if (SUCCEEDED(MFCreateMemoryBuffer(static_cast<DWORD>(tightSize), &tight))) {
+                BYTE* out = nullptr;
+                if (SUCCEEDED(tight->Lock(&out, nullptr, nullptr))) {
+                    const size_t planeRows = rows >= height ? rows : height;
+                    for (uint32_t y = 0; y < height; ++y)
+                        std::memcpy(out + static_cast<size_t>(y) * width, scan0 + static_cast<size_t>(y) * pitch, width);
+                    BYTE* uvOut = out + static_cast<size_t>(width) * height;
+                    const BYTE* uvIn = scan0 + planeRows * pitch;
+                    for (uint32_t y = 0; y < height / 2; ++y)
+                        std::memcpy(uvOut + static_cast<size_t>(y) * width, uvIn + static_cast<size_t>(y) * pitch, width);
+                    tight->Unlock();
+                    tight->SetCurrentLength(static_cast<DWORD>(tightSize));
+                    repacked = true;
+                }
+            }
+        }
+    }
+    flat->Unlock2D();
+    if (!repacked) return sample;
+    // A fresh sample: the reader recycles the ones it hands out, so swapping
+    // buffers inside its sample breaks the next ReadSample.
+    ComPtr<IMFSample> copy;
+    if (FAILED(MFCreateSample(&copy)) || FAILED(copy->AddBuffer(tight.Get()))) return sample;
+    LONGLONG t = 0, d = 0;
+    if (SUCCEEDED(sample->GetSampleTime(&t))) copy->SetSampleTime(t);
+    if (SUCCEEDED(sample->GetSampleDuration(&d))) copy->SetSampleDuration(d);
+    return copy;
+}
 
 std::wstring ToWide(const std::string& value) {
     if (value.empty()) return {};
@@ -439,6 +492,7 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
             // Saturation is a scale of each chroma sample about neutral, applied
             // in place on the NV12 UV plane. Luma is untouched. At 100 the pass
             // is skipped entirely so an unmodified export stays on the fast path.
+            sample = TightenNv12(sample, outWidth, outHeight);
             if (options.saturation != 100) {
                 ComPtr<IMFMediaBuffer> frame;
                 if (SUCCEEDED(sample->ConvertToContiguousBuffer(&frame))) {
