@@ -165,23 +165,17 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         // The Audio capture switch in Settings produces all three, so rather
         // than patching each, lay a grid of slots across the video's whole span
         // and let the sweep below skip wherever a track really has samples.
-        struct Slot { int64_t timeUs; uint32_t frameCount; };
-        std::vector<Slot> grid;
+        int64_t videoStartUs = 0, videoEndUs = 0;
         if (fallbackRate) {
-            int64_t videoStartUs = videoPackets.front().pts_us;
-            int64_t videoEndUs = videoStartUs;
+            videoStartUs = videoPackets.front().pts_us;
+            videoEndUs = videoStartUs;
             for (const auto& p : videoPackets) {
                 videoStartUs = (std::min)(videoStartUs, p.pts_us);
                 videoEndUs = (std::max)(videoEndUs, p.pts_us);
             }
-            const int64_t step = (std::max)(
-                static_cast<int64_t>(1), static_cast<int64_t>(cadence) * 1000000 / fallbackRate);
-            // Bounded by the video's own length, so a bad timestamp cannot spin
-            // this: a 600s clip at 10ms is 60000 slots.
-            for (int64_t at = videoStartUs; at <= videoEndUs && grid.size() < 200000u; at += step) {
-                grid.push_back({at, cadence});
-            }
         }
+        const int64_t step = fallbackRate ? (std::max)(
+            static_cast<int64_t>(1), static_cast<int64_t>(cadence) * 1000000 / fallbackRate) : 1;
 
         size_t widest = 0;
         for (const auto& s : audioStreams) {
@@ -191,9 +185,8 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         silence.assign(widest, 0.0f);
 
         for (const auto& s : audioStreams) {
-            if (!s.channels) continue;
-            // What this track already covers, in order, so the sweep is linear
-            // rather than a search per slot.
+            if (!fallbackRate || !s.channels || !s.sampleRate) continue;
+            // What this track already covers, in order.
             struct Span { int64_t fromUs, toUs; };
             std::vector<Span> covered;
             for (const auto& p : audioPackets) {
@@ -204,14 +197,32 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
             std::stable_sort(covered.begin(), covered.end(),
                 [](const Span& a, const Span& b) { return a.fromUs < b.fromUs; });
 
-            size_t at = 0;
-            for (const auto& slot : grid) {
-                while (at < covered.size() && covered[at].toUs <= slot.timeUs) ++at;
-                const bool inside = at < covered.size() && covered[at].fromUs <= slot.timeUs;
-                if (inside) continue;
-                silentPackets.push_back({silence.data(), slot.frameCount, s.channels,
-                                         s.sampleRate, slot.timeUs, std::string(s.id)});
+            // Fill each hole with exactly the silence it needs. A fixed grid of
+            // whole 10 ms slots overran every hole that did not start on the
+            // grid, so the padding overlapped the real audio after it; the
+            // muxed track then carried overlapping timestamps and extra
+            // samples, which is audible as crackle.
+            const int64_t silenceEndUs = videoEndUs + step;
+            auto fill = [&](int64_t fromUs, int64_t toUs) {
+                if (toUs - fromUs < 500) return;   // timestamp rounding, not a hole
+                int64_t frames = (toUs - fromUs) * static_cast<int64_t>(s.sampleRate) / 1000000;
+                int64_t done = 0;
+                while (frames > 0 && silentPackets.size() < 400000u) {
+                    const uint32_t chunk = static_cast<uint32_t>((std::min)(frames, static_cast<int64_t>(cadence)));
+                    silentPackets.push_back({silence.data(), chunk, s.channels, s.sampleRate,
+                                             fromUs + done * 1000000 / static_cast<int64_t>(s.sampleRate), std::string(s.id)});
+                    done += chunk;
+                    frames -= chunk;
+                }
+            };
+            int64_t cursor = videoStartUs;
+            for (const auto& span : covered) {
+                if (span.toUs <= cursor) continue;
+                if (span.fromUs > cursor) fill(cursor, (std::min)(span.fromUs, silenceEndUs));
+                cursor = (std::max)(cursor, span.toUs);
+                if (cursor >= silenceEndUs) break;
             }
+            if (cursor < silenceEndUs) fill(cursor, silenceEndUs);
         }
     }
 
