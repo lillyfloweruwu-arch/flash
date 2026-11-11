@@ -43,8 +43,10 @@ std::unique_ptr<Encoder> CreateEncoder() {
 }
 
 std::unique_ptr<Encoder> CreateEncoder(const EncoderConfig& defaultConfig) {
-    auto hardware = std::make_unique<MfHardwareEncoder>();
-    if (hardware->Initialize(defaultConfig)) return hardware;
+    if (!defaultConfig.forceSoftware) {
+        auto hardware = std::make_unique<MfHardwareEncoder>();
+        if (hardware->Initialize(defaultConfig)) return hardware;
+    }
 
     // Fall back to software encoder
     auto software = std::make_unique<SoftwareEncoder>();

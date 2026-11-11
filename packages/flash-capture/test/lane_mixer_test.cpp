@@ -17,7 +17,7 @@ static bool Near(float a, float b) { return std::fabs(a - b) < 1e-6f; }
 static int64_t Us(int64_t frames) { return frames * 1000000 / LaneMixer::kRate; }
 
 int main() {
-    const int64_t hold = Us(LaneMixer::kHoldFrames);   // 30000
+    const int64_t hold = Us(LaneMixer::kHoldFrames);   // 80000
 
     // Two apps on one lane are summed.
     {
@@ -101,15 +101,15 @@ int main() {
     // keeps its newest.
     {
         LaneMixer mixer; std::vector<LaneMixer::Packet> out;
-        std::vector<float> ramp(12000 * 2);
-        for (size_t i = 0; i < 12000; ++i) ramp[i * 2] = ramp[i * 2 + 1] = static_cast<float>(i + 1) / 12000.0f;
-        mixer.Push(1, ramp.data(), 12000, 0);
-        mixer.Pull(Us(14400), out);
-        // 12000 buffered is over the limit, so all but the last 1440 frames go.
-        assert(out.size() == 3);
-        assert(out[0].startUs == Us(10560));
-        assert(Near(out[0].samples[0], 10561.0f / 12000.0f));
-        assert(Near(out[2].samples[479 * 2], 1.0f));
+        std::vector<float> ramp(24000 * 2);
+        for (size_t i = 0; i < 24000; ++i) ramp[i * 2] = ramp[i * 2 + 1] = static_cast<float>(i + 1) / 24000.0f;
+        mixer.Push(1, ramp.data(), 24000, 0);
+        mixer.Pull(Us(24000) + hold, out);
+        // 24000 buffered is over the limit, so all but the last 3840 frames go.
+        assert(out.size() == 8);
+        assert(out[0].startUs == Us(20160));
+        assert(Near(out[0].samples[0], 20161.0f / 24000.0f));
+        assert(Near(out[7].samples[479 * 2], 1.0f));
     }
 
     // No apps: nothing is emitted, and the timeline still moves, so the first
@@ -232,7 +232,7 @@ int main() {
         assert(seconds < 2.0);
         const auto a = Tone(480, 0.25f);
         mixer.Push(1, a.data(), 480, later);
-        mixer.Pull(later + 40000, out);
+        mixer.Pull(later + 40000 + hold, out);
         assert(out.size() == 1 && out[0].startUs == later);
         for (float s : out[0].samples) assert(Near(s, 0.25f));
     }

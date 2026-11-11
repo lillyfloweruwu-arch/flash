@@ -151,6 +151,8 @@ std::atomic<int64_t> framesDelivered{0}, encodeUs{0}, intervalUs{0}, packetsPush
 static constexpr int kEncoderDeadAfterFrames = 120;
 std::atomic<int> encodeFailureStreak{0};
 std::atomic<bool> encoderDead{false};
+// Set when a hardware encoder stopped accepting frames; later rebuilds use software.
+std::atomic<bool> hardwareEncoderBroken{false};
 
 std::chrono::steady_clock::time_point lastArrival{};
 
@@ -195,6 +197,10 @@ bool StartCaptureThreads() {
 
 bool BuildPipeline(bool initializeAudio) {
     pipelineError.clear();
+    if (encoderDead.load()) {
+        std::lock_guard lock(stateMutex);
+        if (encoder && encoder->IsHardwareAccelerated()) hardwareEncoderBroken.store(true);
+    }
     encoderDead.store(false);
     encodeFailureStreak.store(0);
     // Release the previous capture BEFORE building the replacement. DXGI permits
@@ -217,6 +223,7 @@ bool BuildPipeline(bool initializeAudio) {
     if (!screen->Initialize(quality.fps, outputWidth, outputHeight, displayId)) { pipelineError = "capture initialization failed"; return false; }
     EncoderConfig config; config.width = outputWidth; config.height = outputHeight; config.fps = quality.fps;
     config.bitrate = quality.bitrateKbps * 1000; config.device = screen->HasGpuOutput() ? screen->GetDevice() : nullptr;
+    config.forceSoftware = hardwareEncoderBroken.load();
     std::unique_ptr<Encoder> nextEncoder;
     try { nextEncoder = CreateEncoder(config); }
     catch (const std::exception& error) { pipelineError = error.what(); return false; }

@@ -27,6 +27,7 @@ struct EncoderConfig {
     bool exportQuality = false;   // quality over latency: lookahead, VBR with a peak, longer GOP
     bool highProfile = false;   // request H.264 High on hardware encoders (file exports)
     void* device = nullptr;
+    bool forceSoftware = false;   // the hardware encoder already died this session
 };
 
 // Abstract encoder interface — NVENC, AMF, and software all implement this

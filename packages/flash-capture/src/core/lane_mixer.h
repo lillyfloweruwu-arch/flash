@@ -29,10 +29,10 @@ public:
     static constexpr uint32_t kRate = 48000, kChannels = 2, kPacketFrames = 480;
     // Output trails the clock by this much, so a packet that is drained a
     // little late still lands in place.
-    static constexpr int64_t kHoldFrames = 1440;          // 30 ms
+    static constexpr int64_t kHoldFrames = 3840;          // 80 ms
     // A source that has this much waiting is running ahead of the clock (its
     // device is faster, or the mixer stalled). It is cut back to the hold.
-    static constexpr int64_t kMaxBufferedFrames = 11040;  // 230 ms
+    static constexpr int64_t kMaxBufferedFrames = 14400;  // 300 ms
     static constexpr int64_t kGapFrames = 960;            // 20 ms
 
     struct Packet {
