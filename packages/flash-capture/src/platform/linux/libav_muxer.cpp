@@ -11,8 +11,10 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 #include <algorithm>
+#include <cerrno>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <ctime>
@@ -67,7 +69,15 @@ public:
     std::string Path() const { return partial_.string(); }
     void Publish() {
         // A hard link publishes atomically without overwriting an existing clip.
-        if (link(partial_.c_str(), destination_.c_str()) != 0) throw std::runtime_error("Could not publish output; destination may already exist");
+        if (link(partial_.c_str(), destination_.c_str()) != 0) {
+            const int error = errno;
+            if (error == EEXIST) throw std::runtime_error("Could not publish output; destination may already exist");
+            if (std::filesystem::exists(destination_))
+                throw std::runtime_error(std::string("Could not publish output: ") + std::strerror(error));
+            std::error_code renameError;
+            std::filesystem::rename(partial_, destination_, renameError);
+            if (renameError) throw std::runtime_error(std::string("Could not publish output: ") + std::strerror(error) + ": " + renameError.message());
+        }
     }
 };
 std::string ClipPath(const std::string& directory, const std::string& game) {
@@ -284,6 +294,7 @@ public:
             target->time_base = source->time_base; av_dict_copy(&target->metadata, source->metadata, 0);
             if (source->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) video = i;
         }
+        if (video < 0) throw std::runtime_error("no video stream");
         Check(avio_open(&media.output->pb, file.Path().c_str(), AVIO_FLAG_WRITE), "Open trim output");
         Check(avformat_write_header(media.output, nullptr), "Write trim header");
         int64_t last = boundary;
