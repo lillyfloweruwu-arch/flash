@@ -5,6 +5,7 @@
 #include "color_space.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
@@ -512,6 +513,7 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
     const std::string attemptPath(utf8.begin(), utf8.end());
 
     const std::vector<ExportCodec> ladder = CodecLadder(options.codec);
+    std::string failures;
     for (ExportCodec codec : ladder) {
         try {
             ExportPlan plan;
@@ -545,10 +547,16 @@ ExportResult ExportClip(const std::string& inputPath, const std::string& outputP
             output.Publish();
             best.filePath = outputPath;
             return best;
-        } catch (const CodecUnavailable&) {
+        } catch (const CodecUnavailable& error) {
+            const std::string message = std::string("codec ") + ExportCodecName(codec) + ": " + error.what();
+            if (!failures.empty()) failures += "; ";
+            failures += message;
+            std::fprintf(stderr, "flash: %s\n", message.c_str());
             continue;   // next step of the ladder
         }
     }
+    if (!failures.empty())
+        throw std::runtime_error("no video encoder accepted the export: " + failures);
     throw std::runtime_error("no video encoder accepted the export");
 #else
     (void)inputPath; (void)outputPath; (void)options;

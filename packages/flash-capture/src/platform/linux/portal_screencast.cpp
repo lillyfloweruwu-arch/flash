@@ -5,6 +5,8 @@
 #include <mutex>
 #include <stdexcept>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 namespace flash {
 namespace {
@@ -61,11 +63,14 @@ Variant Request(GDBusConnection* bus, const char* method, const std::string& tok
     if (response.code != 0) throw std::runtime_error("Screen sharing permission was cancelled or denied");
     return values;
 }
-GVariantBuilder Options(const std::string& token) {
+GVariant* Options(const std::string& token,
+                  const std::vector<std::pair<const char*, GVariant*>>& extra = {}) {
     GVariantBuilder options;
     g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
     g_variant_builder_add(&options, "{sv}", "handle_token", g_variant_new_string(token.c_str()));
-    return options;
+    for (const auto& [key, value] : extra)
+        g_variant_builder_add(&options, "{sv}", key, value);
+    return g_variant_builder_end(&options);
 }
 }
 void SetPortalRestoreToken(const std::string& token, std::function<void(const std::string&)> callback) {
@@ -88,23 +93,25 @@ void PortalSession::Open(GCancellable* cancel) {
     GError* error = nullptr;
     bus_ = g_bus_get_sync(G_BUS_TYPE_SESSION, cancel, &error);
     if (!bus_) throw Error(error);
-    auto token = Token(); auto options = Options(token);
-    g_variant_builder_add(&options, "{sv}", "session_handle_token", g_variant_new_string(Token().c_str()));
-    auto created = Request(bus_, "CreateSession", token, g_variant_new("(a{sv})", &options), cancel);
+    auto token = Token(); auto options = Options(token, {{"session_handle_token", g_variant_new_string(Token().c_str())}});
+    auto created = Request(bus_, "CreateSession", token, g_variant_new("(@a{sv})", options), cancel);
     const gchar* session = nullptr;
     if (!g_variant_lookup(created.get(), "session_handle", "&s", &session)) throw std::runtime_error("Portal omitted session handle");
     session_ = session;
-    token = Token(); options = Options(token);
-    g_variant_builder_add(&options, "{sv}", "types", g_variant_new_uint32(3));
-    g_variant_builder_add(&options, "{sv}", "multiple", g_variant_new_boolean(false));
-    g_variant_builder_add(&options, "{sv}", "persist_mode", g_variant_new_uint32(2));
+    token = Token();
+    std::vector<std::pair<const char*, GVariant*>> extra{
+        {"types", g_variant_new_uint32(3)},
+        {"multiple", g_variant_new_boolean(false)},
+        {"persist_mode", g_variant_new_uint32(2)},
+    };
     {
         std::lock_guard lock(tokenMutex);
-        if (!restoreToken.empty()) g_variant_builder_add(&options, "{sv}", "restore_token", g_variant_new_string(restoreToken.c_str()));
+        if (!restoreToken.empty()) extra.emplace_back("restore_token", g_variant_new_string(restoreToken.c_str()));
     }
-    Request(bus_, "SelectSources", token, g_variant_new("(oa{sv})", session_.c_str(), &options), cancel);
+    options = Options(token, extra);
+    Request(bus_, "SelectSources", token, g_variant_new("(o@a{sv})", session_.c_str(), options), cancel);
     token = Token(); options = Options(token);
-    auto started = Request(bus_, "Start", token, g_variant_new("(osa{sv})", session_.c_str(), "", &options), cancel);
+    auto started = Request(bus_, "Start", token, g_variant_new("(os@a{sv})", session_.c_str(), "", options), cancel);
     Variant streams(g_variant_lookup_value(started.get(), "streams", G_VARIANT_TYPE("a(ua{sv})")), g_variant_unref);
     if (!streams || !g_variant_n_children(streams.get())) throw std::runtime_error("Portal returned no video streams");
     Variant stream(g_variant_get_child_value(streams.get(), 0), g_variant_unref);
