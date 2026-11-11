@@ -85,6 +85,8 @@ type Settings = typeof DEFAULTS
 
 let settings: Settings = { ...DEFAULTS }
 let settingsPath = ''
+let sessionClipsFolder: string | null = null
+const activeClipsFolder = () => sessionClipsFolder ?? settings.clipsFolder
 
 function sanitiseSettings(parsed: unknown, defaults: Settings = DEFAULTS): Partial<Settings> {
   return sanitise(defaults, parsed)
@@ -168,7 +170,7 @@ function applyCaptureSettings(game: string | null = currentGame) {
 // Every path below arrives from the renderer. isInsideRoot resolves '..' and
 // compares whole path segments, so neither a traversal nor a sibling folder
 // sharing the root's name gets through.
-const isInsideClips = (filePath: string) => isInsideRoot(settings.clipsFolder, filePath)
+const isInsideClips = (filePath: string) => isInsideRoot(activeClipsFolder(), filePath)
 
 // The only two kinds of file Flash ever puts in the library.
 const MEDIA_EXTENSIONS = new Set(['.mp4', '.png'])
@@ -180,15 +182,17 @@ const MEDIA_EXTENSIONS = new Set(['.mp4', '.png'])
 function ensureClipsFolder(): string | null {
   try {
     if (!existsSync(settings.clipsFolder)) mkdirSync(settings.clipsFolder, { recursive: true })
+    sessionClipsFolder = null
     return null
   } catch (error: any) {
     const unavailable = settings.clipsFolder
     if (unavailable === DEFAULTS.clipsFolder) return error?.message || 'Could not create the clips folder'
     console.warn(`Clips folder ${unavailable} is unavailable, falling back to ${DEFAULTS.clipsFolder}`, error)
-    settings.clipsFolder = DEFAULTS.clipsFolder
-    try { mkdirSync(settings.clipsFolder, { recursive: true }) }
+    const fallback = DEFAULTS.clipsFolder
+    sessionClipsFolder = fallback
+    try { mkdirSync(fallback, { recursive: true }) }
     catch (fallbackError: any) { return fallbackError?.message || 'Could not create the clips folder' }
-    return `${unavailable} is not available — clips are going to ${settings.clipsFolder} for now`
+    return `${unavailable} is not available — clips are going to ${fallback} for now`
   }
 }
 
@@ -377,6 +381,7 @@ export interface Display {
 }
 
 let captureAddon: CaptureAddon | null = null
+let captureStatusError: string | undefined
 
 const BUILT_IN_VOICE_PHRASES = [
   'flash clip that',
@@ -512,7 +517,7 @@ interface ClipInfo {
 
 function scanClips(): ClipInfo[] {
   const clips: ClipInfo[] = []
-  const folder = settings.clipsFolder
+  const folder = activeClipsFolder()
   if (!existsSync(folder)) return clips
 
   // Scan for MP4 and PNG files in clips folder and game subfolders
@@ -637,7 +642,7 @@ function moveClipToGame(filePath: string, requestedGame: string): { filePath?: s
   const extension = sourceExtension.toLowerCase()
   if (extension !== '.mp4' && extension !== '.png') return { error: 'Only clips and screenshots can be moved' }
 
-  const targetFolder = join(settings.clipsFolder, game)
+  const targetFolder = join(activeClipsFolder(), game)
   if (dirname(filePath).toLowerCase() === targetFolder.toLowerCase()) return { filePath }
 
   let existing: string[]
@@ -719,7 +724,7 @@ const MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
 
 async function checkDiskSpace(): Promise<string | null> {
   try {
-    const fs = await statfs(settings.clipsFolder)
+    const fs = await statfs(activeClipsFolder())
     const free = fs.bavail * fs.bsize
     if (free < MIN_FREE_BYTES) {
       return `Only ${(free / 1e9).toFixed(1)} GB free on the clips drive — need at least 2 GB`
@@ -817,7 +822,7 @@ async function runSaveScreenshot(): Promise<void> {
     if (!captureAddon) throw new Error('Capture engine not available')
 
     const game = currentGame ?? 'Unknown'
-    const folder = join(settings.clipsFolder, gameFolderName(game))
+    const folder = join(activeClipsFolder(), gameFolderName(game))
     mkdirSync(folder, { recursive: true })
     const filename = firstFreeName(clipTimestamp(new Date()), '.png', readdirSync(folder))
     screenshotPath = join(folder, filename)
@@ -1005,6 +1010,9 @@ function stopGameDetection() {
 
 // ── Notification Popup ────────────────────────────────────────────────────────
 
+let sessionDisplayId: number | null = null
+const activeDisplayId = () => sessionDisplayId ?? settings.displayId
+
 function availableDisplay(requested: number): number {
   try {
     const displays = captureAddon?.listDisplays?.() ?? []
@@ -1013,18 +1021,28 @@ function availableDisplay(requested: number): number {
 }
 
 function recoverDisplay() {
-  const next = availableDisplay(settings.displayId)
-  if (next === settings.displayId) return
+  const current = activeDisplayId()
+  const next = availableDisplay(current)
+  if (next === current) return
   try {
     captureAddon?.setDisplay?.(next)
-    settings.displayId = next
-    saveSettings()
+    sessionDisplayId = next
   } catch (error) { console.warn('Could not recover capture display', error) }
+}
+
+function restoreSavedDisplay() {
+  if (sessionDisplayId === null || sessionDisplayId === settings.displayId) return
+  try {
+    const displays = captureAddon?.listDisplays?.() ?? []
+    if (!displays.some(display => display.id === settings.displayId)) return
+    captureAddon?.setDisplay?.(settings.displayId)
+    sessionDisplayId = null
+  } catch (error) { console.warn('Could not restore capture display', error) }
 }
 
 function captureDisplay() {
   try {
-    const selected = captureAddon?.listDisplays?.().find(display => display.id === settings.displayId)
+    const selected = captureAddon?.listDisplays?.().find(display => display.id === activeDisplayId())
     if (process.platform === 'win32' && selected?.x !== undefined && selected.y !== undefined) {
       // Native DXGI uses physical pixels; Electron window bounds use DIPs.
       const centre = screen.screenToDipPoint({ x: selected.x + Math.floor(selected.width / 2), y: selected.y + Math.floor(selected.height / 2) })
@@ -1141,14 +1159,24 @@ function updateTrayMenu() {
     { label: 'Show Flash', click: () => { mainWindow?.show(); mainWindow?.focus() } },
     { label: isRecording ? 'Stop Replay Buffer' : 'Start Replay Buffer', click: () => {
       if (isRecording) {
-        captureAddon?.stopReplayBuffer()
-        setRecordingState(false)
+        try {
+          captureAddon?.stopReplayBuffer()
+          setRecordingState(false)
+        } catch (error) {
+          console.warn('Could not stop the replay buffer', error)
+          setRecordingState(readRecordingState())
+        }
       } else {
-        setRecordingState(captureAddon?.startReplayBuffer() ?? false)
+        try {
+          setRecordingState(captureAddon?.startReplayBuffer() ?? false)
+        } catch (error) {
+          console.warn('Could not start the replay buffer', error)
+          setRecordingState(readRecordingState())
+        }
       }
     }},
     { type: 'separator' },
-    { label: 'Open Clips Folder', click: () => shell.openPath(settings.clipsFolder) },
+    { label: 'Open Clips Folder', click: () => shell.openPath(activeClipsFolder()) },
     { label: 'Settings', click: () => { mainWindow?.show(); mainWindow?.webContents.send('navigate', 'Settings') } },
     { type: 'separator' },
     { label: 'Quit Flash', click: () => app.quit() },
@@ -1236,9 +1264,9 @@ function setupIPC() {
     if (!captureAddon) return { recording: false, bufferSeconds: settings.bufferLength, encoder: 'none', available: false }
     try {
       const status = captureAddon.getStatus()
-      return { ...status, available: true }
+      return { ...status, captureError: status.captureError ?? captureStatusError, available: true }
     } catch {
-      return { recording: isRecording, bufferSeconds: settings.bufferLength, encoder: 'unknown', available: true }
+      return { recording: isRecording, bufferSeconds: settings.bufferLength, encoder: 'unknown', available: true, captureError: captureStatusError }
     }
   })
 
@@ -1468,7 +1496,7 @@ function setupIPC() {
   })
 
   ipcMain.handle('open-clips-folder', () => {
-    shell.openPath(settings.clipsFolder)
+    shell.openPath(activeClipsFolder())
   })
   ipcMain.handle('show-clip-in-folder', (_event, filePath: string) => {
     if (!isInsideClips(filePath)) return
@@ -1542,7 +1570,7 @@ function setupIPC() {
     if (changed.voiceRawFloor !== undefined || changed.voiceCooldownMs !== undefined) applyVoiceThreshold()
     if (changed.voiceEnabled !== undefined) applyVoiceEnabled()
     if (changed.displayId !== undefined) {
-      try { captureAddon?.setDisplay?.(changed.displayId) }
+      try { captureAddon?.setDisplay?.(changed.displayId); sessionDisplayId = null }
       catch (error) { settings.displayId = previousDisplay; saveSettings(); console.warn('Could not switch display', error) }
       checkCaptureHealth()
       updateOverlay()
@@ -1600,7 +1628,7 @@ function setupIPC() {
   ipcMain.handle('pick-clips-folder', async () => {
     if (!mainWindow) return null
     const result = await dialog.showOpenDialog(mainWindow, {
-      defaultPath: settings.clipsFolder,
+      defaultPath: activeClipsFolder(),
       properties: ['openDirectory'],
     })
     if (result.canceled || !result.filePaths[0]) return null
@@ -1609,18 +1637,28 @@ function setupIPC() {
     ensureClipsFolder()
     // Without this the engine keeps writing MP4s to the old folder while the
     // library reads the new one: clips save fine and never appear.
-    try { captureAddon?.setClipsDir?.(settings.clipsFolder) }
+    try { captureAddon?.setClipsDir?.(activeClipsFolder()) }
     catch (error) { console.warn('Could not update engine clips folder', error) }
-    return settings.clipsFolder
+    return activeClipsFolder()
   })
 
   // ── Recording toggle ──
   ipcMain.on('toggle-recording', () => {
     if (isRecording) {
-      try { captureAddon?.stopReplayBuffer() } catch { /* ignore */ }
-      setRecordingState(false)
+      try {
+        captureAddon?.stopReplayBuffer()
+        setRecordingState(false)
+      } catch (error) {
+        console.warn('Could not stop the replay buffer', error)
+        setRecordingState(readRecordingState())
+      }
     } else {
-      setRecordingState(captureAddon?.startReplayBuffer() ?? false)
+      try {
+        setRecordingState(captureAddon?.startReplayBuffer() ?? false)
+      } catch (error) {
+        console.warn('Could not start the replay buffer', error)
+        setRecordingState(readRecordingState())
+      }
     }
   })
 
@@ -1668,7 +1706,8 @@ function checkCaptureHealth() {
   // A portal denial is a user decision. Retrying automatically would reopen
   // the permission dialog repeatedly; the REC action is the explicit retry.
   if (process.platform === 'linux') {
-    captureAddon.stopReplayBuffer()
+    try { captureAddon.stopReplayBuffer() }
+    catch (error) { console.warn('Capture watchdog: could not stop replay buffer', error) }
     setRecordingState(false, `Capture stopped: ${reason}. Press the REC badge to retry.`)
     return
   }
@@ -1705,6 +1744,10 @@ function setRecordingState(recording: boolean, error?: string) {
   updateOverlay()
   mainWindow?.webContents.send('recording-state', recording)
   if (error) mainWindow?.webContents.send('clip-save-state', { saving: false, error })
+}
+
+function readRecordingState(): boolean {
+  try { return captureAddon?.getStatus().recording ?? false } catch { return false }
 }
 
 // ── Hotkeys ───────────────────────────────────────────────────────────────────
@@ -1870,14 +1913,26 @@ app.on('ready', () => {
 
   captureAddon = loadCaptureAddon()
   if (captureAddon) {
-    captureAddon.setPortalRestoreToken?.(settings.portalRestoreToken, token => {
-      settings.portalRestoreToken = token
-      saveSettings()
-    })
-    settings.displayId = availableDisplay(settings.displayId)
-    saveSettings()
-    const status = captureAddon.initialize(settings.clipsFolder, settings.displayId)
-    if (status.error) console.warn('Capture init warning:', status.error)
+    try {
+      captureAddon.setPortalRestoreToken?.(settings.portalRestoreToken, token => {
+        settings.portalRestoreToken = token
+        saveSettings()
+      })
+    } catch (error) {
+      console.warn('Could not restore the portal token:', error)
+      captureStatusError = error instanceof Error ? error.message : String(error)
+    }
+    sessionDisplayId = availableDisplay(settings.displayId)
+    try {
+      const status = captureAddon.initialize(activeClipsFolder(), sessionDisplayId)
+      if (status.error) {
+        console.warn('Capture init warning:', status.error)
+        captureStatusError = status.error
+      }
+    } catch (error) {
+      console.warn('Could not initialise the capture engine:', error)
+      captureStatusError = error instanceof Error ? error.message : String(error)
+    }
     // Auto-start replay buffer
     applyCaptureSettings(null)
     applyAudioLanes()
@@ -1917,6 +1972,7 @@ app.on('ready', () => {
   // Resume and display changes are the two events that reliably invalidate DXGI
   // duplication. Nudge the watchdog immediately rather than waiting up to 5s.
   powerMonitor.on('resume', () => { restartAttempts = 0; checkCaptureHealth(); console.log('System resumed — rechecking capture') })
+  screen.on('display-added', () => { restartAttempts = 0; restoreSavedDisplay(); recoverDisplay(); checkCaptureHealth(); updateOverlay() })
   screen.on('display-metrics-changed', () => { restartAttempts = 0; recoverDisplay(); checkCaptureHealth(); updateOverlay() })
   screen.on('display-removed', () => { restartAttempts = 0; recoverDisplay(); checkCaptureHealth(); updateOverlay() })
 })
