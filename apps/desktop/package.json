@@ -1,6 +1,6 @@
 {
   "name": "@flash/desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "description": "Flash desktop app â€” Electron + React",
   "main": "out/main/main.js",
@@ -31,7 +31,11 @@
       },
       {
         "from": "../../assets",
-        "to": "assets"
+        "to": "assets",
+        "filter": [
+          "**/*",
+          "!installer/**"
+        ]
       }
     ],
     "win": {
@@ -46,7 +50,7 @@
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": true,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
