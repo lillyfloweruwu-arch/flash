@@ -1,8 +1,16 @@
 <p align="center">
-  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/tag/v0.1.0-beta.1">
-    <img src="docs/banner/banner.png" alt="Flash. Game clipper for Windows and Linux. Download the latest beta." width="100%">
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash.Setup.0.1.0-beta.1.exe">
+    <img src="docs/banner/banner.png" alt="Flash. Game clipper. Click to download the Windows beta installer." width="100%">
   </a>
 </p>
+
+<p align="center">
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash-0.1.0-beta.1.AppImage">Linux AppImage (experimental)</a>
+  &nbsp;&middot;&nbsp;
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/tag/v0.1.0-beta.1">All downloads and notes</a>
+</p>
+
+<p align="center"><sub>Windows will warn that the installer is unsigned. Click <b>More info</b>, then <b>Run anyway</b>.</sub></p>
 
 # Flash
 
