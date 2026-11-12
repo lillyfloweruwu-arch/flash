@@ -15,7 +15,7 @@ import { statfs } from 'fs/promises'
 import { toastHtml, overlayHtml, cornerBounds } from '../shared/windowTemplates'
 
 import { byteRange } from '../shared/byteRange'
-import { createClipDeletion } from '../shared/clipDeletion'
+import { createClipDeletion, type DeleteResult } from '../shared/clipDeletion'
 import { getTheme } from '../shared/themes'
 import { exportSuffix, type ExportCodecChoice } from '../shared/exportLimits'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
@@ -615,7 +615,7 @@ const clipDeletion = createClipDeletion({
   cleanup: filePath => { try { unlinkSync(sidecarPath(filePath)) } catch { /* No sidecar remains to remove. */ } },
 })
 
-function deleteClip(filePath: string, intent: 'manual' | 'prune' = 'manual'): Promise<boolean> {
+function deleteClip(filePath: string, intent: 'manual' | 'prune' = 'manual'): Promise<DeleteResult> {
   return clipDeletion.remove(filePath, intent)
 }
 

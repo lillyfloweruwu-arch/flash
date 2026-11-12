@@ -376,9 +376,10 @@ export default function App() {
       confirmLabel: 'Delete',
       destructive: true,
       onConfirm: async () => {
-        const deleted = await window.flash?.deleteClip(clip.filePath)
+        const result = await window.flash?.deleteClip(clip.filePath)
         // A failed delete used to be silent and the clip just stayed put.
-        if (!deleted) setSaveState(state => ({ ...state, error: `Could not delete "${clip.title}". It may be open in another program.` }))
+        if (result?.error) setSaveState(state => ({ ...state, error: result.error! }))
+        else if (!result?.deleted) setSaveState(state => ({ ...state, error: `Could not delete "${clip.title}". It may be open in another program.` }))
         refreshClips()
       },
     })
@@ -397,8 +398,13 @@ export default function App() {
       destructive: true,
       onConfirm: async () => {
         const results = await Promise.allSettled(selection.map(clip => window.flash?.deleteClip(clip.filePath)))
-        const failed = results.filter(result => result.status === 'rejected' || !result.value).length
-        if (failed) setSaveState(state => ({ ...state, error: `Could not delete ${failed} of ${count} ${itemWord}.` }))
+        const failed = results.filter(result => result.status === 'rejected' || !result.value?.deleted)
+        if (failed.length) {
+          const reason = failed
+            .map(result => result.status === 'fulfilled' ? result.value?.error : undefined)
+            .find((message): message is string => !!message)
+          setSaveState(state => ({ ...state, error: reason || `Could not delete ${failed.length} of ${count} ${itemWord}.` }))
+        }
         clearSelected()
         await refreshClips()
       },
