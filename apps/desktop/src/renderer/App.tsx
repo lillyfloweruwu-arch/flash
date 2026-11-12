@@ -103,6 +103,15 @@ function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, de
         ))}
       </nav>
 
+      <button onClick={onFeedback} className="caps transition-colors titlebar-no-drag"
+        title="Tell us what's broken or what you want. We read every message."
+        style={{
+          marginLeft: 28, height: 28, padding: '0 14px', borderRadius: 999, cursor: 'pointer',
+          color: 'var(--fg)', border: '1px solid var(--accent-line)', background: 'var(--accent-wash)',
+        }}>
+        Feedback
+      </button>
+
       <div className="ml-auto flex items-center gap-4 titlebar-no-drag">
         {saveState.saving && (
           <span role="status" className="flex items-center gap-2 caps" style={{ color: 'var(--fg)' }}>
@@ -143,15 +152,6 @@ function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, de
             animation: isRecording ? 'pulse-red 1.6s ease-in-out infinite' : 'none',
           }} />
           {isRecording ? 'Rec' : 'Idle'}
-        </button>
-
-        <button onClick={onFeedback} className="caps transition-colors"
-          title="Tell us what's broken or what you want. We read every message."
-          style={{
-            height: 28, padding: '0 14px', borderRadius: 999, cursor: 'pointer',
-            color: 'var(--fg)', border: '1px solid var(--accent-line)', background: 'var(--accent-wash)',
-          }}>
-          Feedback
         </button>
 
         <span className="keycap" title="Clip hotkey">{hotkey}</span>
