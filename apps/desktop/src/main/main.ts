@@ -766,11 +766,25 @@ function onClipSaved(clip: { path: string; duration: number }, game: string) {
 // two saves in the same second used to open two sink writers on the same path.
 // Coalesce instead: a second press while one is in flight returns that same save.
 let saveInFlight: Promise<{ path?: string; duration?: number; error?: string }> | null = null
+let saveInFlightSeconds: number | undefined
 
 function saveClipNow(seconds?: number): Promise<{ path?: string; duration?: number; error?: string }> {
-  if (saveInFlight) return saveInFlight
-  saveInFlight = runSaveClip(seconds).finally(() => { saveInFlight = null })
-  return saveInFlight
+  // No argument means the whole buffer. Only a positive number is a short
+  // clip, which is exactly how runSaveClip distinguishes the two.
+  const requested = typeof seconds === 'number' && seconds > 0 ? seconds : undefined
+  // Mashing the same key can share the save; a different length cannot. A
+  // short-clip hotkey during a full-buffer save waits for that save and then
+  // runs its own, instead of returning the wrong length.
+  if (saveInFlight && saveInFlightSeconds === requested) return saveInFlight
+  const previous = saveInFlight ?? Promise.resolve({} as { path?: string; duration?: number; error?: string })
+  const next = previous.then(() => runSaveClip(seconds))
+  const clear = () => {
+    if (saveInFlight === next) { saveInFlight = null; saveInFlightSeconds = undefined }
+  }
+  saveInFlight = next
+  saveInFlightSeconds = requested
+  next.then(clear, clear)
+  return next
 }
 
 async function runSaveClip(seconds?: number): Promise<{ path?: string; duration?: number; error?: string }> {
