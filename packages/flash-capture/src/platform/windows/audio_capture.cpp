@@ -541,6 +541,7 @@ std::vector<AudioAppInfo> AudioCapture::ListApps() const {
 void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
 #ifdef _WIN32
     const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool anchored = false; int64_t anchorUs = 0, countedFrames = 0;
     while (capturing_.load() && source->running.load()) {
         if (WaitForSingleObject(source->event, 100) != WAIT_OBJECT_0) continue;
         UINT32 packet = 0; source->capture->GetNextPacketSize(&packet);
@@ -564,7 +565,24 @@ void AudioCapture::CaptureLoop(std::shared_ptr<Source> source) {
             // hangs. Wall clock is monotonic, represents silent gaps honestly,
             // and is the same clock the video frames are stamped with.
             const uint32_t frameCount = static_cast<uint32_t>(stereo.size() / 2);
-            const int64_t startUs = CaptureClockUs() - static_cast<int64_t>(frameCount) * 1000000 / 48000;
+            const int64_t wallStartUs = CaptureClockUs() - static_cast<int64_t>(frameCount) * 1000000 / 48000;
+            // Packets arrive in ~10 ms bursts and this thread is not woken at
+            // the same instant every time, so the wall clock reads a little
+            // early or late for each one. Stamped straight from it, neighbours
+            // overlap or leave 1-3 ms holes, and the writer fills each hole with
+            // silence: a dropout in continuous audio, heard as crackle. Stamp by
+            // sample count from an anchor instead, so a steady stream is gapless,
+            // and re-anchor only when the stream really jumped (a stall, a
+            // device change).
+            int64_t startUs = wallStartUs;
+            if (anchored) {
+                const int64_t countedUs = anchorUs + countedFrames * 1000000 / 48000;
+                const int64_t off = wallStartUs - countedUs;
+                if (off > -40000 && off < 40000) startUs = countedUs;
+                else anchored = false;
+            }
+            if (!anchored) { anchorUs = startUs; countedFrames = 0; anchored = true; }
+            countedFrames += frameCount;
             AudioData value{stereo.data(), frameCount, 2, 48000, startUs, source->info.id};
             if (enabled && callback_ && value.frameCount) callback_(value);
             source->capture->ReleaseBuffer(frames); source->capture->GetNextPacketSize(&packet);
