@@ -433,8 +433,17 @@ export default function App() {
 
   const toggleRecording = useCallback(async () => {
     if (!window.flash) return
-    if (isRecording) await window.flash.capture.stopReplayBuffer()
-    else await window.flash.capture.startReplayBuffer()
+    try {
+      if (isRecording) await window.flash.capture.stopReplayBuffer()
+      else if (!await window.flash.capture.startReplayBuffer()) {
+        setSaveState(state => ({ ...state, error: 'Could not start the replay buffer' }))
+      }
+    } catch (error) {
+      setSaveState(state => ({
+        ...state,
+        error: error instanceof Error ? error.message : 'Could not change the replay buffer',
+      }))
+    }
   }, [isRecording])
 
   // A freshly saved clip goes to the top of the feed, so the moment you just
