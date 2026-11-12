@@ -164,7 +164,7 @@ class PipeWireVideo final : public VideoSource {
         pw_stream_queue_buffer(self.stream_, buffer);
     }
     bool Session() {
-        auto* loop = nullptr; pw_context* pwContext = nullptr; pw_core* core = nullptr;
+        pw_main_loop* loop = nullptr; pw_context* pwContext = nullptr; pw_core* core = nullptr;
         spa_hook listener{}; bool attached = false; bool retry = false;
         ended_ = false; connected_ = false; producedFrame_ = false; shmRequested_ = false;
         {
