@@ -256,6 +256,12 @@ export default function App() {
     return () => { cancelled = true; clearInterval(timer) }
   }, [view])
   const [displays, setDisplays] = useState<Display[]>([])
+  // A monitor can be plugged in or removed while Flash sits in the tray, so
+  // re-read the list whenever the Settings panel opens.
+  useEffect(() => {
+    if (view !== 'Settings') return
+    window.flash?.capture?.listDisplays?.()?.then(setDisplays)
+  }, [view])
   const [saveState, setSaveState] = useState<{ saving: boolean; error?: string }>({ saving: false })
 
   // The theme is a data attribute on <html>; index.css keys every palette off it.
