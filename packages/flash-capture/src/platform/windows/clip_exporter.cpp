@@ -185,6 +185,25 @@ std::vector<ExportCodec> CodecLadder(ExportCodecChoice choice) {
     return ladder;
 }
 
+// At a share copy's bitrate, frame rate is the cheapest thing to give up:
+// halving it doubles the bits each frame gets. The budget's own plan tries the
+// source rate first, which can settle on 720p60 when 1080p30 would fit; on a
+// 10 MB / 30 s copy that costs a whole resolution rung for smoothness nobody
+// watching once in a chat window needs. Take the slower plan only when it buys
+// a taller picture, so a copy that can afford 1080p60 keeps it.
+ExportPlan PlanShareCopy(uint32_t sourceWidth, uint32_t sourceHeight, uint32_t fps,
+                         double span, const ExportOptions& options, ExportCodec codec,
+                         uint32_t sourceKbps) {
+    ExportPlan plan = PlanExport(sourceWidth, sourceHeight, fps, span, options.maxBytes,
+        options.maxHeight, codec, options.maxFps, sourceKbps);
+    if (plan.fps > 30) {
+        const ExportPlan slower = PlanExport(sourceWidth, sourceHeight, fps, span,
+            options.maxBytes, options.maxHeight, codec, 30, sourceKbps);
+        if (slower.height > plan.height) plan = slower;
+    }
+    return plan;
+}
+
 // Encoder settings the sink writer hands to whichever encoder it creates. All
 // of them are requests: an encoder that cannot honour one ignores it, and the
 // caller falls back to no settings at all if the set is refused outright.
@@ -293,8 +312,8 @@ static ExportResult EncodeClip(const std::string& inputPath, const std::string& 
             ? static_cast<uint32_t>((std::min)(static_cast<double>(kExportMaxVideoKbps),
                 std::filesystem::file_size(input) * 8.0 / 1000.0 / sourceSeconds))
             : 0;
-        const ExportPlan plan = retry ? usedPlan : PlanExport(sourceWidth, sourceHeight, fps, span,
-            options.maxBytes, options.maxHeight, codec, options.maxFps, sourceKbps);
+        const ExportPlan plan = retry ? usedPlan : PlanShareCopy(sourceWidth, sourceHeight, fps, span,
+            options, codec, sourceKbps);
         if (!plan.width || !plan.height) throw std::runtime_error("export size budget is too small for the minimum video and audio bitrate");
         usedPlan = plan;
 
