@@ -33,10 +33,10 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
         await closed
       },
     })
-    assert.equal(await deletion.remove(file, 'prune'), false)
+    assert.equal((await deletion.remove(file, 'prune')).deleted, false)
     assert.equal(attempts, 1)
     assert.equal(fs.readFileSync(file, 'utf8'), 'keep starred recording')
-    assert.equal(await deletion.remove(file, 'manual'), true)
+    assert.equal((await deletion.remove(file, 'manual')).deleted, true)
     assert.equal(fs.existsSync(file), false)
     console.log('PASS: real Windows deny-delete handle; star during retry survives release; confirmed manual delete succeeds')
   } finally {
