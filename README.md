@@ -1,12 +1,14 @@
 <p align="center">
-  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash.Setup.0.1.0-beta.1.exe">
-    <img src="docs/banner/banner.png" alt="Flash. Game clipper. Click to download the Windows beta installer." width="100%">
-  </a>
+  <img src="docs/banner/banner.png" alt="Flash. Game clipper for Windows and Linux. Free, open source, beta." width="100%">
 </p>
 
 <p align="center">
-  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash-0.1.0-beta.1.AppImage">Linux AppImage (experimental)</a>
-  &nbsp;&middot;&nbsp;
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash.Setup.0.1.0-beta.1.exe"><img src="docs/banner/btn-windows.png" alt="Download Flash for Windows (installer, .exe)" width="400"></a>
+  &nbsp;
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/download/v0.1.0-beta.1/Flash-0.1.0-beta.1.AppImage"><img src="docs/banner/btn-linux.png" alt="Download Flash for Linux (AppImage, experimental)" width="400"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/lillyfloweruwu-arch/flash/releases/tag/v0.1.0-beta.1">All downloads and notes</a>
 </p>
 
