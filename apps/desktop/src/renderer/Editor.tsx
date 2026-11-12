@@ -178,7 +178,9 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
-      if (event.key === 'Escape') onClose()
+      // Closing mid-save would unmount the editor while the native writer is
+      // still producing the copy, leaving no visible result or error.
+      if (event.key === 'Escape' && !saving) onClose()
       if (event.code === 'Space') { event.preventDefault(); togglePlay() }
       if (event.key === '[' || event.key === ']') {
         const video = videoRef.current
@@ -189,7 +191,7 @@ export default function Editor({ clip, onClose }: { clip: ClipInfo; onClose: () 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, setTrimEdge, togglePlay])
+  }, [onClose, saving, setTrimEdge, togglePlay])
 
   useEffect(() => {
     const video = videoRef.current
