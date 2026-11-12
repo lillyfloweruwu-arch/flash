@@ -1,3 +1,9 @@
+<p align="center">
+  <a href="https://github.com/lillyfloweruwu-arch/flash/releases/tag/v0.1.0-beta.1">
+    <img src="docs/banner/banner.png" alt="Flash. Game clipper for Windows and Linux. Download the latest beta." width="100%">
+  </a>
+</p>
+
 # Flash
 
 Flash is a lightweight game clipper. It records in the background, and when something good happens you press a hotkey and the last seconds are saved as a clip. It has a built-in editor and a clip library, and is made to stay out of the way of your game.
