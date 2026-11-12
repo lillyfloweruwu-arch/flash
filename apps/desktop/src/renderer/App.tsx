@@ -420,6 +420,7 @@ export default function App() {
     const result = await window.flash?.setClipStarred(clip.filePath, next)
     if (!result || result.error) {
       setClips(current => current.map(c => c.filePath === clip.filePath ? { ...c, starred: clip.starred } : c))
+      setSaveState(state => ({ ...state, error: result?.error ?? 'Could not update the star' }))
     }
   }, [])
 
