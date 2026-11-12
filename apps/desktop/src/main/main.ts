@@ -511,6 +511,12 @@ function loadCaptureAddon(): CaptureAddon | null {
 }
 
 let mainWindow: BrowserWindow | null = null
+
+function reportClipError(message: string) {
+  console.warn(message)
+  mainWindow?.webContents.send('clip-save-state', { saving: false, error: message })
+}
+
 let tray: Tray | null = null
 let notificationWindow: BrowserWindow | null = null
 let isRecording = false
@@ -535,10 +541,21 @@ interface ClipInfo {
   starred: boolean
 }
 
+let reportedMissingClipsFolder = ''
+
 function scanClips(): ClipInfo[] {
   const clips: ClipInfo[] = []
   const folder = activeClipsFolder()
-  if (!existsSync(folder)) return clips
+  if (!existsSync(folder)) {
+    // An unplugged or deleted folder used to read as an empty library with no
+    // explanation. Say it once per missing episode, not on every refresh.
+    if (reportedMissingClipsFolder !== folder) {
+      reportedMissingClipsFolder = folder
+      reportClipError(`Clips folder is not available: ${folder}`)
+    }
+    return clips
+  }
+  reportedMissingClipsFolder = ''
 
   // Scan for MP4 and PNG files in clips folder and game subfolders
   const scanDir = (dir: string, game: string) => {
@@ -1536,8 +1553,9 @@ function setupIPC() {
     } finally { reservation?.release() }
   })
 
-  ipcMain.handle('open-clips-folder', () => {
-    shell.openPath(activeClipsFolder())
+  ipcMain.handle('open-clips-folder', async () => {
+    const error = await shell.openPath(activeClipsFolder())
+    if (error) reportClipError(`Could not open the clips folder: ${error}`)
   })
   ipcMain.handle('show-clip-in-folder', (_event, filePath: string) => {
     if (!isInsideClips(filePath)) return
