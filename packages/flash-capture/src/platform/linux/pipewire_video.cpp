@@ -26,7 +26,7 @@ class PipeWireVideo final : public VideoSource {
     mutable std::mutex mutex_;
     std::string error_;
     FrameCallback callback_;
-    uint32_t width_ = 1920, height_ = 1080, fps_ = 60;
+    std::atomic<uint32_t> width_{1920}, height_{1080}, fps_{60};
     pw_stream* stream_ = nullptr;
     spa_video_info_raw format_{};
     int64_t lastFrame_ = -1000000;
@@ -47,6 +47,11 @@ class PipeWireVideo final : public VideoSource {
     static void Format(void* data, uint32_t id, const spa_pod* pod) {
         auto& self = *static_cast<PipeWireVideo*>(data);
         if (id == SPA_PARAM_Format && pod && spa_format_video_raw_parse(pod, &self.format_) >= 0) {
+            // The portal picks the source size, not the display list. Keep the
+            // reported size in step with the format the server negotiated.
+            if (self.format_.size.width && self.format_.size.height) {
+                self.width_ = self.format_.size.width; self.height_ = self.format_.size.height;
+            }
             self.RequestBuffers();
         }
     }
