@@ -27,6 +27,15 @@ export function isFlashClip(fileName: string, hasSidecar: boolean): boolean {
   return hasSidecar || isFlashClipName(fileName)
 }
 
+// birthtime is 0 on filesystems that do not record it (many Linux mounts), and
+// a clip dated 1970 would be old enough for every auto-delete timer. Fall back
+// to mtime; 0 means the age is genuinely unknown and nothing may prune on it.
+export function clipCreatedAt(stat: { birthtimeMs: number; mtimeMs: number }): number {
+  if (stat.birthtimeMs > 0) return stat.birthtimeMs
+  if (stat.mtimeMs > 0) return stat.mtimeMs
+  return 0
+}
+
 // Local time, not UTC: the timestamp is what the player saw on their own clock,
 // and a clip recorded at 9pm should not be named 02-00-00.
 export function clipTimestamp(when: Date): string {

@@ -20,7 +20,7 @@ import { getTheme } from '../shared/themes'
 import { exportSuffix, type ExportCodecChoice } from '../shared/exportLimits'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
-import { clipTimestamp, firstFreeName, gameFolderName, isFlashClip, sidecarPath } from '../shared/clipPath'
+import { clipCreatedAt, clipTimestamp, firstFreeName, gameFolderName, isFlashClip, sidecarPath } from '../shared/clipPath'
 import { migrateSidecars, readSidecar, writeSidecar, reserveOutput } from '../shared/clipFiles'
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
@@ -556,7 +556,7 @@ function scanClips(): ClipInfo[] {
             durationSec: estimatedSec,
             filePath,
             size: stat.size,
-            createdAt: stat.birthtimeMs,
+            createdAt: clipCreatedAt(stat),
             starred: protectedPaths.has(filePath) || sidecar?.starred === true,
           })
         }
@@ -577,8 +577,10 @@ const clipDeletion = createClipDeletion({
     const metadata = readSidecar(filePath)
     if (metadata?.unreadable) return false
     if (intent === 'manual') return true
-    return !!settings.autoDeleteDays && !metadata?.starred &&
-      statSync(filePath).birthtimeMs < Date.now() - settings.autoDeleteDays * 86400000
+    if (!settings.autoDeleteDays || metadata?.starred) return false
+    // A file whose age cannot be read is never old enough to prune.
+    const createdAt = clipCreatedAt(statSync(filePath))
+    return createdAt > 0 && createdAt < Date.now() - settings.autoDeleteDays * 86400000
   },
   unlink: unlinkSync,
   cleanup: filePath => { try { unlinkSync(sidecarPath(filePath)) } catch { /* No sidecar remains to remove. */ } },
