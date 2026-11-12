@@ -315,17 +315,13 @@ function HotkeyInput({ value, registered, onChange, label }: {
   )
 }
 
-export function FeedbackDialog({ onClose }: { onClose: () => void }) {
+export function FeedbackDialog({ onClose, onSent }: { onClose: () => void; onSent?: () => void }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const tooLong = text.length > FEEDBACK_MAX_LENGTH
-  const canSend = !sending && !sent && !tooLong && validateFeedback(text) === null
-
-  useEffect(() => () => clearTimeout(closeTimer.current), [])
+  const canSend = !sending && !tooLong && validateFeedback(text) === null
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -349,8 +345,8 @@ export function FeedbackDialog({ onClose }: { onClose: () => void }) {
     catch { result = { ok: false, error: 'failed' } }
     setSending(false)
     if (result.ok) {
-      setSent(true)
-      closeTimer.current = setTimeout(onClose, 1500)
+      onSent?.()
+      onClose()
       return
     }
     setError(result.error === 'rate-limited'
@@ -370,7 +366,7 @@ export function FeedbackDialog({ onClose }: { onClose: () => void }) {
           animation: 'dialog-in 0.16s var(--ease-out)',
         }}>
         <h2 className="display" style={{ fontSize: 30, color: 'var(--fg)', marginBottom: 16 }}>Send feedback</h2>
-        <textarea autoFocus value={text} disabled={sending || sent} aria-label="Feedback message"
+        <textarea autoFocus value={text} disabled={sending} aria-label="Feedback message"
           placeholder="What's broken, or what would make Flash better?"
           onChange={event => setText(event.target.value)}
           className="field w-full"
@@ -385,9 +381,6 @@ export function FeedbackDialog({ onClose }: { onClose: () => void }) {
         </p>
         {error && (
           <p role="alert" style={{ fontSize: 12, color: 'var(--alert)', lineHeight: 1.6, marginTop: 12 }}>{error}</p>
-        )}
-        {sent && (
-          <p role="status" style={{ fontSize: 12, color: 'var(--ok)', lineHeight: 1.6, marginTop: 12 }}>Thanks, got it.</p>
         )}
         <div className="flex justify-end gap-2" style={{ marginTop: 24 }}>
           <button type="button" onClick={onClose} className="btn">Cancel</button>

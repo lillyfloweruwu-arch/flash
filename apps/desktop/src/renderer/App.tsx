@@ -174,6 +174,7 @@ export default function App() {
   const [feedPath, setFeedPath] = useState('')
   const [editingClip, setEditingClip] = useState<Clip | null>(null)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
+  const [feedbackSent, setFeedbackSent] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [detectedGame, setDetectedGame] = useState<string | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
@@ -604,7 +605,19 @@ export default function App() {
       {editingClip && (
         <Editor clip={editingClip} onClose={() => setEditingClip(null)} />
       )}
-      {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
+      {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} onSent={() => {
+        setFeedbackSent(true)
+        setTimeout(() => setFeedbackSent(false), 4000)
+      }} />}
+      {feedbackSent && (
+        <div role="status" className="fixed z-[110]"
+          style={{
+            right: 24, bottom: 24, padding: '12px 18px', borderRadius: 8, fontSize: 13, color: 'var(--fg)',
+            background: 'var(--panel)', border: '1px solid var(--edge)', boxShadow: '0 12px 32px rgba(0,0,0,0.5)',
+          }}>
+          Feedback sent. Thank you!
+        </div>
+      )}
       {confirmRequest && (
         <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
       )}
