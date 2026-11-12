@@ -20,7 +20,7 @@ import { getTheme } from '../shared/themes'
 import { exportSuffix, type ExportCodecChoice } from '../shared/exportLimits'
 import { resolveGameSettings, type PerGameSettings } from '../shared/perGame'
 import { resolveClipFilename, validateClipName } from '../shared/rename'
-import { clipTimestamp, firstFreeName, gameFolderName, sidecarPath } from '../shared/clipPath'
+import { clipTimestamp, firstFreeName, gameFolderName, isFlashClip, sidecarPath } from '../shared/clipPath'
 import { migrateSidecars, readSidecar, writeSidecar, reserveOutput } from '../shared/clipFiles'
 import { isInsideRoot } from '../shared/clipsRoot'
 import { sanitise } from '../shared/sanitise'
@@ -720,9 +720,14 @@ function pruneOldClips() {
   if (!settings.autoDeleteDays) return
   const cutoff = Date.now() - settings.autoDeleteDays * 86400000
   // A starred clip is the one the user said they wanted to keep, which makes it
-  // exactly the wrong thing for a background timer to delete.
+  // exactly the wrong thing for a background timer to delete. Only files Flash
+  // itself wrote are candidates: a general clips folder can contain the user's
+  // own videos, and those must never be aged out by our timer.
   for (const clip of scanClips()) {
-    if (clip.createdAt < cutoff && !clip.starred) void deleteClip(clip.filePath, 'prune')
+    if (clip.createdAt <= 0) continue
+    if (clip.createdAt >= cutoff || clip.starred) continue
+    if (!isFlashClip(basename(clip.filePath), existsSync(sidecarPath(clip.filePath)))) continue
+    void deleteClip(clip.filePath, 'prune')
   }
 }
 

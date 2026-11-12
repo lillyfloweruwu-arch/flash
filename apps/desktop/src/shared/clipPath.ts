@@ -12,7 +12,20 @@
 
 const FORBIDDEN = /[<>:"/\\|?*]/g
 
+// Flash names every clip and screenshot YYYY-MM-DD_HH-MM-SS, with an optional
+// _N suffix for a second file in the same second. The auto-delete timer uses
+// this so a general folder full of the user's own videos is left alone.
+const FLASH_TIMESTAMP_NAME = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:_\d+)?\.(?:mp4|png)$/i
+
 export const sidecarPath = (filePath: string): string => `${filePath}.json`
+
+export function isFlashClipName(fileName: string): boolean {
+  return FLASH_TIMESTAMP_NAME.test(fileName)
+}
+
+export function isFlashClip(fileName: string, hasSidecar: boolean): boolean {
+  return hasSidecar || isFlashClipName(fileName)
+}
 
 // Local time, not UTC: the timestamp is what the player saw on their own clock,
 // and a clip recorded at 9pm should not be named 02-00-00.
