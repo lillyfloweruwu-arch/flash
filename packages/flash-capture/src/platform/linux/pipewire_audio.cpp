@@ -2,14 +2,77 @@
 #include "linux_backend.h"
 #include "../../core/capture_clock.h"
 #include <pipewire/pipewire.h>
+#include <pipewire/node.h>
+#include <pipewire/proxy.h>
 #include <spa/param/audio/format-utils.h>
 #include <array>
+#include <chrono>
+#include <cstring>
 #include <thread>
 #include <mutex>
 #include <algorithm>
 
 namespace flash {
 namespace {
+struct SourceScan {
+    std::vector<AudioDeviceInfo> devices;
+    int pending = -1;
+    bool done = false;
+};
+// Audio/Source nodes are microphones. Sinks also have monitor sources, which
+// are loopbacks of what is playing and not something the user talks into.
+void RegistryGlobal(void* data, uint32_t, uint32_t, const char* type, uint32_t, const spa_dict* props) {
+    auto& scan = *static_cast<SourceScan*>(data);
+    if (!type || std::strcmp(type, PW_TYPE_INTERFACE_Node) != 0 || !props) return;
+    const char* mediaClass = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+    if (!mediaClass || std::strcmp(mediaClass, "Audio/Source") != 0) return;
+    const char* name = spa_dict_lookup(props, PW_KEY_NODE_NAME);
+    if (!name || !*name) return;
+    const std::string id(name);
+    if (id.size() > 8 && id.compare(id.size() - 8, 8, ".monitor") == 0) return;
+    const char* deviceClass = spa_dict_lookup(props, "device.class");
+    if (deviceClass && std::strcmp(deviceClass, "monitor") == 0) return;
+    if (std::any_of(scan.devices.begin(), scan.devices.end(), [&](const AudioDeviceInfo& device) { return device.id == id; })) return;
+    const char* description = spa_dict_lookup(props, PW_KEY_NODE_DESCRIPTION);
+    if (!description || !*description) description = spa_dict_lookup(props, PW_KEY_NODE_NICK);
+    AudioDeviceInfo info;
+    info.id = id;
+    info.name = description && *description ? description : id;
+    scan.devices.push_back(std::move(info));
+}
+void CoreDone(void* data, uint32_t id, int seq) {
+    auto& scan = *static_cast<SourceScan*>(data);
+    if (id == PW_ID_CORE && seq == scan.pending) scan.done = true;
+}
+std::vector<AudioDeviceInfo> ListPipeWireSources() {
+    std::vector<AudioDeviceInfo> result;
+    pw_init(nullptr, nullptr);
+    auto* loop = pw_main_loop_new(nullptr);
+    if (!loop) return result;
+    auto* context = pw_context_new(pw_main_loop_get_loop(loop), nullptr, 0);
+    if (!context) { pw_main_loop_destroy(loop); return result; }
+    auto* core = pw_context_connect(context, nullptr, 0);
+    if (!core) { pw_context_destroy(context); pw_main_loop_destroy(loop); return result; }
+    auto* registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
+    if (!registry) { pw_core_disconnect(core); pw_context_destroy(context); pw_main_loop_destroy(loop); return result; }
+    SourceScan scan;
+    static const pw_registry_events registryEvents = [] { pw_registry_events e{}; e.version = PW_VERSION_REGISTRY_EVENTS;
+        e.global = RegistryGlobal; return e; }();
+    static const pw_core_events coreEvents = [] { pw_core_events e{}; e.version = PW_VERSION_CORE_EVENTS;
+        e.done = CoreDone; return e; }();
+    spa_hook registryHook{}, coreHook{};
+    pw_registry_add_listener(registry, &registryHook, &registryEvents, &scan);
+    pw_core_add_listener(core, &coreHook, &coreEvents, &scan);
+    scan.pending = pw_core_sync(core, PW_ID_CORE, 0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!scan.done && std::chrono::steady_clock::now() < deadline)
+        pw_loop_iterate(pw_main_loop_get_loop(loop), 100);
+    spa_hook_remove(&registryHook); spa_hook_remove(&coreHook);
+    result = std::move(scan.devices);
+    pw_proxy_destroy(reinterpret_cast<pw_proxy*>(registry));
+    pw_core_disconnect(core); pw_context_destroy(context); pw_main_loop_destroy(loop);
+    return result;
+}
 class PipeWireAudio final : public AudioSource {
     struct Track {
         PipeWireAudio* owner = nullptr;
@@ -26,6 +89,7 @@ class PipeWireAudio final : public AudioSource {
     std::atomic<bool> running_{false};
     mutable std::mutex mutex_;
     AudioCallback callback_;
+    std::string micDeviceId_;
     static void State(void* data, pw_stream_state, pw_stream_state state, const char* error) {
         auto& track = *static_cast<Track*>(data); std::lock_guard lock(track.owner->mutex_);
         track.active = state == PW_STREAM_STATE_STREAMING;
@@ -65,9 +129,13 @@ public:
         if (!loop_) return false;
         static const pw_stream_events events = [] { pw_stream_events e{}; e.version = PW_VERSION_STREAM_EVENTS;
             e.state_changed = State; e.process = Process; return e; }();
+        std::string mic;
+        { std::lock_guard lock(mutex_); mic = micDeviceId_; }
         for (auto& track : tracks_) {
             auto* props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Capture",
                 PW_KEY_MEDIA_ROLE, "Production", "stream.capture.sink", track.id == "other" ? "true" : "false", nullptr);
+            // Empty means the session manager's default source.
+            if (track.id == "mic" && !mic.empty()) pw_properties_set(props, PW_KEY_TARGET_OBJECT, mic.c_str());
             track.stream = pw_stream_new_simple(pw_main_loop_get_loop(loop_), "Flash audio", props, &events, &track);
             if (!track.stream) { Stop(); return false; }
             uint8_t bytes[512]; auto builder = SPA_POD_BUILDER_INIT(bytes, sizeof(bytes));
@@ -99,6 +167,18 @@ public:
         std::lock_guard lock(mutex_);
         for (auto& track : tracks_) if (track.id == id) { track.enabled = enabled; track.gain = gain; return true; }
         return false;
+    }
+    std::vector<AudioDeviceInfo> ListCaptureDevices() const override { return ListPipeWireSources(); }
+    bool SetCaptureDevice(const std::string& id) override {
+        AudioCallback callback;
+        bool wasCapturing;
+        {
+            std::lock_guard lock(mutex_);
+            if (micDeviceId_ == id) return true;
+            micDeviceId_ = id; callback = callback_; wasCapturing = running_;
+        }
+        // Same as a game change: rebuild the streams so the new mic is used now.
+        return wasCapturing ? Start(std::move(callback)) : true;
     }
     std::string GetMode() const override { return "mixed"; }
     std::string GetProcessError() const override { return "Per-app audio is not available on Linux in L1"; }
