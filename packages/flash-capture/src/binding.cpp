@@ -518,6 +518,31 @@ Napi::Value ListAudioApps(const Napi::CallbackInfo& info) {
     }
     return result;
 }
+Napi::Value ListCaptureDevices(const Napi::CallbackInfo& info) {
+    AudioSource* audio;
+    { std::lock_guard lock(stateMutex); audio = audioCapture.get(); }
+    auto result = Napi::Array::New(info.Env());
+    if (!audio) return result;
+    uint32_t i = 0;
+    for (const auto& device : audio->ListCaptureDevices()) {
+        auto entry = Napi::Object::New(info.Env());
+        entry.Set("id", device.id); entry.Set("name", device.name); entry.Set("isDefault", device.isDefault);
+        result.Set(i++, entry);
+    }
+    return result;
+}
+Napi::Value SetCaptureDevice(const Napi::CallbackInfo& info) {
+    if (!info.Length() || !info[0].IsString()) { Napi::TypeError::New(info.Env(), "capture device id must be a string").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+    const auto id = info[0].As<Napi::String>().Utf8Value();
+    AudioSource* audio; std::array<bool, kAudioTrackCount> enabled{};
+    { std::lock_guard lock(stateMutex); audio = audioCapture.get(); enabled = audioEnabled; }
+    // Not under stateMutex: rebuilding the sources joins the capture threads,
+    // which take it to hand over packets (see SetAudioTracks).
+    if (!audio) return info.Env().Undefined();
+    audio->SetCaptureDevice(id);
+    for (size_t i = 0; i < kAudioTrackCount; ++i) audio->SetSource(std::string(kAudioTrackOrder[i]), enabled[i], 1.0f);
+    return info.Env().Undefined();
+}
 Napi::Value SetBufferLength(const Napi::CallbackInfo& info) { if (!info.Length() || !info[0].IsNumber()) { Napi::TypeError::New(info.Env(), "buffer length must be a number").ThrowAsJavaScriptException(); return info.Env().Undefined(); } uint32_t seconds = info[0].As<Napi::Number>().Uint32Value(); if (seconds < 1 || seconds > 600) { Napi::RangeError::New(info.Env(), "buffer length must be between 1 and 600 seconds").ThrowAsJavaScriptException(); return info.Env().Undefined(); } std::lock_guard lock(stateMutex); bufferSeconds = seconds; if (ringBuffer) ringBuffer->SetMaxDuration(seconds, quality.fps); return info.Env().Undefined(); }
 
 Napi::Value SetQuality(const Napi::CallbackInfo& info) {
@@ -908,7 +933,9 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("saveClip", Napi::Function::New(env, Invoke<&AddonState::SaveClip>, "SaveClip", this)); exports.Set("trimClip", Napi::Function::New(env, Invoke<&AddonState::TrimClipAsync>, "TrimClipAsync", this)); exports.Set("getStatus", Napi::Function::New(env, Invoke<&AddonState::GetStatus>, "GetStatus", this)); exports.Set("setCurrentGame", Napi::Function::New(env, Invoke<&AddonState::SetCurrentGame>, "SetCurrentGame", this)); exports.Set("setBufferLength", Napi::Function::New(env, Invoke<&AddonState::SetBufferLength>, "SetBufferLength", this)); exports.Set("exportClip", Napi::Function::New(env, Invoke<&AddonState::ExportClipBinding>, "ExportClipBinding", this)); exports.Set("setClipsDir", Napi::Function::New(env, Invoke<&AddonState::SetClipsDir>, "SetClipsDir", this));
     exports.Set("setQuality", Napi::Function::New(env, Invoke<&AddonState::SetQuality>, "SetQuality", this)); exports.Set("listDisplays", Napi::Function::New(env, Invoke<&AddonState::ListDisplays>, "ListDisplays", this)); exports.Set("setDisplay", Napi::Function::New(env, Invoke<&AddonState::SetDisplay>, "SetDisplay", this)); exports.Set("setAudioTracks", Napi::Function::New(env, Invoke<&AddonState::SetAudioTracks>, "SetAudioTracks", this));
     exports.Set("setAudioLanes", Napi::Function::New(env, Invoke<&AddonState::SetAudioLanes>, "SetAudioLanes", this));
-    exports.Set("listAudioApps", Napi::Function::New(env, Invoke<&AddonState::ListAudioApps>, "ListAudioApps", this));
+    exports.Set("listCaptureDevices", Napi::Function::New(env, Invoke<&AddonState::ListCaptureDevices>, "ListCaptureDevices", this));
+    exports.Set("setCaptureDevice", Napi::Function::New(env, Invoke<&AddonState::SetCaptureDevice>, "SetCaptureDevice", this));
+    exports.Set("listAudioApps",Napi::Function::New(env, Invoke<&AddonState::ListAudioApps>, "ListAudioApps", this));
     exports.Set("decodeClipAudio", Napi::Function::New(env, Invoke<&AddonState::DecodeClipAudioBinding>, "DecodeClipAudioBinding", this));
     exports.Set("getClipKeyframes", Napi::Function::New(env, Invoke<&AddonState::GetClipKeyframesBinding>, "GetClipKeyframesBinding", this));
     exports.Set("saveScreenshot", Napi::Function::New(env, Invoke<&AddonState::SaveScreenshotBinding>, "SaveScreenshotBinding", this));

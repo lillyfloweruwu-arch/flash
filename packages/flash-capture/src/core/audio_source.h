@@ -29,7 +29,13 @@ struct AudioAppInfo {
     bool capturing = false;
 };
 
-using AudioCallback = std::function<void(const AudioData& audio)>;
+// One microphone / capture endpoint, for the Settings picker.
+struct AudioDeviceInfo {
+    std::string id, name;
+    bool isDefault = false;
+};
+
+using AudioCallback =std::function<void(const AudioData& audio)>;
 
 class AudioSource {
 public:
@@ -48,5 +54,9 @@ public:
     virtual void SetLanes(const AudioLaneConfig&) {}
     virtual std::vector<AudioAppInfo> ListApps() const { return {}; }
     virtual bool SupportsPerApp() const { return false; }
+    // Capture devices the user can pick the microphone from. An empty id means
+    // "the system default". Backends without a picker report none.
+    virtual std::vector<AudioDeviceInfo> ListCaptureDevices() const { return {}; }
+    virtual bool SetCaptureDevice(const std::string&) { return false; }
 };
 } // namespace flash

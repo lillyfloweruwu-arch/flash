@@ -47,12 +47,16 @@ public:
     void SetLanes(const AudioLaneConfig& config) override;
     std::vector<AudioAppInfo> ListApps() const override;
     bool SupportsPerApp() const override { return perApp_; }
+    std::vector<AudioDeviceInfo> ListCaptureDevices() const override;
+    bool SetCaptureDevice(const std::string& id) override;
     // True when this Windows build can capture one process's audio.
     static bool ProcessLoopbackAvailable();
 
 private:
     struct Source;
-    bool InitializeEndpoint(const std::shared_ptr<Source>& source, int flow);
+    // deviceId (UTF-8 endpoint id) picks a specific device; empty or unknown
+    // falls back to the system default for that flow.
+    bool InitializeEndpoint(const std::shared_ptr<Source>& source, int flow, const std::string& deviceId = std::string());
     static bool InitializeProcess(const std::shared_ptr<Source>& source, uint32_t processId, bool include);
     void BuildSources(uint32_t processId);
     void CaptureLoop(std::shared_ptr<Source> source);
@@ -73,6 +77,7 @@ private:
     std::vector<std::shared_ptr<Source>> sources_;
     std::string mode_ = "mixed";
     std::string processError_;
+    std::string micDeviceId_;             // UTF-8 endpoint id; empty = default communications mic. guarded by mutex_
 
     // Lock order: mutex_ before mixMutex_, never the other way round. scanMutex_
     // is only ever held on its own. None of them is held while a thread is

@@ -44,6 +44,7 @@ export interface Settings {
   bufferLength: number
   audioCapture: boolean
   audioLanes: { discord: string[]; music: string[] }
+  micDeviceId: string
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
@@ -116,6 +117,7 @@ contextBridge.exposeInMainWorld('flash', {
   setAutostart: (enabled: boolean) => ipcRenderer.invoke('set-autostart', enabled),
   getLearnedGames: () => ipcRenderer.invoke('get-learned-games'),
   listAudioApps: () => ipcRenderer.invoke('list-audio-apps'),
+  listMicDevices: () => ipcRenderer.invoke('list-mic-devices'),
   forgetGame: (exe: string) => ipcRenderer.invoke('forget-game', exe),
   identifyGame: (exe: string, name: string | null) => ipcRenderer.invoke('identify-game', exe, name),
   onIdentifyGame: (callback: (request: { exe: string; suggested: string }) => void) => {
@@ -210,6 +212,7 @@ export type FlashAPI = {
   getAutostart: () => Promise<AutostartState>
   setAutostart: (enabled: boolean) => Promise<AutostartState>
   getLearnedGames: () => Promise<Record<string, string>>
+  listMicDevices: () => Promise<{ devices: { id: string; name: string; isDefault: boolean }[] }>
   listAudioApps: () => Promise<{ supported: boolean; apps: { exe: string; name: string; lane: string; capturing: boolean }[] }>
   forgetGame: (exe: string) => Promise<Record<string, string>>
   identifyGame: (exe: string, name: string | null) => Promise<Settings>

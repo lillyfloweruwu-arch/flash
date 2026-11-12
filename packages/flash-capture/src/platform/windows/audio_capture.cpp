@@ -113,9 +113,40 @@ AudioCapture::~AudioCapture() {
 #endif
 }
 
-bool AudioCapture::InitializeEndpoint(const std::shared_ptr<Source>& source, int flow) {
 #ifdef _WIN32
-    HRESULT hr = enumerator_->GetDefaultAudioEndpoint(static_cast<EDataFlow>(flow), flow == eCapture ? eCommunications : eConsole, &source->device);
+namespace {
+std::wstring Widen(const std::string& text) {
+    if (text.empty()) return {};
+    const int n = MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+    std::wstring out(static_cast<size_t>(n > 0 ? n : 0), L'\0');
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), out.data(), n);
+    return out;
+}
+std::string Narrow(const wchar_t* text) {
+    if (!text || !*text) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 1) return {};
+    std::string out(static_cast<size_t>(n - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, text, -1, out.data(), n, nullptr, nullptr);
+    return out;
+}
+}
+#endif
+
+bool AudioCapture::InitializeEndpoint(const std::shared_ptr<Source>& source, int flow, const std::string& deviceId) {
+#ifdef _WIN32
+    HRESULT hr = E_FAIL;
+    // A chosen microphone that has since been unplugged falls back to the
+    // default instead of leaving the mic lane dead.
+    if (flow == eCapture && !deviceId.empty()) {
+        source->device.Reset();
+        hr = enumerator_->GetDevice(Widen(deviceId).c_str(), &source->device);
+        if (SUCCEEDED(hr)) {
+            DWORD state = 0;
+            if (FAILED(source->device->GetState(&state)) || state != DEVICE_STATE_ACTIVE) { source->device.Reset(); hr = E_FAIL; }
+        }
+    }
+    if (FAILED(hr)) hr = enumerator_->GetDefaultAudioEndpoint(static_cast<EDataFlow>(flow), flow == eCapture ? eCommunications : eConsole, &source->device);
     if (FAILED(hr)) { source->info.error = "default endpoint unavailable"; return false; }
     source->info.name = DeviceName(source->device.Get(), source->info.name.c_str());
     hr = source->device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(source->client.GetAddressOf()));
@@ -135,7 +166,7 @@ bool AudioCapture::InitializeEndpoint(const std::shared_ptr<Source>& source, int
     }
     source->info.available = true; source->info.error.clear(); return true;
 #else
-    (void)source; (void)flow; return false;
+    (void)source; (void)flow; (void)deviceId; return false;
 #endif
 }
 
@@ -220,7 +251,8 @@ bool AudioCapture::ProcessLoopbackAvailable() {
 void AudioCapture::BuildSources(uint32_t processId) {
 #ifdef _WIN32
     auto mic = std::make_shared<Source>(); mic->info = {"mic", "microphone", "Microphone"};
-    InitializeEndpoint(mic, eCapture);
+    std::string micId; { std::lock_guard lock(mutex_); micId = micDeviceId_; }
+    InitializeEndpoint(mic, eCapture, micId);
     std::vector<std::shared_ptr<Source>> sources; std::string mode, error; uint32_t gamePid = 0;
     if (perApp_) {
         // Every other app is captured on its own by the scanner, so the only
@@ -254,6 +286,46 @@ bool AudioCapture::SetGameProcess(uint32_t processId) {
     const bool wasCapturing = capturing_.load(); AudioCallback callback = callback_; Stop();
     sources_.clear(); BuildSources(processId);
     if (wasCapturing) Start(std::move(callback)); return mode_ == "separate";
+}
+
+std::vector<AudioDeviceInfo> AudioCapture::ListCaptureDevices() const {
+    std::vector<AudioDeviceInfo> out;
+#ifdef _WIN32
+    if (!enumerator_) return out;
+    std::string defaultId;
+    ComPtr<IMMDevice> def;
+    if (SUCCEEDED(enumerator_->GetDefaultAudioEndpoint(eCapture, eCommunications, &def))) {
+        LPWSTR id = nullptr;
+        if (SUCCEEDED(def->GetId(&id))) { defaultId = Narrow(id); CoTaskMemFree(id); }
+    }
+    ComPtr<IMMDeviceCollection> list;
+    if (FAILED(enumerator_->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &list))) return out;
+    UINT count = 0; list->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IMMDevice> device;
+        if (FAILED(list->Item(i, &device))) continue;
+        LPWSTR id = nullptr;
+        if (FAILED(device->GetId(&id))) continue;
+        AudioDeviceInfo info;
+        info.id = Narrow(id); CoTaskMemFree(id);
+        info.name = DeviceName(device.Get(), "Microphone");
+        info.isDefault = info.id == defaultId;
+        out.push_back(std::move(info));
+    }
+#endif
+    return out;
+}
+
+bool AudioCapture::SetCaptureDevice(const std::string& id) {
+    {
+        std::lock_guard lock(mutex_);
+        if (micDeviceId_ == id) return true;
+        micDeviceId_ = id;
+    }
+    // Same rebuild a game change does: sources are recreated with the new mic.
+    uint32_t pid; { std::lock_guard lock(mutex_); pid = gamePid_; }
+    SetGameProcess(pid);
+    return true;
 }
 
 std::string AudioCapture::GetMode() const { std::lock_guard lock(mutex_); return mode_; }

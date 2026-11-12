@@ -27,6 +27,7 @@ export interface Settings {
   bufferLength: number
   audioCapture: boolean
   audioLanes: { discord: string[]; music: string[] }
+  micDeviceId: string
   autoSave: boolean
   notifications: boolean
   autoDeleteDays: number
@@ -121,6 +122,34 @@ function Row({ label, hint, children }: { label: string; hint?: React.ReactNode;
 }
 
 type AudioApp = { exe: string; name: string; lane: string; capturing: boolean }
+
+// Which microphone is recorded. The Windows default for calls is not always the
+// one you speak into (a headset's hands-free mic is a common culprit and sounds
+// crackly), so the choice is explicit.
+function MicPicker({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const [devices, setDevices] = useState<{ id: string; name: string; isDefault: boolean }[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    window.flash.listMicDevices()
+      .then(result => { if (!cancelled) setDevices(result.devices) })
+      .catch(() => { if (!cancelled) setDevices([]) })
+    return () => { cancelled = true }
+  }, [])
+
+  if (!devices || devices.length === 0) return null
+  const missing = value !== '' && !devices.some(device => device.id === value)
+  const options = [
+    { value: '', label: 'System default' },
+    ...devices.map(device => ({ value: device.id, label: device.name, hint: device.isDefault ? 'default' : undefined })),
+    ...(missing ? [{ value, label: 'Unplugged device', hint: 'using default' }] : []),
+  ]
+  return (
+    <Row label="Microphone" hint="Pick the mic you talk into. If it crackles, try another one.">
+      <Dropdown value={value} onChange={onChange} options={options} width={260} />
+    </Row>
+  )
+}
 
 // Which apps are recorded to the Discord and Music lanes. Lists what is making
 // sound now, then anything assigned that is not running, so an assignment can
@@ -457,6 +486,9 @@ export function SettingsView({ previewClip, settings, onChange, storage, encoder
             <Row label="Record audio" hint="Game, microphone, Discord, music and other apps, each on its own track.">
               <Toggle label="Record audio" on={settings.audioCapture} onChange={() => onChange({ audioCapture: !settings.audioCapture })} />
             </Row>
+            {settings.audioCapture && (
+              <MicPicker value={settings.micDeviceId ?? ''} onChange={micDeviceId => onChange({ micDeviceId })} />
+            )}
             {settings.audioCapture && (
               <AppAudio lanes={settings.audioLanes} onChange={audioLanes => onChange({ audioLanes })} />
             )}

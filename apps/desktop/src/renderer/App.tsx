@@ -174,7 +174,7 @@ export default function App() {
     shortClipSeconds: 15, displayId: 0, overlay: true, overlayPosition: 'top-left',
     voiceEnabled: false, voicePhrase: '', voiceRawFloor: 0.5, voiceCooldownMs: 3000,
     quality: '1080p 60fps', bufferLength: 30,
-    audioCapture: true, audioLanes: DEFAULT_AUDIO_LANES, autoSave: true, notifications: true, autoDeleteDays: 0,
+    audioCapture: true, audioLanes: DEFAULT_AUDIO_LANES, micDeviceId: '', autoSave: true, notifications: true, autoDeleteDays: 0,
     perGame: {},
   })
   const [encoder, setEncoder] = useState('none')

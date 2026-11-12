@@ -66,6 +66,7 @@ const DEFAULTS = {
   bufferLength: 30,
   audioCapture: true,
   audioLanes: DEFAULT_AUDIO_LANES as AudioLanesSetting,
+  micDeviceId: '',   // empty = the Windows default communications mic
   autoSave: true,
   notifications: true,
   autoDeleteDays: 0,  // 0 = never
@@ -336,6 +337,8 @@ type CaptureAddon = {
   // editor can mix them; this is the blanket on/off.
   setAudioTracks?(tracks: Record<AudioTrackId, boolean>): void
   setAudioLanes?(lanes: AudioLanesSetting): void
+  listCaptureDevices?(): { id: string; name: string; isDefault: boolean }[]
+  setCaptureDevice?(id: string): void
   listAudioApps?(): { exe: string; name: string; lane: string; pid: number; capturing: boolean }[]
   capabilities?: { smartRender?: boolean; perAppAudio?: boolean }
   listProcesses?(): ProcessSnapshot
@@ -410,6 +413,11 @@ function applyAudioCapture() {
 
 // Which apps are recorded to the Discord and Music lanes. Applied to the
 // running capture; nothing needs restarting and saved clips are not touched.
+function applyMicDevice() {
+  try { captureAddon?.setCaptureDevice?.(settings.micDeviceId) }
+  catch (error) { console.warn('Could not apply microphone choice', error) }
+}
+
 function applyAudioLanes() {
   try { captureAddon?.setAudioLanes?.(settings.audioLanes) }
   catch (error) { console.warn('Could not apply audio lanes', error) }
@@ -1562,6 +1570,7 @@ function setupIPC() {
     }
     if (changed.audioCapture !== undefined) applyAudioCapture()
     if (changed.audioLanes !== undefined) applyAudioLanes()
+    if (changed.micDeviceId !== undefined) applyMicDevice()
     if (changed.autoDeleteDays !== undefined) pruneOldClips()
     if (changed.theme !== undefined) { applyThemeIcons(); destroyOverlay(); updateOverlay() }
     if (changed.overlay !== undefined || changed.overlayPosition !== undefined) updateOverlay()
@@ -1595,6 +1604,10 @@ function setupIPC() {
       console.warn('Could not list audio apps', error)
       return { supported: true, apps: [] }
     }
+  })
+  ipcMain.handle('list-mic-devices', () => {
+    try { return { devices: captureAddon?.listCaptureDevices?.() ?? [] } }
+    catch (error) { console.warn('Could not list microphones', error); return { devices: [] } }
   })
   ipcMain.handle('forget-game', (_event, exe: string) => {
     const learned = { ...learnedGames() }
@@ -1936,6 +1949,7 @@ app.on('ready', () => {
     // Auto-start replay buffer
     applyCaptureSettings(null)
     applyAudioLanes()
+    applyMicDevice()
     applyAudioCapture()
     // Voice owns the Windows default input stream and is deliberately not tied
     // to replay-buffer state. Once enabled it listens for the lifetime of Flash.
