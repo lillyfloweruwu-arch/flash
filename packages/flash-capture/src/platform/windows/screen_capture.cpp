@@ -5,6 +5,7 @@
 #include "color_space.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <stdexcept>
 
@@ -22,6 +23,12 @@ namespace {
 
 bool IsDeviceLost(HRESULT hr) {
     return hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET;
+}
+
+// The CPU readback path still works, so this is not fatal, but it is much
+// slower and used to be invisible. Say why the GPU path was not set up.
+void ReportGpuConversionFallback(const char* reason) {
+    std::fprintf(stderr, "flash: GPU colour conversion unavailable (%s); using CPU conversion\n", reason);
 }
 
 class DuplicationSource final : public FrameSource {
@@ -233,7 +240,10 @@ bool ScreenCapture::CreateFrameResources() {
     staging.Usage = D3D11_USAGE_STAGING; staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
     if (FAILED(device_->CreateTexture2D(&staging, nullptr, &stagingTexture_))) return false;
 
-    if (FAILED(device_.As(&videoDevice_)) || FAILED(context_.As(&videoContext_))) return true;
+    if (FAILED(device_.As(&videoDevice_)) || FAILED(context_.As(&videoContext_))) {
+        ReportGpuConversionFallback("video device/context unavailable");
+        return true;
+    }
     D3D11_VIDEO_PROCESSOR_CONTENT_DESC content{};
     content.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
     content.InputWidth = width_; content.InputHeight = height_;
@@ -241,7 +251,10 @@ bool ScreenCapture::CreateFrameResources() {
     content.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
     content.InputFrameRate = {targetFps_, 1}; content.OutputFrameRate = {targetFps_, 1};
     if (FAILED(videoDevice_->CreateVideoProcessorEnumerator(&content, &videoEnumerator_)) ||
-        FAILED(videoDevice_->CreateVideoProcessor(videoEnumerator_.Get(), 0, &videoProcessor_))) return true;
+        FAILED(videoDevice_->CreateVideoProcessor(videoEnumerator_.Get(), 0, &videoProcessor_))) {
+        ReportGpuConversionFallback("video processor creation failed");
+        return true;
+    }
     // Say what goes in and what must come out. The default is BT.601, which the
     // decoder then undoes as BT.709 and oversaturates the clip.
     const auto inputSpace = FullRangeRgbColorSpace();
@@ -252,11 +265,16 @@ bool ScreenCapture::CreateFrameResources() {
     nv12.Width = outputWidth_; nv12.Height = outputHeight_; nv12.MipLevels = 1; nv12.ArraySize = 1;
     nv12.Format = DXGI_FORMAT_NV12; nv12.SampleDesc.Count = 1; nv12.Usage = D3D11_USAGE_DEFAULT;
     nv12.BindFlags = D3D11_BIND_RENDER_TARGET;
-    if (FAILED(device_->CreateTexture2D(&nv12, nullptr, &nv12Texture_))) return true;
+    if (FAILED(device_->CreateTexture2D(&nv12, nullptr, &nv12Texture_))) {
+        ReportGpuConversionFallback("NV12 texture creation failed");
+        return true;
+    }
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outDesc{};
     outDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
     if (FAILED(videoDevice_->CreateVideoProcessorOutputView(nv12Texture_.Get(), videoEnumerator_.Get(), &outDesc, &outputView_))) {
-        nv12Texture_.Reset(); return true;
+        nv12Texture_.Reset();
+        ReportGpuConversionFallback("output view creation failed");
+        return true;
     }
     return true;
 #else

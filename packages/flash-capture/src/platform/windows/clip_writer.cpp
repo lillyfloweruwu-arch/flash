@@ -184,6 +184,23 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
         }
         silence.assign(widest, 0.0f);
 
+        // The cap is shared by every track, so derive it from the whole clip at
+        // the highest sample rate and leave a wide margin. A cap that is hit
+        // truncates a track short of the video, and IMFSinkWriter then waits
+        // forever in Finalize; running out is an error, not a way to stop.
+        size_t maxSilentPackets = 400000u;
+        if (fallbackRate && cadence && videoEndUs > videoStartUs) {
+            const int64_t spanUs = videoEndUs - videoStartUs;
+            int64_t expected = 0;
+            for (const auto& s : audioStreams) {
+                if (!s.channels || !s.sampleRate) continue;
+                expected += spanUs * static_cast<int64_t>(s.sampleRate) /
+                    (static_cast<int64_t>(cadence) * 1000000) + 2;
+            }
+            const uint64_t withMargin = static_cast<uint64_t>(expected) * 2u + 1024u;
+            if (withMargin > maxSilentPackets) maxSilentPackets = static_cast<size_t>(withMargin);
+        }
+
         for (const auto& s : audioStreams) {
             if (!fallbackRate || !s.channels || !s.sampleRate) continue;
             // What this track already covers, in order.
@@ -207,7 +224,9 @@ ClipMetadata ClipWriter::Write(const std::string& outputPath,
                 if (toUs - fromUs < 500) return;   // timestamp rounding, not a hole
                 int64_t frames = (toUs - fromUs) * static_cast<int64_t>(s.sampleRate) / 1000000;
                 int64_t done = 0;
-                while (frames > 0 && silentPackets.size() < 400000u) {
+                while (frames > 0) {
+                    if (silentPackets.size() >= maxSilentPackets)
+                        throw std::runtime_error("audio silence padding exceeded the clip's packet budget");
                     const uint32_t chunk = static_cast<uint32_t>((std::min)(frames, static_cast<int64_t>(cadence)));
                     silentPackets.push_back({silence.data(), chunk, s.channels, s.sampleRate,
                                              fromUs + done * 1000000 / static_cast<int64_t>(s.sampleRate), std::string(s.id)});
