@@ -9,7 +9,7 @@
     "build": "electron-vite build",
     "start": "electron .",
     "preview": "electron-vite preview",
-    "package": "electron-vite build && electron-builder"
+    "package": "pnpm --filter @flash/capture run build && electron-vite build && electron-builder"
   },
   "build": {
     "appId": "com.flash.clipper",
