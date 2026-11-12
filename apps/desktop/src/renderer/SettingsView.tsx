@@ -315,7 +315,7 @@ function HotkeyInput({ value, registered, onChange, label }: {
   )
 }
 
-function FeedbackDialog({ onClose }: { onClose: () => void }) {
+export function FeedbackDialog({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [sent, setSent] = useState(false)

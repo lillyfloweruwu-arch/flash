@@ -9,7 +9,7 @@ import { SelectionBar } from './SelectionBar'
 import Editor from './Editor'
 import { FeedView } from './FeedView'
 import { LibraryView, sortClips, type SortOrder } from './LibraryView'
-import { SettingsView, type CaptureHealth, type Display, type Settings, type VoiceStatus } from './SettingsView'
+import { SettingsView, FeedbackDialog, type CaptureHealth, type Display, type Settings, type VoiceStatus } from './SettingsView'
 import {
   type Clip, type ConfirmRequest, ConfirmDialog, IdentifyGamePrompt, StickmanIcon, formatBytes,
 } from './ui'
@@ -69,7 +69,8 @@ function WindowControls() {
 
 // ── Title bar ─────────────────────────────────────────────────────────────────
 
-function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, detectedGame, captureAvailable, hotkey, saveState }: {
+function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, detectedGame, captureAvailable, hotkey, saveState, onFeedback }: {
+  onFeedback: () => void
   view: View
   setView: (view: View) => void
   overMedia: boolean
@@ -144,6 +145,15 @@ function TitleBar({ view, setView, overMedia, isRecording, onToggleRecording, de
           {isRecording ? 'Rec' : 'Idle'}
         </button>
 
+        <button onClick={onFeedback} className="caps transition-colors"
+          title="Tell us what's broken or what you want. We read every message."
+          style={{
+            height: 28, padding: '0 14px', borderRadius: 999, cursor: 'pointer',
+            color: 'var(--fg)', border: '1px solid var(--accent-line)', background: 'var(--accent-wash)',
+          }}>
+          Feedback
+        </button>
+
         <span className="keycap" title="Clip hotkey">{hotkey}</span>
 
         <WindowControls />
@@ -163,6 +173,7 @@ export default function App() {
   const [sort, setSort] = useState<SortOrder>('Recent')
   const [feedPath, setFeedPath] = useState('')
   const [editingClip, setEditingClip] = useState<Clip | null>(null)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [detectedGame, setDetectedGame] = useState<string | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
@@ -511,6 +522,7 @@ export default function App() {
         isRecording={isRecording} onToggleRecording={toggleRecording}
         detectedGame={detectedGame} captureAvailable={captureAvailable}
         hotkey={settings.hotkey} saveState={saveState}
+        onFeedback={() => setFeedbackOpen(true)}
       />
 
       {/* The feed is unmounted while the editor is open, not just covered by
@@ -592,6 +604,7 @@ export default function App() {
       {editingClip && (
         <Editor clip={editingClip} onClose={() => setEditingClip(null)} />
       )}
+      {feedbackOpen && <FeedbackDialog onClose={() => setFeedbackOpen(false)} />}
       {confirmRequest && (
         <ConfirmDialog request={confirmRequest} onClose={() => setConfirmRequest(null)} />
       )}
