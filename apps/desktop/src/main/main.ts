@@ -390,6 +390,9 @@ export interface Display {
 
 let captureAddon: CaptureAddon | null = null
 let captureStatusError: string | undefined
+// Startup failures cannot be console.warn only: the window may never exist by
+// the time they happen, and the person cannot see a log they do not open.
+let captureStartupError: string | undefined
 
 const BUILT_IN_VOICE_PHRASES = [
   'flash clip that',
@@ -500,7 +503,11 @@ function antonioFont(): string {
 function loadCaptureAddon(): CaptureAddon | null {
   const addonPath = resource('flash_capture.node', 'packages/flash-capture/build/Release/flash_capture.node')
   try { return require(addonPath) as CaptureAddon }
-  catch (error) { console.warn(`Flash capture addon unavailable at ${addonPath}`, error); return null }
+  catch (error: any) {
+    console.warn(`Flash capture addon unavailable at ${addonPath}`, error)
+    captureStartupError = `Capture engine failed to start: ${error?.message || 'the capture addon could not be loaded'}`
+    return null
+  }
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -1983,18 +1990,23 @@ app.on('ready', () => {
     try {
       setRecordingState(captureAddon.startReplayBuffer())
       if (isRecording) console.log('Replay buffer started automatically')
-      else console.warn('Replay buffer failed to start')
-    } catch (error) {
+      else {
+        console.warn('Replay buffer failed to start')
+        captureStartupError = 'Capture engine failed to start: the replay buffer did not start'
+      }
+    } catch (error: any) {
       console.warn('Could not auto-start replay buffer:', error)
+      captureStartupError = `Capture engine failed to start: ${error?.message || 'the replay buffer could not start'}`
     }
   }
 
   createWindow()
-  // The folder check runs before the window exists, so its message has to wait
-  // for one to talk to.
-  if (clipsFolderError) {
+  // Startup checks run before the window exists, so their messages have to
+  // wait for one to talk to.
+  const startupErrors = [clipsFolderError, captureStartupError].filter((message): message is string => !!message)
+  if (startupErrors.length) {
     mainWindow?.webContents.once('did-finish-load', () => {
-      mainWindow?.webContents.send('clip-save-state', { saving: false, error: clipsFolderError })
+      mainWindow?.webContents.send('clip-save-state', { saving: false, error: startupErrors.join(' · ') })
     })
   }
   createTray()
