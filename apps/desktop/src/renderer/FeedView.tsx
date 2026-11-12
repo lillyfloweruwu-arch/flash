@@ -86,6 +86,14 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
     [audioTracks])
   useLiveMix(videoRef, audioTracks, unityGains, muted ? 0 : volume)
 
+  // Close-to-tray and minimise pause every media element. The autoPlay
+  // attribute does not restart one that was paused while it was hidden, so
+  // play explicitly when the window comes back.
+  useEffect(() => {
+    if (!visible) return
+    videoRef.current?.play().catch(() => { /* autoplay policy */ })
+  }, [visible])
+
   const goTo = useCallback((target: number) => {
     if (index < 0) return
     const bounded = Math.max(0, Math.min(target, clips.length - 1))
