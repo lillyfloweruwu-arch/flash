@@ -254,6 +254,14 @@ void AudioCapture::BuildSources(uint32_t processId) {
     std::string micId; { std::lock_guard lock(mutex_); micId = micDeviceId_; }
     InitializeEndpoint(mic, eCapture, micId);
     std::vector<std::shared_ptr<Source>> sources; std::string mode, error; uint32_t gamePid = 0;
+    // A source that failed to open is not a working track. Keep its reason so
+    // the status can say why; otherwise the source is still listed and audio is
+    // reported healthy with an empty audioError.
+    const auto appendError = [&error](const std::string& message) {
+        if (message.empty()) return;
+        if (!error.empty()) error += "; ";
+        error += message;
+    };
     if (perApp_) {
         // Every other app is captured on its own by the scanner, so the only
         // process source built here is the game's.
@@ -264,14 +272,16 @@ void AudioCapture::BuildSources(uint32_t processId) {
             // Without a game source the lanes still work. The pid is forgotten
             // too, so the scanner does not set that tree aside for a source
             // that does not exist.
-            else error = game->info.error;
+            else appendError(game->info.error);
         }
+        appendError(mic->info.error);
         sources.push_back(mic);
     } else {
         // Keep the reason, otherwise a fallback to mixed is indistinguishable
         // from "not attempted".
-        error = "process loopback unavailable";
+        appendError("process loopback unavailable");
         auto mixed = std::make_shared<Source>(); mixed->info = {"game", "system", "System mix"}; InitializeEndpoint(mixed, eRender);
+        appendError(mic->info.error);
         mode = "mixed"; sources = {mixed, mic};
     }
     // Only called with the scanner stopped; the lock is for the readers.

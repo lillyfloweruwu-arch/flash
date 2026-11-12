@@ -276,7 +276,15 @@ Napi::Value Initialize(const Napi::CallbackInfo& info) {
     clipsDir = info.Length() && info[0].IsString() ? info[0].As<Napi::String>().Utf8Value() : (std::filesystem::temp_directory_path() / "Flash" / "Clips").string();
     bool ok = BuildPipeline(true); GpuVendor vendor = DetectGpuVendor();
     std::lock_guard lock(stateMutex); auto result = Napi::Object::New(env);
-    result.Set("screenCapture", ok); result.Set("audioCapture", audioCapture != nullptr);
+    // A source is only reported when it actually opened. The microphone is
+    // always in the list, so a dead one used to read as a working audio track.
+    bool audioAvailable = false;
+    if (audioCapture) {
+        for (const auto& source : audioCapture->ListSources())
+            if (source.available) { audioAvailable = true; break; }
+    }
+    result.Set("screenCapture", ok); result.Set("audioCapture", audioAvailable);
+    result.Set("audioError", audioCapture ? audioCapture->GetProcessError() : "");
     result.Set("encoder", encoder ? encoder->GetName() : "none"); result.Set("hwAccel", encoder && encoder->IsHardwareAccelerated());
     result.Set("gpu", vendor == GpuVendor::Nvidia ? "nvidia" : vendor == GpuVendor::Amd ? "amd" : vendor == GpuVendor::Intel ? "intel" : "unknown");
     result.Set("width", encodeWidth); result.Set("height", encodeHeight); if (!ok) result.Set("error", pipelineError); return result;
