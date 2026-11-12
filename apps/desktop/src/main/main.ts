@@ -280,12 +280,17 @@ function applyInstallerAutostartRequest() {
   })
   if (!decision.consumeMarker) return
 
-  settings.autostartMarkerConsumedAt = writtenAt
   if (decision.apply) {
     const result = setAutostart(true)
-    if (result.error) console.warn('Could not apply the installer autostart request:', result.error)
-    else console.log('Autostart enabled from the installer request')
+    if (result.error) {
+      // Leave the request unconsumed so the next launch can try again; marking
+      // it now would silently drop the installer's opt-in forever.
+      console.warn('Could not apply the installer autostart request:', result.error)
+      return
+    }
+    console.log('Autostart enabled from the installer request')
   }
+  settings.autostartMarkerConsumedAt = writtenAt
   saveSettings()
 }
 
