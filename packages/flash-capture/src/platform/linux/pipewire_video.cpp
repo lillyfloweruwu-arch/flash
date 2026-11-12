@@ -20,6 +20,7 @@ uint8_t ClampByte(int value) { return static_cast<uint8_t>(std::clamp(value, 0, 
 class PipeWireVideo final : public VideoSource {
     std::atomic<bool> running_{false}, healthy_{false};
     std::atomic<bool> pending_{false};
+    std::atomic<bool> ended_{false}, connected_{false}, producedFrame_{false};
     std::atomic<bool> shmRequested_{false};
     std::thread thread_;
     GCancellable* cancel_ = g_cancellable_new();
@@ -57,9 +58,14 @@ class PipeWireVideo final : public VideoSource {
     }
     static void State(void* data, pw_stream_state, pw_stream_state state, const char* error) {
         auto& self = *static_cast<PipeWireVideo*>(data);
-        if (state == PW_STREAM_STATE_ERROR || state == PW_STREAM_STATE_UNCONNECTED) {
+        if (state == PW_STREAM_STATE_STREAMING || state == PW_STREAM_STATE_PAUSED) {
+            self.connected_ = true;
+            return;
+        }
+        if (state == PW_STREAM_STATE_ERROR || (state == PW_STREAM_STATE_UNCONNECTED && self.connected_)) {
             std::lock_guard lock(self.mutex_);
-            self.healthy_ = false; self.error_ = error ? error : "PipeWire video disconnected";
+            self.healthy_ = false; self.error_ = error && *error ? error : "Screen sharing stream ended";
+            self.ended_ = true;
         }
     }
     bool ConvertNv12(const spa_data* datas, uint32_t count, uint32_t width, uint32_t height) {
@@ -112,7 +118,7 @@ class PipeWireVideo final : public VideoSource {
     }
     void Deliver(const FrameData& frame) {
         try {
-            callback_(frame); healthy_ = true; lastFrame_ = frame.timestamp_us;
+            callback_(frame); healthy_ = true; lastFrame_ = frame.timestamp_us; producedFrame_ = true;
             std::lock_guard lock(mutex_);
             error_.clear();
             latestPixels_.assign(frame.data, frame.data + static_cast<size_t>(frame.stride) * frame.height);
@@ -157,10 +163,10 @@ class PipeWireVideo final : public VideoSource {
         }
         pw_stream_queue_buffer(self.stream_, buffer);
     }
-    void Run() {
-        auto* context = g_main_context_new(); g_main_context_push_thread_default(context);
-        pw_main_loop* loop = nullptr; pw_context* pwContext = nullptr; pw_core* core = nullptr;
-        spa_hook listener{}; bool attached = false;
+    bool Session() {
+        auto* loop = nullptr; pw_context* pwContext = nullptr; pw_core* core = nullptr;
+        spa_hook listener{}; bool attached = false; bool retry = false;
+        ended_ = false; connected_ = false; producedFrame_ = false; shmRequested_ = false;
         {
             PortalSession portal;
             try {
@@ -200,20 +206,52 @@ class PipeWireVideo final : public VideoSource {
                     throw std::runtime_error("Could not connect video stream");
                 pending_ = false;
                 lastFrame_ = CaptureClockUs();
-                while (running_) {
+                while (running_ && !ended_) {
                     pw_loop_iterate(pw_main_loop_get_loop(loop), 50);
                     if (lastFrame_ >= 0 && CaptureClockUs() - lastFrame_ > 5000000) {
                         std::lock_guard lock(mutex_); healthy_ = false; error_ = "No PipeWire video frames for five seconds";
                     }
                 }
-            } catch (const std::exception& e) { std::lock_guard lock(mutex_); error_ = e.what(); }
-            healthy_ = false; running_ = false; pending_ = false;
+                if (ended_ && running_) {
+                    std::lock_guard lock(mutex_);
+                    if (error_.empty()) error_ = "Screen sharing ended; reconnecting";
+                    retry = true;
+                }
+            } catch (const std::exception& e) {
+                const std::string message = e.what();
+                { std::lock_guard lock(mutex_); error_ = message; healthy_ = false; }
+                // A dismissed picker is the user saying no, not a dropped
+                // session; do not reopen it behind their back.
+                retry = running_ && message.find("cancelled") == std::string::npos && message.find("denied") == std::string::npos;
+            }
+            healthy_ = false;
             if (attached) spa_hook_remove(&listener);
             if (stream_) { pw_stream_destroy(stream_); stream_ = nullptr; }
             if (core) pw_core_disconnect(core);
             if (pwContext) pw_context_destroy(pwContext);
             if (loop) pw_main_loop_destroy(loop);
         }
+        return retry;
+    }
+    void Run() {
+        auto* context = g_main_context_new(); g_main_context_push_thread_default(context);
+        int failures = 0;
+        while (running_) {
+            pending_ = true;
+            const bool retry = Session();
+            if (!running_) break;
+            if (!retry) break;
+            // A session that delivered frames is a real drop, not a broken
+            // restore loop. Only give up after repeated failures with no video.
+            if (producedFrame_) failures = 0;
+            if (++failures > 5) {
+                std::lock_guard lock(mutex_); healthy_ = false;
+                if (error_.empty()) error_ = "Screen sharing kept ending; stopped capture";
+                break;
+            }
+            for (int i = 0; i < 20 && running_; ++i) g_usleep(100000);
+        }
+        healthy_ = false; running_ = false; pending_ = false;
         g_main_context_pop_thread_default(context); g_main_context_unref(context);
     }
 public:
