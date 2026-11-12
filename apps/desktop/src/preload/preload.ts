@@ -126,6 +126,7 @@ contextBridge.exposeInMainWorld('flash', {
   setSettings: (partial: Partial<Settings>) => ipcRenderer.invoke('set-settings', partial),
   getVoiceStatus: () => ipcRenderer.invoke('voice-status'),
   pickClipsFolder: () => ipcRenderer.invoke('pick-clips-folder'),
+  sendFeedback: (message: string) => ipcRenderer.invoke('send-feedback', message),
 
   // Navigation
   onNavigate: (callback: (page: string) => void) => {
@@ -220,6 +221,7 @@ export type FlashAPI = {
   setSettings: (partial: Partial<Settings>) => Promise<Settings>
   getVoiceStatus: () => Promise<{ available: boolean; language: string; error: string }>
   pickClipsFolder: () => Promise<string | null>
+  sendFeedback: (message: string) => Promise<{ ok: boolean; error?: 'rate-limited' | 'failed' }>
   onNavigate: (callback: (page: string) => void) => () => void
   onPlayClipSound: (callback: (soundPath: string) => void) => () => void
   getCurrentGame: () => Promise<string | null>

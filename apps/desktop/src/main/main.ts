@@ -1,5 +1,6 @@
 import { app, BrowserWindow, globalShortcut, Tray, Menu, nativeImage, ipcMain, screen, shell, dialog, clipboard, ClipboardItem, powerMonitor, protocol, net } from 'electron'
 import { join, basename, dirname, extname } from 'path'
+import { release } from 'os'
 
 // Must run before the app is ready, or the scheme is not treated as privileged
 // and range requests (video seeking) fail.
@@ -27,6 +28,7 @@ import { sanitise } from '../shared/sanitise'
 import { DEFAULT_AUDIO_LANES, type AudioLanesSetting, type AudioTrackId } from '../shared/audioLanes'
 import { decideAutostart } from '../shared/autostart'
 import { clipPathFromUrl, captureCommand, isLinuxInfrastructure, type CaptureCommand } from '../shared/platform'
+import { FEEDBACK_ENDPOINT, validateFeedback } from '../shared/feedback'
 import { linuxAutostartEnabled, setLinuxAutostart, linuxProcessSnapshot } from './linux'
 
 
@@ -1704,6 +1706,30 @@ function setupIPC() {
     try { captureAddon?.setClipsDir?.(activeClipsFolder()) }
     catch (error) { console.warn('Could not update engine clips folder', error) }
     return activeClipsFolder()
+  })
+  ipcMain.handle('send-feedback', async (_event, message: unknown) => {
+    if (validateFeedback(message) !== null) return { ok: false, error: 'failed' as const }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const response = await net.fetch(FEEDBACK_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: (message as string).trim(),
+          version: app.getVersion(),
+          os: `${process.platform} ${release()}`,
+        }),
+        signal: controller.signal,
+      })
+      if (response.status === 204) return { ok: true }
+      if (response.status === 429) return { ok: false, error: 'rate-limited' as const }
+      return { ok: false, error: 'failed' as const }
+    } catch {
+      return { ok: false, error: 'failed' as const }
+    } finally {
+      clearTimeout(timer)
+    }
   })
 
   // ── Recording toggle ──
