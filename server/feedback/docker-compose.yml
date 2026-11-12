@@ -1,0 +1,17 @@
+services:
+  feedback:
+    image: python:3.12-slim
+    restart: unless-stopped
+    command: python /app/receiver.py
+    environment:
+      INBOX_DIR: /data/inbox
+      PORT: "8796"
+    ports:
+      - "127.0.0.1:8796:8796"
+    volumes:
+      - ./receiver.py:/app/receiver.py:ro
+      - /mnt/storage/flash-feedback:/data/inbox
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    user: "1000:1000"
