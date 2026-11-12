@@ -80,7 +80,7 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
   // The element is muted and every track is mixed natively instead. A video
   // element plays only the FIRST audio track: a clip where the game was quiet
   // but you spoke has its voice on track two, and played as complete silence.
-  const { tracks: audioTracks } = useClipAudio(clip && !isShot ? clip.filePath : '')
+  const { tracks: audioTracks, error: audioError } = useClipAudio(clip && !isShot ? clip.filePath : '')
   const unityGains = useMemo(
     () => Object.fromEntries(audioTracks.map(track => [track.id, 1])),
     [audioTracks])
@@ -301,6 +301,10 @@ export function FeedView({ clips, currentPath, onPathChange, filterLabel, onOpen
             </div>
             {note && <span role="status" style={{ fontSize: 12, color: 'var(--fg)', marginLeft: 6, textShadow: '0 1px 8px rgba(0,0,0,0.8)' }}>{note}</span>}
           </div>
+        )}
+
+        {!isShot && audioError && (
+          <p role="alert" style={{ fontSize: 12, color: 'var(--alert)', marginTop: 8 }}>Audio unavailable</p>
         )}
 
         <div className="flex items-center gap-3" style={{ marginTop: 22 }}>
