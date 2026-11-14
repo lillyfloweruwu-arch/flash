@@ -34,6 +34,7 @@ jobs:
     env:
       PKG_CONFIG_PATH: ${{ github.workspace }}/build/linux-media/lib/pkgconfig
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/linux-media/lib
+      FLASH_MEDIA_PREFIX: ${{ github.workspace }}/build/linux-media
     steps:
       - uses: actions/checkout@v4.2.2
       - uses: actions/setup-node@v4.4.0
@@ -49,6 +50,13 @@ jobs:
       - run: bash scripts/build-linux-media.sh
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @flash/capture run build
+      - name: Addon must link the bundled libav, not the distro's
+        run: |
+          needed="$(readelf -d packages/flash-capture/build/Release/flash_capture.node | grep NEEDED)"
+          echo "$needed"
+          for want in libavcodec.so.61 libavformat.so.61 libavutil.so.59 libswscale.so.8 libswresample.so.5; do
+            echo "$needed" | grep -q "\[$want\]" || { echo "addon does not need $want" >&2; exit 1; }
+          done
       - name: Build and run portable native checks
         run: |
           cmake --build packages/flash-capture/build --target flash_tests

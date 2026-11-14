@@ -50,10 +50,31 @@ if(WIN32)
 
 elseif(UNIX AND NOT APPLE)
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(LINUX_MEDIA REQUIRED IMPORTED_TARGET
-    libpipewire-0.3 libavcodec libavformat libavutil libswscale libswresample gio-2.0 gio-unix-2.0)
+  pkg_check_modules(LINUX_MEDIA REQUIRED IMPORTED_TARGET libpipewire-0.3 gio-2.0 gio-unix-2.0)
   find_package(Threads REQUIRED)
   set(PLATFORM_LIBS PkgConfig::LINUX_MEDIA Threads::Threads)
+
+  # libav comes from one of two places. Release builds set FLASH_MEDIA_PREFIX to
+  # the private LGPL build that ships inside the AppImage, and link it by full
+  # path: resolving it through pkg-config let the linker pick the distro's
+  # (older) libavcodec instead, so the addon asked for libavcodec.so.60 at run
+  # time while the AppImage only carries .so.61. Developer builds with no prefix
+  # use the system libav through pkg-config.
+  if(NOT FLASH_MEDIA_PREFIX AND DEFINED ENV{FLASH_MEDIA_PREFIX})
+    set(FLASH_MEDIA_PREFIX "$ENV{FLASH_MEDIA_PREFIX}")
+  endif()
+  if(FLASH_MEDIA_PREFIX)
+    foreach(av_lib avcodec avformat avutil swscale swresample)
+      find_library(FLASH_AV_${av_lib} NAMES ${av_lib}
+        PATHS "${FLASH_MEDIA_PREFIX}/lib" NO_DEFAULT_PATH REQUIRED)
+      list(APPEND PLATFORM_LIBS "${FLASH_AV_${av_lib}}")
+    endforeach()
+    include_directories(BEFORE SYSTEM "${FLASH_MEDIA_PREFIX}/include")
+  else()
+    pkg_check_modules(LINUX_AV REQUIRED IMPORTED_TARGET
+      libavcodec libavformat libavutil libswscale libswresample)
+    list(APPEND PLATFORM_LIBS PkgConfig::LINUX_AV)
+  endif()
   file(GLOB LINUX_SOURCES CONFIGURE_DEPENDS src/platform/linux/*.cpp)
   set(CAPTURE_SOURCES src/binding.cpp src/core/ring_buffer.cpp ${LINUX_SOURCES})
 else()
